@@ -1,7 +1,9 @@
+import { Xrio, XrioError, definePlugin } from "@xrio/core";
+import type { Engine } from "@xrio/core";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { Xrio, XrioError, definePlugin } from "../index.ts";
-import type { Engine } from "../index.ts";
+import { httpApiPlugin } from "./index.ts";
+import type { HttpApiOptions, HttpApiPlugin } from "./index.ts";
 
 const engine: Engine = {
   fetch: async () =>
@@ -23,21 +25,21 @@ const brokenEngine: Engine = {
 
 const broken = definePlugin({ engines: [brokenEngine], hooks: {}, name: "broken" });
 
-describe("HTTP server", () => {
+describe(httpApiPlugin, () => {
   const running: Xrio[] = [];
 
-  const serve = async (http: { docs?: boolean; enabled?: boolean }): Promise<Xrio> => {
-    const xrio = Xrio.create({
-      http: { host: "127.0.0.1", port: 0, ...http },
-      log: { enabled: false },
-    })
+  const serve = async (options: HttpApiOptions = {}): Promise<HttpApiPlugin> => {
+    const api = httpApiPlugin({ host: "127.0.0.1", port: 0, ...options });
+
+    const xrio = Xrio.create({ log: { enabled: false } })
       .use(browser)
-      .use(broken);
+      .use(broken)
+      .use(api);
 
     await xrio.start();
     running.push(xrio);
 
-    return xrio;
+    return api;
   };
 
   afterEach(async () => {
@@ -48,11 +50,41 @@ describe("HTTP server", () => {
     );
   });
 
-  it("serves the Swagger UI and OpenAPI document by default", async () => {
-    const xrio = await serve({ enabled: true });
+  it("declares only the lifecycle steps", () => {
+    const xrio = Xrio.create({ log: { enabled: false } }).use(httpApiPlugin({ port: 0 }));
 
-    const ui = await fetch(`${xrio.httpUrl}/docs/`);
-    const document = await fetch(`${xrio.httpUrl}/docs.json`);
+    expect(xrio.plugins).toStrictEqual([{ name: "http-api", steps: ["start", "stop"] }]);
+  });
+
+  it("has no address until Xrio starts, and none again after it stops", async () => {
+    const api = httpApiPlugin({ host: "127.0.0.1", port: 0 });
+
+    const xrio = Xrio.create({ log: { enabled: false } })
+      .use(browser)
+      .use(api);
+
+    expect(api.url).toBeUndefined();
+
+    await xrio.start();
+    const whileRunning = api.url;
+    await xrio.stop();
+
+    expect(whileRunning).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u);
+    expect(api.url).toBeUndefined();
+    expect(api.docsUrl).toBeUndefined();
+  });
+
+  it("rejects ports that cannot work", () => {
+    expect(() => httpApiPlugin({ port: 70_000 })).toThrow(/"port"/u);
+    expect(() => httpApiPlugin({ port: 1.5 })).toThrow(/"port"/u);
+    expect(() => httpApiPlugin({ port: -1 })).toThrow(/"port"/u);
+  });
+
+  it("serves the Swagger UI and OpenAPI document by default", async () => {
+    const api = await serve();
+
+    const ui = await fetch(`${api.url}/docs/`);
+    const document = await fetch(`${api.url}/docs.json`);
 
     expect(ui.status).toBe(200);
     await expect(ui.text()).resolves.toContain("swagger-ui");
@@ -60,24 +92,24 @@ describe("HTTP server", () => {
       info: { title: "Xrio API" },
       paths: { "/scrape": { post: { summary: "Scrape a URL" } } },
     });
-    expect(xrio.docsUrl).toBe(`${xrio.httpUrl}/docs`);
+    expect(api.docsUrl).toBe(`${api.url}/docs`);
   });
 
   it("does not serve docs when docs is false", async () => {
-    const xrio = await serve({ docs: false, enabled: true });
+    const api = await serve({ docs: false });
 
-    const ui = await fetch(`${xrio.httpUrl}/docs/`);
-    const document = await fetch(`${xrio.httpUrl}/docs.json`);
+    const ui = await fetch(`${api.url}/docs/`);
+    const document = await fetch(`${api.url}/docs.json`);
 
     expect(ui.status).toBe(404);
     expect(document.status).toBe(404);
-    expect(xrio.docsUrl).toBeUndefined();
+    expect(api.docsUrl).toBeUndefined();
   });
 
   it("scrapes over HTTP in the requested format", async () => {
-    const xrio = await serve({ enabled: true });
+    const api = await serve();
 
-    const response = await fetch(`${xrio.httpUrl}/scrape`, {
+    const response = await fetch(`${api.url}/scrape`, {
       body: JSON.stringify({ format: "json", mode: "headless", url: "https://example.com/" }),
       headers: { "content-type": "application/json" },
       method: "POST",
@@ -89,8 +121,8 @@ describe("HTTP server", () => {
   });
 
   it("rejects bad bodies with a JSON 400 and unsupported formats with a 501", async () => {
-    const xrio = await serve({ enabled: true });
-    const endpoint = `${xrio.httpUrl}/scrape`;
+    const api = await serve();
+    const endpoint = `${api.url}/scrape`;
 
     const malformed = await fetch(endpoint, { body: "{", method: "POST" });
     const invalid = await fetch(endpoint, { body: '{"url":"nope"}', method: "POST" });
@@ -107,19 +139,19 @@ describe("HTTP server", () => {
   });
 
   it("answers the wrong method with 405 and unknown paths with 404", async () => {
-    const xrio = await serve({ enabled: true });
+    const api = await serve();
 
-    const wrongMethod = await fetch(`${xrio.httpUrl}/scrape`);
-    const wrongPath = await fetch(`${xrio.httpUrl}/other`, { method: "POST" });
+    const wrongMethod = await fetch(`${api.url}/scrape`);
+    const wrongPath = await fetch(`${api.url}/other`, { method: "POST" });
 
     expect(wrongMethod.status).toBe(405);
     expect(wrongPath.status).toBe(404);
   });
 
   it("hides unexpected failures behind a generic 500", async () => {
-    const xrio = await serve({ enabled: true });
+    const api = await serve();
 
-    const response = await fetch(`${xrio.httpUrl}/scrape`, {
+    const response = await fetch(`${api.url}/scrape`, {
       body: JSON.stringify({ mode: "headful", url: "https://example.com/plain" }),
       method: "POST",
     });
@@ -131,9 +163,9 @@ describe("HTTP server", () => {
   });
 
   it("maps a failed fetch to 502 with its own code", async () => {
-    const xrio = await serve({ enabled: true });
+    const api = await serve();
 
-    const response = await fetch(`${xrio.httpUrl}/scrape`, {
+    const response = await fetch(`${api.url}/scrape`, {
       body: JSON.stringify({ mode: "headful", url: "https://example.com/down" }),
       method: "POST",
     });
@@ -143,21 +175,14 @@ describe("HTTP server", () => {
   });
 
   it("rejects a body over the size limit with 413", async () => {
-    const xrio = await serve({ enabled: true });
+    const api = await serve();
 
-    const response = await fetch(`${xrio.httpUrl}/scrape`, {
+    const response = await fetch(`${api.url}/scrape`, {
       body: JSON.stringify({ padding: "x".repeat(1_100_000), url: "https://example.com" }),
       method: "POST",
     });
 
     expect(response.status).toBe(413);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_request" } });
-  });
-
-  it("opens no server unless enabled", async () => {
-    const xrio = await serve({});
-
-    expect(xrio.httpUrl).toBeUndefined();
-    expect(xrio.docsUrl).toBeUndefined();
   });
 });

@@ -1,11 +1,20 @@
 import type { Logger } from "../logging/logger.ts";
-import type { Engine, Page, Route, ScrapeRequest, ScrapeResult } from "../scrape/types.ts";
+import type {
+  Engine,
+  Page,
+  Route,
+  ScrapeInput,
+  ScrapeRequest,
+  ScrapeResult,
+} from "../scrape/types.ts";
 
 type Awaitable<T> = Promise<T> | T;
 
-/** Passed to every hook so plugins log through Xrio's configured logger. */
+/** Passed to every hook: Xrio's configured logger, and a way to run scrapes through the pipeline. */
 export interface StepContext {
   readonly logger: Logger;
+  /** Runs a full scrape on the owning Xrio instance. Only usable once Xrio has started. */
+  readonly scrape: (input: ScrapeInput) => Promise<ScrapeResult>;
 }
 
 /**

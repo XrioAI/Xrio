@@ -1,7 +1,5 @@
-import { startApiServer } from "./api/server.ts";
-import type { ApiServer } from "./api/server.ts";
 import { resolveOptions } from "./config.ts";
-import type { ResolvedOptions, XrioOptions } from "./config.ts";
+import type { XrioOptions } from "./config.ts";
 import { createHttpEngine } from "./engines/http.ts";
 import { EngineRegistry } from "./engines/registry.ts";
 import { XrioError, toError } from "./errors.ts";
@@ -20,17 +18,17 @@ import type { ScrapeInput, ScrapeRequest, ScrapeResult } from "./scrape/types.ts
  * like (concurrently is fine), then `stop` it.
  */
 export class Xrio {
-  readonly #options: ResolvedOptions;
   readonly #logger: Logger;
   readonly #pipeline: Pipeline;
   readonly #engines = new EngineRegistry();
-  #http: ApiServer | undefined;
   #started = false;
 
   private constructor(options: XrioOptions) {
-    this.#options = resolveOptions(options);
-    this.#logger = createLogger(this.#options.log);
-    this.#pipeline = new Pipeline(this.#logger);
+    this.#logger = createLogger(resolveOptions(options).log);
+    this.#pipeline = new Pipeline({
+      logger: this.#logger,
+      scrape: async (input) => await this.scrape(input),
+    });
     this.#engines.register(createHttpEngine(), "Xrio");
   }
 
@@ -66,23 +64,22 @@ export class Xrio {
     return this.#pipeline.describe();
   }
 
-  /** Where the HTTP server listens, once started with `http.enabled`. */
-  get httpUrl(): string | undefined {
-    return this.#http?.url;
-  }
-
-  /** Where the Swagger UI is served, when both the HTTP server and `http.docs` are on. */
-  get docsUrl(): string | undefined {
-    return this.#http && this.#options.http.docs ? `${this.#http.url}/docs` : undefined;
-  }
-
   async start(): Promise<void> {
     if (this.#started) {
       throw new XrioError("already_started", "Xrio is already started.");
     }
 
-    await startInOrder(this.#components());
+    // Marked started up front so plugins (like an HTTP API) can accept scrapes as soon as
+    // their own start hook finishes; rolled back if anything fails to start.
     this.#started = true;
+
+    try {
+      await startInOrder(this.#components());
+    } catch (error) {
+      this.#started = false;
+      throw error;
+    }
+
     this.#logger.info("xrio started", { plugins: this.#pipeline.describe().length });
   }
 
@@ -148,36 +145,8 @@ export class Xrio {
     return result;
   }
 
-  /** Started in this order and stopped in the reverse: engines, plugins, then the HTTP server. */
+  /** Started in this order and stopped in the reverse: engines, then plugins. */
   #components(): Startable[] {
-    return [this.#engines, this.#pipeline, this.#httpComponent()];
-  }
-
-  #httpComponent(): Startable {
-    const { docs, enabled, host, port } = this.#options.http;
-
-    return {
-      start: async () => {
-        if (!enabled) {
-          return;
-        }
-
-        this.#http = await startApiServer({
-          docs,
-          host,
-          logger: this.#logger,
-          port,
-          scrape: async (body) => await this.#scrapeUntrusted(body),
-        });
-        this.#logger.info("http server listening", {
-          docs: docs ? `${this.#http.url}/docs` : "off",
-          url: this.#http.url,
-        });
-      },
-      stop: async () => {
-        await this.#http?.close();
-        this.#http = undefined;
-      },
-    };
+    return [this.#engines, this.#pipeline];
   }
 }

@@ -8,6 +8,10 @@
     "packages/plugins/local-storage": {
       "entry": ["src/index.ts!"],
       "project": ["src/**/*.ts!"]
+    },
+    "packages/plugins/http-api": {
+      "entry": ["src/index.ts!"],
+      "project": ["src/**/*.ts!"]
     }
   }
 }

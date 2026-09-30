@@ -1,6 +1,6 @@
 export { Xrio } from "./xrio.ts";
 
-export type { HttpOptions, LogOptions, XrioOptions } from "./config.ts";
+export type { LogOptions, XrioOptions } from "./config.ts";
 
 export { XrioError } from "./errors.ts";
 

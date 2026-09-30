@@ -1,15 +1,18 @@
 import { once } from "node:events";
 import type { Server } from "node:http";
 
+import { XrioError } from "@xrio/core";
+import type { Logger, ScrapeInput, ScrapeResult, XrioErrorCode } from "@xrio/core";
 import express from "express";
 import type { ErrorRequestHandler, Express, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 
-import { XrioError, toError } from "../errors.ts";
-import type { XrioErrorCode } from "../errors.ts";
-import type { Logger } from "../logging/logger.ts";
-import type { ScrapeResult } from "../scrape/types.ts";
 import { buildOpenApiDocument } from "./openapi.ts";
+
+/** Caught values can be anything; this is the single place they become an `Error`. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a catch clause hands us `unknown`
+const toError = (caught: unknown): Error =>
+  caught instanceof Error ? caught : new Error(String(caught), { cause: caught });
 
 const SCRAPE_PATH = "/scrape";
 
@@ -45,9 +48,8 @@ export interface ApiServerOptions {
   readonly port: number;
   readonly docs: boolean;
   readonly logger: Logger;
-  /** Receives the parsed JSON body exactly as sent; validating it is the scraper's job. */
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the body is untrusted until parsed downstream
-  readonly scrape: (body: unknown) => Promise<ScrapeResult>;
+  /** Receives the parsed JSON body exactly as sent; Xrio validates it before doing anything. */
+  readonly scrape: (input: ScrapeInput) => Promise<ScrapeResult>;
 }
 
 export interface ApiServer {
@@ -97,8 +99,7 @@ const handleBodyError =
 
 /** Never rejects: every failure becomes an HTTP error response. */
 const respondToScrape = async (
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the body is untrusted until parsed downstream
-  body: unknown,
+  body: ScrapeInput,
   response: Response,
   { logger, scrape }: ApiServerOptions,
 ): Promise<void> => {
@@ -141,6 +142,7 @@ const buildApp = (options: ApiServerOptions): Express => {
     SCRAPE_PATH,
     express.json({ limit: MAX_BODY, type: () => true }),
     (request, response) => {
+      // oxlint-disable-next-line typescript/no-unsafe-argument -- Express types the body as any; Xrio validates it
       void respondToScrape(request.body, response, options);
     },
   );

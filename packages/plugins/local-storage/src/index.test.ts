@@ -12,6 +12,11 @@ const silent = (): void => undefined;
 
 const logger: Logger = { debug: silent, error: silent, info: silent, warn: silent };
 
+const context = {
+  logger,
+  scrape: async (): Promise<ScrapeResult> => await Promise.reject(new Error("not used here")),
+};
+
 const request: ScrapeRequest = { format: "html", mode: "http", url: "https://example.com/" };
 
 const browser: Engine = {
@@ -58,8 +63,8 @@ describe(localStoragePlugin, () => {
   const savedFilesFor = async (url: string): Promise<string[]> => {
     const directory = await freshDirectory();
     const plugin = localStoragePlugin({ directory });
-    await plugin.hooks.start?.({ logger });
-    await plugin.hooks.afterScrape?.({ logger, request, result: resultFor(url) });
+    await plugin.hooks.start?.(context);
+    await plugin.hooks.afterScrape?.({ ...context, request, result: resultFor(url) });
 
     return await readdir(directory);
   };

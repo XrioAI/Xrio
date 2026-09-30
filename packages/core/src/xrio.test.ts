@@ -443,6 +443,48 @@ describe(Xrio, () => {
     });
   });
 
+  describe("plugin context", () => {
+    it("lets a plugin run scrapes through the pipeline from its own hooks", async () => {
+      const seen: string[] = [];
+
+      const driver = definePlugin({
+        hooks: {
+          start: async ({ scrape }) => {
+            const result = await scrape({ mode: "headless", url: "https://example.com" });
+            seen.push(result.content);
+          },
+        },
+        name: "driver",
+      });
+
+      const xrio = Xrio.create({ log: { enabled: false } })
+        .use(definePlugin({ engines: [fakeEngine("headless")], hooks: {}, name: "browser" }))
+        .use(driver);
+
+      await started(xrio);
+
+      expect(seen).toStrictEqual(["<h1>Hi</h1>"]);
+    });
+
+    it("allows start hooks to scrape only after their own engines are ready", async () => {
+      const xrio = Xrio.create({ log: { enabled: false } }).use(
+        definePlugin({
+          hooks: {
+            start: async ({ scrape }) => {
+              await scrape({ mode: "headful", url: "https://example.com" });
+            },
+          },
+          name: "eager",
+        }),
+      );
+
+      await expect(xrio.start()).rejects.toMatchObject({ code: "plugin_failed" });
+      await expect(xrio.scrape({ url: "https://example.com" })).rejects.toMatchObject({
+        code: "not_started",
+      });
+    });
+  });
+
   describe("logging", () => {
     const withBrowser = definePlugin({
       engines: [fakeEngine("headless")],

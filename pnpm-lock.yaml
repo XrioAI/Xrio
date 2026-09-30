@@ -212,6 +212,18 @@ importers:
         version: 1.0.0(@types/node@26.6.3)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
 
   packages/core:
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.3
+        version: 26.6.3
+      '@xrio/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      vite-plus:
+        specifier: 1.0.0
+        version: 1.0.0(@types/node@26.6.3)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
+
+  packages/plugins/http-api:
     dependencies:
       express:
         specifier: 5.2.1
@@ -229,9 +241,12 @@ importers:
       '@types/swagger-ui-express':
         specifier: 4.1.8
         version: 4.1.8
+      '@xrio/core':
+        specifier: workspace:*
+        version: link:../../core
       '@xrio/typescript-config':
         specifier: workspace:*
-        version: link:../typescript-config
+        version: link:../../typescript-config
       vite-plus:
         specifier: 1.0.0
         version: 1.0.0(@types/node@26.6.3)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)

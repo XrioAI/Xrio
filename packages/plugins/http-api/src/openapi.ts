@@ -1,4 +1,4 @@
-import { OUTPUT_FORMATS, SCRAPE_MODES } from "../scrape/types.ts";
+import { OUTPUT_FORMATS, SCRAPE_MODES } from "@xrio/core";
 
 const errorResponse = (description: string) =>
   ({

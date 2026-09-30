@@ -2,10 +2,9 @@ import { XrioError } from "../errors.ts";
 import { eachInOrder } from "../lifecycle/sequence.ts";
 import { startInOrder, stopInReverse } from "../lifecycle/start-stop.ts";
 import type { Startable } from "../lifecycle/start-stop.ts";
-import type { Logger } from "../logging/logger.ts";
 import type { Page, Route, ScrapeRequest, ScrapeResult } from "../scrape/types.ts";
 import { stepsOf } from "./plugin.ts";
-import type { PipelineStep, Plugin } from "./plugin.ts";
+import type { PipelineStep, Plugin, StepContext } from "./plugin.ts";
 
 const NO_ROUTE: Route = {};
 
@@ -16,10 +15,10 @@ const NO_ROUTE: Route = {};
  */
 export class Pipeline {
   readonly #plugins: Plugin[] = [];
-  readonly #logger: Logger;
+  readonly #context: StepContext;
 
-  constructor(logger: Logger) {
-    this.#logger = logger;
+  constructor(context: StepContext) {
+    this.#context = context;
   }
 
   add(plugin: Plugin): void {
@@ -44,7 +43,7 @@ export class Pipeline {
 
   async beforeScrape(request: ScrapeRequest): Promise<ScrapeRequest> {
     let current = request;
-    const logger = this.#logger;
+    const context = this.#context;
 
     await eachInOrder(this.#plugins, async (plugin) => {
       const hook = plugin.hooks.beforeScrape;
@@ -53,7 +52,7 @@ export class Pipeline {
         const replaced = await this.#run(
           plugin,
           "beforeScrape",
-          async () => await hook({ logger, request: current }),
+          async () => await hook({ ...context, request: current }),
         );
 
         current = replaced ?? current;
@@ -65,7 +64,7 @@ export class Pipeline {
 
   async resolveRoute(request: ScrapeRequest): Promise<Route> {
     let route: Route | undefined;
-    const logger = this.#logger;
+    const context = this.#context;
 
     await eachInOrder(this.#plugins, async (plugin) => {
       const hook = plugin.hooks.resolveRoute;
@@ -74,7 +73,7 @@ export class Pipeline {
         route = await this.#run(
           plugin,
           "resolveRoute",
-          async () => await hook({ logger, request }),
+          async () => await hook({ ...context, request }),
         );
       }
     });
@@ -84,7 +83,7 @@ export class Pipeline {
 
   async afterFetch(request: ScrapeRequest, page: Page): Promise<Page> {
     let current = page;
-    const logger = this.#logger;
+    const context = this.#context;
 
     await eachInOrder(this.#plugins, async (plugin) => {
       const hook = plugin.hooks.afterFetch;
@@ -93,7 +92,7 @@ export class Pipeline {
         const replaced = await this.#run(
           plugin,
           "afterFetch",
-          async () => await hook({ logger, page: current, request }),
+          async () => await hook({ ...context, page: current, request }),
         );
 
         current = replaced ?? current;
@@ -104,29 +103,29 @@ export class Pipeline {
   }
 
   async afterScrape(request: ScrapeRequest, result: ScrapeResult): Promise<void> {
-    const logger = this.#logger;
+    const context = this.#context;
 
     await eachInOrder(this.#plugins, async (plugin) => {
       const hook = plugin.hooks.afterScrape;
 
       if (hook) {
         await this.#run(plugin, "afterScrape", async () => {
-          await hook({ logger, request, result });
+          await hook({ ...context, request, result });
         });
       }
     });
   }
 
   async onError(request: ScrapeRequest, error: Error): Promise<void> {
-    const logger = this.#logger;
+    const context = this.#context;
 
     await eachInOrder(this.#plugins, async (plugin) => {
       try {
-        await plugin.hooks.onError?.({ error, logger, request });
+        await plugin.hooks.onError?.({ ...context, error, request });
       } catch (hookError) {
         // Error reporting must never mask the failure it is reporting.
-        logger.warn("plugin onError hook failed", { plugin: plugin.name });
-        logger.debug("plugin onError hook failure detail", {
+        context.logger.warn("plugin onError hook failed", { plugin: plugin.name });
+        context.logger.debug("plugin onError hook failure detail", {
           message: hookError instanceof Error ? hookError.message : String(hookError),
         });
       }
@@ -134,19 +133,19 @@ export class Pipeline {
   }
 
   #lifecycle(): Startable[] {
-    const logger = this.#logger;
+    const context = this.#context;
 
     return this.#plugins.map((plugin) => ({
       start: async () =>
-        await this.#run(plugin, "start", async () => await plugin.hooks.start?.({ logger })),
+        await this.#run(plugin, "start", async () => await plugin.hooks.start?.(context)),
       stop: async () =>
-        await this.#run(plugin, "stop", async () => await plugin.hooks.stop?.({ logger })),
+        await this.#run(plugin, "stop", async () => await plugin.hooks.stop?.(context)),
     }));
   }
 
   /** Labels a plugin failure with the plugin and step, keeping the original as `cause`. */
   async #run<T>(plugin: Plugin, step: PipelineStep, hook: () => Promise<T> | T): Promise<T> {
-    this.#logger.debug("plugin step", { plugin: plugin.name, step });
+    this.#context.logger.debug("plugin step", { plugin: plugin.name, step });
 
     try {
       return await hook();
