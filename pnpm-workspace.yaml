@@ -1,8 +1,9 @@
-packages: [apps/*, packages/*]
+packages: [apps/*, packages/*, packages/plugins/*]
 overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@1.0.0
   vitest@*: 5.0.1
 allowBuilds:
+  "@scarf/scarf": false
   esbuild: true
 patchedDependencies:
   oxlint-plugin-complexity@3.0.1: patches/oxlint-plugin-complexity@3.0.1.patch

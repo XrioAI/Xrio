@@ -2,6 +2,14 @@
   "name": "xrio",
   "version": "0.0.0",
   "private": true,
+  "homepage": "https://github.com/XrioHQ/Xrio#readme",
+  "bugs": {
+    "url": "https://github.com/XrioHQ/Xrio/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XrioHQ/Xrio.git"
+  },
   "type": "module",
   "scripts": {
     "check": "vp check && vp run -r typecheck && vp run knip",
@@ -10,11 +18,12 @@
     "format:check": "vp fmt --check",
     "knip": "vp exec knip --production",
     "ready": "vp run check && vp run test",
-    "test": "vp test",
+    "test": "vp test --coverage",
     "typecheck": "vp exec tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "26.6.3",
+    "@vitest/coverage-v8": "5.0.1",
     "@xrio/typescript-config": "workspace:*",
     "knip": "6.38.0",
     "oxfmt": "0.71.0",
