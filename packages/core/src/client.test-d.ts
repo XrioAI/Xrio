@@ -1,7 +1,7 @@
 import { describe, expectTypeOf, it } from "vite-plus/test";
 
 import { XrioClient } from "./client.ts";
-import type { JsonPage, ScrapeFormat } from "./client.ts";
+import type { ScrapeFormat, StructuredContent } from "./client.ts";
 
 describe("XrioClient types", () => {
   it("the public API requires explicit formats and complete browser-mode overrides", () => {
@@ -11,13 +11,17 @@ describe("XrioClient types", () => {
 
     expectTypeOf(client.scrape({ format: "html", url })).toEqualTypeOf<Promise<string>>();
     expectTypeOf(client.scrape({ format: "markdown", url })).toEqualTypeOf<Promise<string>>();
-    expectTypeOf(client.scrape({ format: "json", url })).toEqualTypeOf<Promise<JsonPage>>();
-    expectTypeOf(browser.scrape({ format: "json", url })).toEqualTypeOf<Promise<JsonPage>>();
+    expectTypeOf(client.scrape({ format: "json", url })).toEqualTypeOf<
+      Promise<StructuredContent>
+    >();
+    expectTypeOf(browser.scrape({ format: "json", url })).toEqualTypeOf<
+      Promise<StructuredContent>
+    >();
 
     const scrapeSelectedFormat = async (format: ScrapeFormat) =>
       await client.scrape({ format, url });
 
-    expectTypeOf(scrapeSelectedFormat).returns.toEqualTypeOf<Promise<string | JsonPage>>();
+    expectTypeOf(scrapeSelectedFormat).returns.toEqualTypeOf<Promise<string | StructuredContent>>();
 
     // @ts-expect-error A format is required, even with client defaults.
     void client.scrape({ url });

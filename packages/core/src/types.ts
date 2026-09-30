@@ -11,7 +11,7 @@ export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOpti
   signal?: AbortSignal;
 };
 
-export interface JsonPage {
+export interface StructuredContent {
   metadata: {
     url: string;
     title: string | null;
@@ -26,7 +26,15 @@ export interface JsonPage {
   };
 }
 
-export interface AcquiredPage {
+export interface SourceDocument {
   url: string;
   html: string;
 }
+
+export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
+
+export type DocumentRequest = ResolvedMode & {
+  url: URL;
+  timeoutMs: number;
+  signal?: AbortSignal;
+};

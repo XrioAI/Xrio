@@ -1,50 +1,48 @@
-import { acquirePage } from "./acquire-page.ts";
-import { transformPage } from "./transform-page.ts";
-import type { JsonPage, ModeOptions, ScrapeOptions } from "./types.ts";
+import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
+import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
+import { loadHeadedDocument, loadHeadlessDocument } from "./sources/browser.ts";
+import { loadHttpDocument } from "./sources/http.ts";
+import type {
+  DocumentRequest,
+  ModeOptions,
+  ResolvedMode,
+  ScrapeFormat,
+  ScrapeOptions,
+  SourceDocument,
+  StructuredContent,
+} from "./types.ts";
 
-export type { JsonPage, ModeOptions, ScrapeFormat, ScrapeOptions } from "./types.ts";
+export type { ModeOptions, ScrapeFormat, ScrapeOptions, StructuredContent } from "./types.ts";
 
-const resolveMode = ({ mode = "http", browserPath }: ModeOptions): ModeOptions => {
-  switch (mode) {
-    case "http": {
-      return { mode };
-    }
+const sources = {
+  headed: loadHeadedDocument,
+  headless: loadHeadlessDocument,
+  http: loadHttpDocument,
+} satisfies Record<ResolvedMode["mode"], (request: DocumentRequest) => Promise<SourceDocument>>;
 
-    case "headless":
-    case "headed": {
-      if (browserPath === undefined || browserPath.trim().length === 0) {
-        throw new TypeError(`browserPath is required for ${mode} mode.`);
-      }
-
-      return { browserPath, mode };
-    }
-
-    default: {
-      throw new TypeError("Unknown scrape mode.");
-    }
-  }
-};
+const formats = {
+  html: getHtml,
+  json: extractContent,
+  markdown: renderMarkdown,
+} satisfies Record<ScrapeFormat, (document: SourceDocument) => string | StructuredContent>;
 
 export class XrioClient {
-  readonly #mode: ModeOptions;
+  readonly #mode: ResolvedMode;
 
   constructor(options: ModeOptions = {}) {
-    this.#mode = resolveMode(options);
+    this.#mode = resolveClientOptions(options);
   }
 
   scrape(options: ScrapeOptions<"html" | "markdown">): Promise<string>;
-  scrape(options: ScrapeOptions<"json">): Promise<JsonPage>;
-  scrape(options: ScrapeOptions): Promise<string | JsonPage>;
-  async scrape(options: ScrapeOptions): Promise<string | JsonPage> {
-    const { url, format, timeoutMs, signal } = options;
+  scrape(options: ScrapeOptions<"json">): Promise<StructuredContent>;
+  scrape(options: ScrapeOptions): Promise<string | StructuredContent>;
+  async scrape(options: ScrapeOptions): Promise<string | StructuredContent> {
+    const request = resolveScrapeOptions(options, this.#mode);
+    const loadDocument = sources[request.mode];
+    const renderContent = formats[request.format];
 
-    if (format !== "html" && format !== "markdown" && format !== "json") {
-      throw new TypeError("Unknown scrape format.");
-    }
+    const document = await loadDocument(request);
 
-    const mode = options.mode === undefined ? this.#mode : resolveMode(options);
-    const page = await acquirePage({ signal, timeoutMs, url }, mode);
-
-    return transformPage(page, format);
+    return renderContent(document);
   }
 }
