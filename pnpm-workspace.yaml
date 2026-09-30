@@ -1,0 +1,16 @@
+packages: [apps/*, packages/*]
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.0.0
+  vitest@*: 5.0.1
+allowBuilds:
+  esbuild: true
+patchedDependencies:
+  oxlint-plugin-complexity@3.0.1: patches/oxlint-plugin-complexity@3.0.1.patch
+  ultracite@7.12.2: patches/ultracite@7.12.2.patch
+minimumReleaseAgeExclude:
+  - oxlint-plugin-complexity@3.0.1
+
+# Vite+ core is published as 1.0.0 and bundles Vite 8.
+peerDependencyRules:
+  allowedVersions:
+    vite: 1.0.0

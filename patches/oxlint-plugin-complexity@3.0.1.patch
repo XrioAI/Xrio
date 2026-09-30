@@ -1,0 +1,72 @@
+diff --git a/dist/rules/complexity.js b/dist/rules/complexity.js
+index f9d600e3e91aad4515dbf3f72a9edb3eb14dfeb0..6e81595fcd034965d6eabed07ad333b6a52efed3 100644
+--- a/dist/rules/complexity.js
++++ b/dist/rules/complexity.js
+@@ -5,6 +5,27 @@ import { normalizeCognitiveCategory, parseExtractionOptions, getExtractionOutput
+ const DEFAULT_CYCLOMATIC = 20;
+ const DEFAULT_COGNITIVE = 15;
+ const DEFAULT_MIN_LINES = 10;
++const COMPONENT_NAME = /^[A-Z]/u;
++const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
++function isJsxExpression(node) {
++    switch (node?.type) {
++        case 'JSXElement':
++        case 'JSXFragment':
++            return true;
++        case 'ConditionalExpression':
++            return isJsxExpression(node.consequent) || isJsxExpression(node.alternate);
++        case 'LogicalExpression':
++            return isJsxExpression(node.right) || (node.operator !== '&&' && isJsxExpression(node.left));
++        case 'TSAsExpression':
++        case 'TSTypeAssertion':
++        case 'TSNonNullExpression':
++        case 'TSSatisfiesExpression':
++        case 'ParenthesizedExpression':
++            return isJsxExpression(node.expression);
++        default:
++            return false;
++    }
++}
+ /**
+  * Enforce maximum cyclomatic and cognitive complexity (RECOMMENDED).
+  *
+@@ -54,6 +75,11 @@ export const complexity = defineRule({
+         let maxCognitive = DEFAULT_COGNITIVE;
+         let minLines = DEFAULT_MIN_LINES;
+         let parsed = parseExtractionOptions({});
++        const jsxReturningFunctions = new WeakSet();
++        function isReactComponent(node, functionName) {
++            return COMPONENT_NAME.test(functionName) &&
++                (jsxReturningFunctions.has(node) || isJsxExpression(node.body));
++        }
+         function isBelowMinLines(node) {
+             if (minLines <= 0 || !node.loc)
+                 return false;
+@@ -86,6 +112,8 @@ export const complexity = defineRule({
+                 return;
+             const funcNode = node;
+             const functionName = getFunctionName(funcNode, funcNode.parent);
++            if (isReactComponent(node, functionName))
++                return;
+             reportCyclomatic(node, functionName, result);
+             reportCognitive(node, functionName, result);
+         }
+@@ -98,6 +126,18 @@ export const complexity = defineRule({
+                 parsed = parseExtractionOptions(options);
+             },
+             ...createCombinedComplexityVisitor(context, handleComplexityResult),
++            ReturnStatement(node) {
++                if (!isJsxExpression(node.argument))
++                    return;
++                // Attribute JSX only to the function that actually returns it.
++                let parent = node.parent;
++                while (parent && !FUNCTION_TYPES.has(parent.type)) {
++                    parent = parent.parent;
++                }
++                if (parent) {
++                    jsxReturningFunctions.add(parent);
++                }
++            },
+         };
+     },
+ });

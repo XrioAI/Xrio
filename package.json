@@ -1,0 +1,39 @@
+{
+  "name": "xrio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "vp check && vp run -r typecheck && vp run knip",
+    "fix": "vp check --fix",
+    "format": "vp fmt",
+    "format:check": "vp fmt --check",
+    "knip": "vp exec knip --production",
+    "ready": "vp run check && vp run test",
+    "test": "vp test",
+    "typecheck": "vp exec tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "@xrio/typescript-config": "workspace:*",
+    "knip": "6.38.0",
+    "oxfmt": "0.71.0",
+    "oxlint": "1.86.0",
+    "oxlint-plugin-complexity": "3.0.1",
+    "oxlint-tsgolint": "7.0.2003",
+    "typescript": "7.0.2",
+    "ultracite": "7.12.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
+    "vite-plus": "1.0.0"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.8.1",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
