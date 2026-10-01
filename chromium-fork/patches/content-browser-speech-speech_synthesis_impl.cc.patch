@@ -1,0 +1,45 @@
+diff --git a/content/browser/speech/speech_synthesis_impl.cc b/content/browser/speech/speech_synthesis_impl.cc
+index 3122b26c31a2e57f2bbd15eec32258591ae3cdc7..423484a80b13a34902ee4389fc988f5465035d62 100644
+--- a/content/browser/speech/speech_synthesis_impl.cc
++++ b/content/browser/speech/speech_synthesis_impl.cc
+@@ -7,6 +7,7 @@
+ #include "content/browser/media/audio_stream_monitor.h"
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+ #include "content/browser/speech/tts_controller_impl.h"
++#include "content/browser/speech/xrio_speech_persona.h"
+ #include "content/browser/speech/tts_utterance_impl.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/public/browser/web_contents.h"
+@@ -149,6 +150,7 @@ void SpeechSynthesisImpl::AddVoiceListObserver(
+ 
+   std::vector<VoiceData> voices;
+   TtsController::GetInstance()->GetVoices(browser_context_, GURL(), &voices);
++  xrio::ApplySpeechPersona(&voices);
+   // While the platform voices are still loading the list is not known yet, so
+   // do not report an empty one: the page would see a voiceschanged event for
+   // it and could take that as the answer. OnVoicesChanged() sends the list to
+@@ -179,6 +181,16 @@ void SpeechSynthesisImpl::Speak(
+   tts_utterance->SetText(utterance->text);
+   tts_utterance->SetLang(utterance->lang);
+   tts_utterance->SetVoiceName(utterance->voice);
++  switch (xrio::SpeechPersonaRouteFor(utterance->voice)) {
++    case xrio::SpeechPersonaRoute::kBlockedRemote:
++      tts_utterance->SetEngineId(xrio::kSpeechPersonaEngineId);
++      break;
++    case xrio::SpeechPersonaRoute::kUnavailable:
++      tts_utterance->SetEngineId(xrio::kSpeechPersonaUnavailableEngineId);
++      break;
++    case xrio::SpeechPersonaRoute::kUpstream:
++      break;
++  }
+   tts_utterance->SetShouldClearQueue(false);
+   tts_utterance->SetContinuousParameters(utterance->rate, utterance->pitch,
+                                          utterance->volume);
+@@ -215,6 +227,7 @@ void SpeechSynthesisImpl::Cancel() {
+ void SpeechSynthesisImpl::OnVoicesChanged() {
+   std::vector<VoiceData> voices;
+   TtsController::GetInstance()->GetVoices(browser_context_, GURL(), &voices);
++  xrio::ApplySpeechPersona(&voices);
+   for (auto& observer : observer_set_)
+     SendVoiceListToObserver(observer.get(), voices);
+ }

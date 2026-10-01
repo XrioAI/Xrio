@@ -1,0 +1,27 @@
+diff --git a/third_party/blink/renderer/core/html/canvas/text_metrics.cc b/third_party/blink/renderer/core/html/canvas/text_metrics.cc
+index a78150b4a695b8a78a2d5462414a72f41693c1c8..d9b816287e8870cbee364fee446d60642643b9aa 100644
+--- a/third_party/blink/renderer/core/html/canvas/text_metrics.cc
++++ b/third_party/blink/renderer/core/html/canvas/text_metrics.cc
+@@ -2,6 +2,8 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "base/xrio_persona.h"
++#include "base/xrio_perturb.h"
+ #include "third_party/blink/renderer/core/html/canvas/text_metrics.h"
+ 
+ #include "base/numerics/checked_math.h"
+@@ -109,6 +111,13 @@ void TextMetrics::Update(const Font* font,
+   auto [xpos, glyph_bounds] = MeasureRuns(text_painter);
+   double real_width = xpos;
+   width_ = real_width;
++  // Separable from element rects (`jitter-text-metrics`, which defaults to
++  // whatever `jitter-geometry` is) because a target may break on one and not the
++  // other, and a per-surface retreat beats a fleet-wide one.
++  if (::base::xrio::JitterTextMetricsEnabled()) {
++    if (std::optional<uint64_t> xrio_seed = ::base::xrio::GeometrySeed())
++      width_ = ::base::xrio::JitterDimension(width_, xrio_seed.value());
++  }
+ 
+   text_align_dx_ = 0.0f;
+   if (align == V8CanvasTextAlign::Enum::kCenter) {

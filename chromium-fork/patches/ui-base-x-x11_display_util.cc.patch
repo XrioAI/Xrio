@@ -1,0 +1,52 @@
+diff --git a/ui/base/x/x11_display_util.cc b/ui/base/x/x11_display_util.cc
+index 2c544bee7be742067eec15d75ce930c37979704b..c1cb4c5be6944bb3a72598cbfb7d03f24abeceb3 100644
+--- a/ui/base/x/x11_display_util.cc
++++ b/ui/base/x/x11_display_util.cc
+@@ -21,6 +21,7 @@
+ #include "base/notimplemented.h"
+ #include "base/numerics/checked_math.h"
+ #include "base/numerics/clamped_math.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "skia/ext/color_profile.h"
+@@ -136,9 +137,9 @@ x11::Future<x11::RandR::GetOutputPropertyReply> GetEdidFuture(
+ // Sets the work area on a list of displays.  The work area for each display
+ // must already be initialized to the display bounds.  At most one display out
+ // of |displays| will be affected.
+-void ClipWorkArea(std::vector<display::Display>* displays,
+-                  size_t primary_display_index,
+-                  const gfx::Rect& net_workarea) {
++void ClipWorkAreaUpstream(std::vector<display::Display>* displays,
++                          size_t primary_display_index,
++                          const gfx::Rect& net_workarea) {
+   if (net_workarea.IsEmpty()) {
+     return;
+   }
+@@ -178,6 +179,26 @@ void ClipWorkArea(std::vector<display::Display>* displays,
+   }
+ }
+ 
++void ClipWorkArea(std::vector<display::Display>* displays,
++                  size_t primary_display_index,
++                  const gfx::Rect& net_workarea) {
++  ClipWorkAreaUpstream(displays, primary_display_index, net_workarea);
++  if (displays->empty() ||
++      std::ranges::any_of(*displays, [](const display::Display& display) {
++        return display.work_area() != display.bounds();
++      })) {
++    return;
++  }
++  const std::optional<int> panel = base::xrio::WorkAreaPanelHeight();
++  display::Display& primary = (*displays)[primary_display_index];
++  if (!panel || *panel >= primary.bounds().height()) {
++    return;
++  }
++  gfx::Rect work_area = primary.bounds();
++  work_area.set_height(work_area.height() - *panel);
++  primary.set_work_area(work_area);
++}
++
+ float GetRefreshRateFromXRRModeInfo(
+     const std::vector<x11::RandR::ModeInfo>& modes,
+     x11::RandR::Mode current_mode_id) {

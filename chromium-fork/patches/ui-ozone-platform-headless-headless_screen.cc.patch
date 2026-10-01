@@ -1,0 +1,27 @@
+diff --git a/ui/ozone/platform/headless/headless_screen.cc b/ui/ozone/platform/headless/headless_screen.cc
+index 8d7bd2782bdae1e92fdcf59b32559d4710fb4044..ad7dc0093de10cb8a1667a09fcd6792532c75f3d 100644
+--- a/ui/ozone/platform/headless/headless_screen.cc
++++ b/ui/ozone/platform/headless/headless_screen.cc
+@@ -10,6 +10,7 @@
+ #include "base/check_deref.h"
+ #include "base/command_line.h"
+ #include "base/containers/flat_set.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_split.h"
+ #include "components/headless/display_util/headless_display_util.h"
+@@ -93,6 +94,14 @@ std::vector<HeadlessScreenInfo> GetScreenInfo() {
+         HeadlessScreenInfo({.bounds = GetHeadlessDisplayBounds(),
+                             .device_pixel_ratio = kHeadlessDisplayScale}));
+   }
++  const std::optional<int> panel = base::xrio::WorkAreaPanelHeight();
++  if (panel && !screen_info.empty()) {
++    HeadlessScreenInfo& primary = screen_info.front();
++    if (primary.work_area_insets.IsEmpty() &&
++        *panel < primary.bounds.height()) {
++      primary.work_area_insets.set_bottom(*panel);
++    }
++  }
+   return screen_info;
+ }
+ 

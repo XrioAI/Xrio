@@ -1,0 +1,43 @@
+diff --git a/content/browser/speech/tts_controller_impl.cc b/content/browser/speech/tts_controller_impl.cc
+index 22780f5eabd72a2b7751543b4fe5fe68d1e730df..4cf015bba205f67b3946915e91ded4c5ec3e804d 100644
+--- a/content/browser/speech/tts_controller_impl.cc
++++ b/content/browser/speech/tts_controller_impl.cc
+@@ -22,6 +22,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "content/browser/speech/xrio_speech_persona.h"
+ #include "content/browser/speech/tts_utterance_impl.h"
+ #include "content/public/browser/content_browser_client.h"
+ #include "content/public/browser/tts_utterance.h"
+@@ -578,6 +579,30 @@ bool TtsControllerImpl::TtsPlatformLoading() {
+ }
+ 
+ void TtsControllerImpl::SpeakNow(std::unique_ptr<TtsUtterance> utterance) {
++  if (xrio::IsSpeechPersonaEngine(utterance->GetEngineId())) {
++    // Branded Chrome keeps its remote voice inventory when the speech endpoint
++    // cannot be reached. A non-empty request remains current until cancellation;
++    // its component extension has no asynchronous media-error handler. Preserve
++    // that measured no-egress behavior without loading the extension or making
++    // a Google request. Empty utterances complete immediately in the extension.
++    const bool empty = utterance->GetText().empty();
++    SetCurrentUtterance(std::move(utterance));
++    if (empty) {
++      OnTtsEvent(current_utterance_->GetId(), TTS_EVENT_END, 0, 0,
++                 std::string());
++    }
++    return;
++  }
++  if (xrio::IsUnavailableSpeechPersonaEngine(utterance->GetEngineId())) {
++    // A selected but absent/invalid artifact must not fall through to a host
++    // voice that the page-facing list deliberately hid. This is Chromium's
++    // native no-engine outcome and maps to Web Speech `synthesis-failed`.
++    SetCurrentUtterance(std::move(utterance));
++    OnTtsEvent(current_utterance_->GetId(), TTS_EVENT_ERROR, 0, 0,
++               "speech persona unavailable");
++    return;
++  }
++
+   // Get all available voices and try to find a matching voice.
+   std::vector<VoiceData> voices;
+   GetVoices(utterance->GetBrowserContext(), utterance->GetSrcUrl(), &voices);

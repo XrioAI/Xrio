@@ -1,0 +1,43 @@
+diff --git a/services/device/battery/battery_status_service.cc b/services/device/battery/battery_status_service.cc
+index 2098570e0fe3e92b8d3b38331ec21ee82c3044ce..7f1578f168f763a862307c77591acd7acfae9d29 100644
+--- a/services/device/battery/battery_status_service.cc
++++ b/services/device/battery/battery_status_service.cc
+@@ -13,6 +13,7 @@
+ #include "base/threading/sequence_local_storage_slot.h"
+ #include "services/device/battery/battery_monitor_impl.h"
+ #include "services/device/battery/battery_status_manager.h"
++#include "services/device/battery/xrio_battery_persona.h"
+ 
+ namespace device {
+ 
+@@ -46,8 +47,15 @@ base::CallbackListSubscription BatteryStatusService::AddCallback(
+   if (callback_list_.empty()) {
+     bool success = battery_fetcher_->StartListeningBatteryChange();
+     // On failure pass the default values back.
++    //
++    // fork: transformed like any other status. NOT exercised on Linux --
++    // BatteryStatusManagerLinux::StartListeningBatteryChange() returns true
++    // unconditionally, and a missing or invalid UPower reading is sent as the
++    // default tuple through the normal notification path below. Hooked anyway
++    // for the platforms where it IS the batteryless path (Windows, macOS), so
++    // the two ways a consumer can be handed a status cannot disagree.
+     if (!success)
+-      callback.Run(mojom::BatteryStatus());
++      callback.Run(::device::xrio::ApplyBatteryPersona(mojom::BatteryStatus()));
+   }
+ 
+   if (status_updated_) {
+@@ -83,7 +91,12 @@ void BatteryStatusService::NotifyConsumersOnMainThread(
+   if (callback_list_.empty())
+     return;
+ 
+-  status_ = status;
++  // fork: transformed BEFORE the cache and the broadcast, which is the whole
++  // reason this is the seam. status_ is what a late subscriber is handed by
++  // AddCallback, and Blink's old/new comparison runs on what it was notified
++  // with -- so a host-only change cannot produce a page-visible event while the
++  // configured tuple is fixed. Identity when no tuple is configured.
++  status_ = ::device::xrio::ApplyBatteryPersona(status);
+   status_updated_ = true;
+   callback_list_.Notify(status_);
+ }

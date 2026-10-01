@@ -1,3 +1,3 @@
 import { defineConfig } from "oxfmt";
 
-export default defineConfig({ sortImports: true });
+export default defineConfig({ ignorePatterns: ["chromium-fork/**"], sortImports: true });

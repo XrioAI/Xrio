@@ -1,0 +1,85 @@
+diff --git a/components/embedder_support/user_agent_utils_unittest.cc b/components/embedder_support/user_agent_utils_unittest.cc
+index bd28b2370697b9d1958954b87fe7a168dc642a56..58c33bbd35a882ab1756096a37278a6309596fd9 100644
+--- a/components/embedder_support/user_agent_utils_unittest.cc
++++ b/components/embedder_support/user_agent_utils_unittest.cc
+@@ -8,6 +8,8 @@
+ #include <vector>
+ 
+ #include "base/command_line.h"
++#include "base/xrio_config.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_split.h"
+@@ -1046,13 +1048,70 @@ TEST_F(UserAgentUtilsTest, GetUserAgent) {
+ }
+ 
+ TEST_F(UserAgentUtilsTest, HeadlessUserAgent) {
++  // ORDER-INDEPENDENT. XrioConfig is a process-global singleton, so this test read
++  // "the registry default" only as long as nothing earlier in the binary had
++  // written a config. Reset first rather than adding a fixture TearDown, because
++  // the fork's own overlays (xrio_knobs_unittest.cc, xrio_config_file_unittest.cc)
++  // reset in TearDown while this is an UPSTREAM fixture shared with two dozen
++  // tests that know nothing about xrio -- widening it would be a bigger change to
++  // upstream code than the assertion this patch exists for.
++  ::base::XrioConfig::Get().SetAll({});
+   base::test::ScopedCommandLine scoped_command_line;
+   base::CommandLine* command_line = scoped_command_line.GetProcessCommandLine();
+   command_line->AppendSwitch(kHeadless);
+   ASSERT_TRUE(command_line->HasSwitch(kHeadless));
+ 
+-  // In headless mode product name should have the Headless prefix.
++  // THIS FORK INVERTS THE ASSERTION UPSTREAM MAKES HERE, and the inversion is
++  // the feature. Upstream expected `HasSubstr("HeadlessChrome/")`, because
++  // GetUserAgentInternal inserts the "Headless" prefix whenever --headless is
++  // present. This build suppresses it -- `suppress-headless-token` defaults to
++  // true -- so the product token cannot tell a headless render from a headed
++  // one, which is the single loudest tell a page gets for free
++  // (fork/unbranded-tells.md, catalog SS1 #8).
++  //
++  // Kept as an assertion rather than deleted. The suppression is one condition
++  // in one function, and nothing else in the tree would notice it being lost:
++  // every render would quietly start announcing HeadlessChrome/ again. Upstream's
++  // version of this test FAILS on this build, which is how the contradiction was
++  // found -- it had been failing unnoticed because components_unittests is not
++  // part of `make check`.
++  EXPECT_THAT(GetUserAgent(), testing::HasSubstr("Chrome/"));
++  EXPECT_THAT(GetUserAgent(),
++              testing::Not(testing::HasSubstr("HeadlessChrome")));
++}
++
++TEST_F(UserAgentUtilsTest, HeadlessUserAgentTokenCanBeRestored) {
++  base::test::ScopedCommandLine scoped_command_line;
++  base::CommandLine* command_line = scoped_command_line.GetProcessCommandLine();
++  command_line->AppendSwitch(kHeadless);
++  ASSERT_TRUE(command_line->HasSwitch(kHeadless));
++
++  // OFF MEANS UPSTREAM, not some third behaviour. Asserted because the parity
++  // gate compares this build against stock Chrome, and a suppression with no
++  // off switch would make the two arms incomparable by construction -- there
++  // would be no way to reproduce the stock string from this binary.
++  ::base::XrioConfig::Get().SetAll({{"suppress-headless-token", "false"}});
++  EXPECT_FALSE(::base::xrio::SuppressHeadlessToken());
+   EXPECT_THAT(GetUserAgent(), testing::HasSubstr("HeadlessChrome/"));
++
++  // Back to an EMPTY config rather than an explicit "true", for two reasons: it
++  // asserts the REGISTRY default instead of a value this test just wrote, and
++  // XrioConfig is process-global, so leaving a map behind would make every later
++  // test in this binary run under whatever this one set.
++  //
++  // NOT the same as "nobody configured anything", which an earlier version of
++  // this comment claimed. SetAll() also sets `loaded_` (xrio_config.cc), which
++  // permanently suppresses the lazy command-line harvest -- so {} means "an
++  // empty configuration, chosen" rather than "unconfigured". The distinction does
++  // not matter to the assertion below, since every knob then falls back to its
++  // registry default either way, and it matters a lot to anyone who reads this
++  // and expects the harvest to still be pending.
++  //
++  // GetUserAgent() caches nothing, which is what makes both halves observable.
++  ::base::XrioConfig::Get().SetAll({});
++  EXPECT_TRUE(::base::xrio::SuppressHeadlessToken());
++  EXPECT_THAT(GetUserAgent(),
++              testing::Not(testing::HasSubstr("HeadlessChrome")));
+ }
+ 
+ namespace {

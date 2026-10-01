@@ -1,0 +1,24 @@
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.h b/third_party/blink/renderer/platform/graphics/image_data_buffer.h
+index 7788473df7e915a0f5d53b7c134cf1ad8177582e..98f7ddae7f2552a37d3aef640403cd2da50410b0 100644
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.h
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.h
+@@ -38,6 +38,7 @@
+ #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+ #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+ #include "third_party/blink/renderer/platform/wtf/vector.h"
++#include "third_party/skia/include/core/SkData.h"
+ #include "third_party/skia/include/core/SkPixmap.h"
+ #include "third_party/skia/include/core/SkRefCnt.h"
+ 
+@@ -66,6 +67,11 @@ class PLATFORM_EXPORT ImageDataBuffer {
+   bool IsValid() { return is_valid_; }  // Only used by Create()
+ 
+   sk_sp<SkImage> retained_image_;
++  // Owns the perturbed copy pixmap_ points at, when a canvas seed is set. The
++  // copy is mandatory: on the non-accelerated path pixmap_ peeks straight into
++  // the live canvas backing store, so perturbing in place would mutate the
++  // canvas and accumulate across encodes.
++  sk_sp<SkData> xrio_pixels_;
+   SkPixmap pixmap_;
+   bool is_valid_ = false;
+ };

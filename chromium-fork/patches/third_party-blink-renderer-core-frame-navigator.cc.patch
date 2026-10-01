@@ -1,0 +1,28 @@
+diff --git a/third_party/blink/renderer/core/frame/navigator.cc b/third_party/blink/renderer/core/frame/navigator.cc
+index 583f05f8dd5fb74116ad81da63ee7e43445f8060..e68e861305326f5b084397a52fe0ba334460981d 100644
+--- a/third_party/blink/renderer/core/frame/navigator.cc
++++ b/third_party/blink/renderer/core/frame/navigator.cc
+@@ -23,6 +23,8 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator.h"
+ 
++#include "base/xrio_persona.h"
++
+ #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
+@@ -98,6 +100,14 @@ bool Navigator::cookieEnabled() const {
+ }
+ 
+ bool Navigator::webdriver() const {
++  // Answered in C++ and never true. Strictly better than driver-side handling:
++  // no getter to find, no descriptor anomaly, no toString tell, and CDP cannot
++  // flip it back. Unconditional on purpose -- a flag-gated version would ship
++  // `webdriver === true` the first time the flag was forgotten, and that is the
++  // dangerous direction to fail in (catalog SS3 #87).
++  if (::base::xrio::ForceWebdriverFalse())
++    return false;
++
+   if (RuntimeEnabledFeatures::AutomationControlledEnabled())
+     return true;
+ 

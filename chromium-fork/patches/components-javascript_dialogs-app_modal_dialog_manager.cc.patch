@@ -1,0 +1,30 @@
+diff --git a/components/javascript_dialogs/app_modal_dialog_manager.cc b/components/javascript_dialogs/app_modal_dialog_manager.cc
+index 6a809675ff79e5594adb163d3d4684b2c2153ed2..4a02d8251289ee62994729cb470ed262ae0b070d 100644
+--- a/components/javascript_dialogs/app_modal_dialog_manager.cc
++++ b/components/javascript_dialogs/app_modal_dialog_manager.cc
+@@ -12,6 +12,7 @@
+ #include "base/functional/bind.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "build/build_config.h"
+ #include "components/javascript_dialogs/app_modal_dialog_manager_delegate.h"
+@@ -162,6 +163,17 @@ void AppModalDialogManager::RunBeforeUnloadDialogWithOptions(
+     return;
+   }
+ 
++  if (::base::xrio::SuppressBeforeunloadDialogs()) {
++    // A modal here stalls the automation channel outright until something
++    // dismisses it, and in an automated render nothing will. Which way to
++    // answer is BeforeunloadAutoAccept(): true leaves the page, false stays and
++    // cancels the navigation. A separate branch from upstream's mute case above
++    // on purpose -- that one's answer is upstream's to decide, not ours.
++    std::move(callback).Run(::base::xrio::BeforeunloadAutoAccept(),
++                            std::u16string());
++    return;
++  }
++
+   // Build the dialog message. We explicitly do _not_ allow the webpage to
+   // specify the contents of this dialog, as per the current spec
+   //

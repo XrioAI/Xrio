@@ -1,0 +1,21 @@
+diff --git a/content/renderer/render_thread_impl.h b/content/renderer/render_thread_impl.h
+index 09133870f6c28048f5c77f52c0048c50e101ac11..43a70482c98693d83aac2bed5fc609b7cf2095ff 100644
+--- a/content/renderer/render_thread_impl.h
++++ b/content/renderer/render_thread_impl.h
+@@ -18,6 +18,7 @@
+ 
+ #include "base/cancelable_callback.h"
+ #include "base/clang_profiling_buildflags.h"
++#include "base/containers/flat_map.h"
+ #include "base/containers/unique_ptr_adapters.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/memory/discardable_memory_allocator.h"
+@@ -383,6 +384,8 @@ class CONTENT_EXPORT RenderThreadImpl
+   void InitializeWebKit(mojo::BinderMap* binders);
+ 
+   // mojom::Renderer:
++  void SetXrioConfig(
++      const base::flat_map<std::string, std::string>& config) override;
+   void CreateAgentSchedulingGroup(
+       mojo::PendingReceiver<IPC::mojom::ChannelBootstrap> bootstrap) override;
+   void CreateAssociatedAgentSchedulingGroup(

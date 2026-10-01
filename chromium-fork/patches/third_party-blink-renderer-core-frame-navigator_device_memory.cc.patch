@@ -1,0 +1,21 @@
+diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+index 05fa33e4568e8eea926a0d97c1d83a4000fa6b3f..0c39c403d99c554c190d99911bc8766c11e28cc5 100644
+--- a/third_party/blink/renderer/core/frame/navigator_device_memory.cc
++++ b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "base/xrio_persona.h"
+ #include "third_party/blink/renderer/core/frame/navigator_device_memory.h"
+ 
+ #include "third_party/blink/public/common/device_memory/approximated_device_memory.h"
+@@ -12,6 +13,8 @@
+ namespace blink {
+ 
+ float NavigatorDeviceMemory::deviceMemory() const {
++  if (std::optional<float> xrio_memory = ::base::xrio::DeviceMemoryGb())
++    return xrio_memory.value();
+   return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
+ }
+ 

@@ -1,0 +1,24 @@
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index c71dfd3567adc5cdd2635f14fecd74288e3d418b..84571df202620628aabaace20441fbe7888b3484 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -37,6 +37,7 @@
+ #include "base/path_service.h"
+ #include "base/process/process.h"
+ #include "base/process/process_metrics.h"
++#include "base/xrio_config.h"
+ #include "base/run_loop.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_split.h"
+@@ -848,6 +849,11 @@ void RenderThreadImpl::InitializeWebKit(mojo::BinderMap* binders) {
+       blink::WebImageGenerator::CreateAsSkImageGenerator);
+ }
+ 
++void RenderThreadImpl::SetXrioConfig(
++    const base::flat_map<std::string, std::string>& config) {
++  base::XrioConfig::Get().SetAll(config);
++}
++
+ void RenderThreadImpl::InitializeRenderer(
+     const std::string& user_agent,
+     const blink::UserAgentMetadata& user_agent_metadata,

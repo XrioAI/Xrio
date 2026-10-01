@@ -1,0 +1,55 @@
+diff --git a/components/gcm_driver/gcm_driver_desktop.cc b/components/gcm_driver/gcm_driver_desktop.cc
+index 16e142aed302a67760eaae7ca62a45c92264d876..314488807f6f5c35c22b657c43095bbd7a1216fb 100644
+--- a/components/gcm_driver/gcm_driver_desktop.cc
++++ b/components/gcm_driver/gcm_driver_desktop.cc
+@@ -15,6 +15,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/observer_list.h"
++#include "base/xrio_persona.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+@@ -1192,6 +1193,42 @@ GCMClient::Result GCMDriverDesktop::EnsureStarted(
+   if (gcm_started_)
+     return GCMClient::SUCCESS;
+ 
++  // The single chokepoint for BOTH GCM endpoints: android.clients.google.com
++  // /checkin and /c2dm/register3 are 16 of the 58 background requests one page
++  // load makes, and no upstream switch reaches them (chrome_switches.cc has
++  // none; components/gcm_driver/features.cc declares only kInvalidateTokenFeature).
++  //
++  // HERE rather than in GCMProfileServiceFactory, which would have been the
++  // earlier gate: four callers do GCMProfileServiceFactory::GetForProfile(p)
++  // ->driver() with no null check (sharing_service_factory.cc,
++  // instance_id_profile_service_factory.cc, sync_invalidations_service_factory.cc,
++  // profile_invalidation_provider_factory.cc), so refusing to build the service
++  // is a startup crash. This early return is one upstream already takes when no
++  // app handler has registered, and the driver object still exists, so nothing
++  // is left half-initialised.
++  //
++  // WHAT MAKES IT SAFE, precisely, because "every caller handles the result" is
++  // not quite true. The load-bearing part is the base class: GCMDriver::Register,
++  // ::UnregisterInternal and ::Send (gcm_driver.cc) each check the result before
++  // reaching RegisterImpl/UnregisterImpl/SendImpl, which is what keeps
++  // `delayed_task_controller_` from being dereferenced null below -- it is only
++  // allocated AFTER this point.
++  //
++  // Two in-file callers do NOT run their callback on a non-SUCCESS result:
++  // ValidateRegistration and ValidateToken both say so in a comment ("let it
++  // hang indefinitely"). Upstream's app_handlers().empty() return is effectively
++  // unreachable there, because you need a registered handler to be calling them;
++  // this knob makes it reachable, so an InstanceIDImpl caller leaks a callback.
++  // Accepted: a render never signs in and never subscribes to push, so nothing
++  // calls either. Recorded rather than discovered later.
++  //
++  // Not page-visible: navigator.serviceWorker and PushManager are Blink IDL and
++  // untouched. pushManager.subscribe() would reject, but it needs granted
++  // notification permission first, which a render never has, so it rejects
++  // before reaching GCM either way.
++  if (::base::xrio::SuppressGcm())
++    return GCMClient::UNKNOWN_ERROR;
++
+   // Have any app requested the service?
+   if (app_handlers().empty())
+     return GCMClient::UNKNOWN_ERROR;

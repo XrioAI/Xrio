@@ -1,0 +1,47 @@
+diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+index f93a6b3df5f43a2ef1bd668bc3b611bb2cdca55f..84f32257a3bf9898c94cd0333de523b11659cbf6 100644
+--- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
++++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+@@ -43,6 +43,7 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
++#include "base/xrio_persona.h"
+ #include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/associated_remote.h"
+ #include "net/http/structured_headers.h"
+@@ -668,13 +669,23 @@ void FrameFetchContext::AddClientHintsIfNecessary(
+ 
+   using network::mojom::blink::WebClientHintsType;
+ 
++  // THE THIRD READER OF THIS NUMBER, and the one an acceptance test found.
++  // navigator_device_memory.cc hooks the getter and
++  // content/browser/client_hints/client_hints.cc hooks NAVIGATION requests; this
++  // is the SUBRESOURCE path, which Blink builds in the renderer and which read
++  // ApproximatedDeviceMemory directly. So a page could answer
++  // `Accept-CH: Device-Memory`, fetch() anything, and receive the host's value
++  // while navigator.deviceMemory reported the drawn class -- the exact
++  // contradiction the browser-side hook was added to remove, one layer over.
++  // Measured 2026-09-07 with tools/client_hints_probe.py: wire 32, page 8.
+   if (ShouldSendClientHint(*policy, resource_origin,
+                            WebClientHintsType::kDeviceMemory_DEPRECATED,
+                            hints_preferences)) {
+     request.SetHttpHeaderField(
+         http_names::kDeviceMemory_DEPRECATED,
+         AtomicString(String::Number(
+-            ApproximatedDeviceMemory::GetApproximatedDeviceMemory())));
++            ::base::xrio::DeviceMemoryGb().value_or(
++                ApproximatedDeviceMemory::GetApproximatedDeviceMemory()))));
+   }
+ 
+   if (ShouldSendClientHint(*policy, resource_origin,
+@@ -683,7 +694,8 @@ void FrameFetchContext::AddClientHintsIfNecessary(
+     request.SetHttpHeaderField(
+         http_names::kDeviceMemory,
+         AtomicString(String::Number(
+-            ApproximatedDeviceMemory::GetApproximatedDeviceMemory())));
++            ::base::xrio::DeviceMemoryGb().value_or(
++                ApproximatedDeviceMemory::GetApproximatedDeviceMemory()))));
+   }
+ 
+   if (ShouldSendClientHint(*policy, resource_origin,

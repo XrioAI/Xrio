@@ -1,0 +1,24 @@
+diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
+index 598e361a2988674243dd6ace9cc63de2f74ed1e1..83279c9ac4f8836c99d074adb577866bdd798980 100644
+--- a/chrome/browser/ui/startup/infobar_utils.cc
++++ b/chrome/browser/ui/startup/infobar_utils.cc
+@@ -13,6 +13,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/xrio_persona.h"
+ #include "base/rand_util.h"
+ #include "build/branding_buildflags.h"
+ #include "build/buildflag.h"
+@@ -166,6 +167,11 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+   if (!browser || !profile) {
+     return;
+   }
++  // Viewport-consuming bars change what the page is laid out into, and the page
++  // is the product.
++  if (::base::xrio::SuppressStartupInfobars()) {
++    return;
++  }
+   tabs::TabInterface* active_tab = browser->GetActiveTabInterface();
+   if (!active_tab) {
+     return;

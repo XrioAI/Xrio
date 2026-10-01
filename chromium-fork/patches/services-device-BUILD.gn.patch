@@ -1,0 +1,16 @@
+diff --git a/services/device/BUILD.gn b/services/device/BUILD.gn
+index 2e36294a3112038c88f695e467ed5c9c5c3b0892..490ce3b8621085014604d87235452bdb041900cd 100644
+--- a/services/device/BUILD.gn
++++ b/services/device/BUILD.gn
+@@ -269,7 +269,10 @@ source_set("tests") {
+     deps += [ ":device_service_jni_headers" ]
+   } else {
+     if (!(is_ios && target_platform == "tvos")) {
+-      sources += [ "battery/battery_monitor_impl_unittest.cc" ]
++      sources += [
++        "battery/battery_monitor_impl_unittest.cc",
++        "battery/xrio_battery_status_unittest.cc",
++      ]
+       deps += [ "//services/device/battery" ]
+     }
+   }

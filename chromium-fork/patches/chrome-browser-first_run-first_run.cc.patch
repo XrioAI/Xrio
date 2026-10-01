@@ -1,0 +1,22 @@
+diff --git a/chrome/browser/first_run/first_run.cc b/chrome/browser/first_run/first_run.cc
+index 4e2948a977adba84aa4e4e39833198c692c123fd..221ddbf9645972af86fb812d3889a542eb6e3092 100644
+--- a/chrome/browser/first_run/first_run.cc
++++ b/chrome/browser/first_run/first_run.cc
+@@ -13,6 +13,7 @@
+ #include "base/command_line.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
++#include "base/xrio_persona.h"
+ #include "base/logging.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/no_destructor.h"
+@@ -469,6 +470,9 @@ void AutoImport(
+     const std::string& import_bookmarks_path) {
+   g_auto_import_state |= AUTO_IMPORT_CALLED;
+ 
++  if (::base::xrio::SuppressFirstRunImport())
++    return;
++
+   // Use |profile|'s PrefService to determine what to import. It will reflect in
+   // order:
+   //  1) Policies.

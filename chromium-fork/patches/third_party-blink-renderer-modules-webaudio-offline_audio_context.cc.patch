@@ -1,0 +1,38 @@
+diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
+index 4604be68adba418ceb342f50465dcb52996499d7..8f95cba91697a44c1aebc0f6a0e49a582beca165 100644
+--- a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
+@@ -23,6 +23,8 @@
+  * DAMAGE.
+  */
+ 
++#include "base/xrio_persona.h"
++#include "base/xrio_perturb.h"
+ #include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
+ 
+ #include "base/metrics/histogram_functions.h"
+@@ -437,6 +439,24 @@ void OfflineAudioContext::FireCompletionEvent() {
+       return;
+     }
+ 
++    // Perturb here, and ONLY here, for the offline path. The first attempt
++    // hooked AudioBuffer's AudioBus constructor, which OfflineAudioContext never
++    // uses -- it allocates via CreateUninitialized and renders into that -- so a
++    // real run measured a byte-identical audio hash across two different seeds.
++    // This is the one point where the rendered buffer reaches JS, and it covers
++    // both routes below (the event and the promise resolution).
++    if (::base::xrio::PerturbOfflineAudioEnabled() &&
++        ::base::xrio::AudioSeed().has_value()) {
++      for (unsigned channel = 0; channel < rendered_buffer->numberOfChannels();
++           ++channel) {
++        NotShared<DOMFloat32Array> channel_data =
++            rendered_buffer->getChannelData(channel);
++        if (channel_data.Get()) {
++          ::base::xrio::ScaleAudioChannel(channel_data->AsSpan(), channel);
++        }
++      }
++    }
++
+     // Call the offline rendering completion event listener and resolve the
+     // promise too.
+     DispatchEvent(*OfflineAudioCompletionEvent::Create(rendered_buffer));

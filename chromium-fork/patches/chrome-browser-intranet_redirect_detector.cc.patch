@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/intranet_redirect_detector.cc b/chrome/browser/intranet_redirect_detector.cc
+index 935d24eb60c1322337d18a8ddb547bdc84148d1a..6fa903fc60226e1628a7b81d8f3c7c676a6ecae1 100644
+--- a/chrome/browser/intranet_redirect_detector.cc
++++ b/chrome/browser/intranet_redirect_detector.cc
+@@ -13,6 +13,7 @@
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
++#include "base/xrio_persona.h"
+ #include "base/location.h"
+ #include "base/rand_util.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -104,7 +105,7 @@ void IntranetRedirectDetector::Restart() {
+ 
+ void IntranetRedirectDetector::FinishSleep() {
+   in_sleep_ = false;
+-  if (!IsEnabledByPolicy()) {
++  if (::base::xrio::SuppressIntranetRedirectProbe() || !IsEnabledByPolicy()) {
+     if (redirect_origin_.is_valid()) {
+       g_browser_process->local_state()->SetString(
+           prefs::kLastKnownIntranetRedirectOrigin, std::string());

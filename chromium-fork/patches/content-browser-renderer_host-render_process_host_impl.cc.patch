@@ -1,0 +1,71 @@
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 0d96dedc4dfeb3dad37231f851af7b4c7e350cf9..faac40a9dcfa2d8e4c4ce27522ab3b0f26da425e 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -53,6 +53,11 @@
+ #include "base/numerics/safe_conversions.h"
+ #include "base/observer_list.h"
+ #include "base/process/process_handle.h"
++#include "base/xrio_config.h"
++#include "base/xrio_gl_table.h"
++#include "base/xrio_media_table.h"
++#include "base/xrio_persona.h"
++#include "base/xrio_speech_table.h"
+ #include "base/rand_util.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -2013,6 +2018,33 @@ bool RenderProcessHostImpl::Init() {
+   RegisterMojoInterfaces();
+   CreateMetricsAllocator();
+ 
++  // Persona before anything else: mojo preserves order on this pipe, so sending
++  // it here guarantees base::XrioConfig is populated in the renderer before any
++  // surface that reads it can run.
++  //
++  // ExpandGlTable inlines the GL persona artifact -- a ~1.4 KB JSON file beside
++  // the browser binary -- into the map as "gl-table", so a renderer receives the
++  // body and never needs a path. It could not open one anyway: it is sandboxed,
++  // and the persona deliberately never reaches a renderer command line
++  // (base/xrio_config.h, catalog SS3 #84).
++  {
++    base::ScopedAllowBlocking allow_blocking;
++    base::XrioConfig::Map xrio_config = base::XrioConfig::HarvestFromCommandLine(
++        *base::CommandLine::ForCurrentProcess());
++    base::xrio::ExpandGlTable(&xrio_config);
++    // The media artifact rides the same channel under the same rules: inlined
++    // here, absent when there is no artifact, never a renderer-side path. Its
++    // absence is the NORMAL state for personas captured before the first media
++    // measurement, so unlike a defective GL table this is not even an error.
++    base::xrio::ExpandMediaTable(&xrio_config);
++    // Speech is consumed in the browser process. Install an immutable browser
++    // copy before this renderer can bind the Web Speech interface.
++    base::xrio::ExpandSpeechTable(&xrio_config);
++    base::xrio::InstallBrowserSpeechTable(xrio_config);
++    base::xrio::InstallBrowserGlTable(xrio_config);
++    GetRendererInterface()->SetXrioConfig(std::move(xrio_config));
++  }
++
+   // Calculate the CPU performance tier, allowing for overrides.
+   content::cpu_performance::Tier cpu_tier;
+   if (std::optional<int> override =
+@@ -2022,6 +2054,20 @@ bool RenderProcessHostImpl::Init() {
+         content::cpu_performance::Tier::kUnknown);
+   } else {
+     cpu_tier = content::cpu_performance::GetTier();
++    // navigator.cpuPerformance has to describe the machine hardwareConcurrency
++    // claims, or a page reads a 4-core persona on an ultra-tier host. It
++    // follows HardwareConcurrency() -- the draw, or the explicit override --
++    // through upstream's own classifier with no model string, which gives the
++    // unknown-model tier for that count. The policy override still wins, as it
++    // does over the host value. This is why the persona block now sits above
++    // this one: before InstallBrowserGlTable() the browser draws without the
++    // persona's max_threads ceiling and can pick a class the renderer never
++    // will.
++    if (std::optional<unsigned> xrio_cores =
++            base::xrio::HardwareConcurrency()) {
++      cpu_tier = content::cpu_performance::GetTierFromCpuInfo(
++          "", static_cast<int>(*xrio_cores));
++    }
+   }
+ 
+   // Call this now and not in OnProcessLaunched in case any mojo calls get

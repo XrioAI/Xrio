@@ -1,0 +1,20 @@
+diff --git a/content/common/renderer.mojom b/content/common/renderer.mojom
+index e6ade45d193636a7083249765889bb6cfa7b6d72..50d568eabe8fa7b2471409f10679230c2913e512 100644
+--- a/content/common/renderer.mojom
++++ b/content/common/renderer.mojom
+@@ -45,6 +45,15 @@ enum RenderProcessVisibleState {
+ // This should be used for implementing browser-to-renderer control messages
+ // which need to retain FIFO with respect to legacy IPC messages.
+ interface Renderer {
++  // Installs the process-wide xrio persona configuration. Sent once per
++  // renderer from RenderProcessHostImpl::Init, ahead of every other message on
++  // this pipe, so the values are in place before any Blink surface can be read.
++  //
++  // The browser harvests these from its OWN command line and ships them here.
++  // They are deliberately not forwarded as renderer switches, so the persona is
++  // absent from the renderer argv. See base/xrio_config.h.
++  SetXrioConfig(map<string, string> config);
++
+   // Tells the renderer to create a new AgentSchedulingGroup, and initialize its
+   // legacy IPC Channel using the pipe provided by `bootstrap`. The channel will
+   // later be used to bind the mojom::AgentSchedulingGroup receiver, that
