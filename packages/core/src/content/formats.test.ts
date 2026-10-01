@@ -12,6 +12,7 @@ describe("content formats", () => {
     },
   ])("shares Markdown URL resolution with structured content: $base", ({ base, href }) => {
     const document = {
+      cookies: [],
       headers: {},
       html: `<p><a href="tea">Tea</a></p>${base}`,
       status: 200,

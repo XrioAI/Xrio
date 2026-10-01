@@ -17,15 +17,17 @@ result.data.metadata.title;
 result.data.content.markdown;
 result.status;
 result.headers["content-type"];
+result.cookies;
 result.url;
 ```
 
-`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, format }`:
+`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format }`:
 
 - `data`: an HTML or Markdown string, or `StructuredContent` for `json`.
 - `url`: the final response URL after redirects.
 - `status`: the actual HTTP response status, including non-2xx statuses.
-- `headers`: a plain object with lowercase keys and string values. When present, `set-cookie` is an array containing each cookie separately.
+- `headers`: a plain object with lowercase names and string values, typed `string | undefined` because a header the response did not send is absent. `set-cookie` is never included; use `cookies`.
+- `cookies`: each `Set-Cookie` header value of the final response, in order and unparsed. Empty when the response set none.
 - `format`: the requested format. Checking this field narrows the type of `data` in TypeScript.
 
 For `json`, `data` retains the existing `StructuredContent` fields:
@@ -52,7 +54,7 @@ const result = await pending;
 result.data;
 ```
 
-HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, and `headers`.
+HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, `headers`, and `cookies`.
 
 Errors created by this package have stable codes:
 

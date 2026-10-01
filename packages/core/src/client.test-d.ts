@@ -50,4 +50,9 @@ describe("XrioClient types", () => {
     // @ts-expect-error Timeouts belong to scrape(), not the constructor.
     void new XrioClient({ timeoutMs: 1000 });
   });
+
+  it("exposes each response header as an optional string and cookies separately", () => {
+    expectTypeOf<ScrapeResult["headers"]["content-type"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ScrapeResult["cookies"]>().toEqualTypeOf<string[]>();
+  });
 });

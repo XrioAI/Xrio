@@ -55,6 +55,7 @@ export class XrioClient {
 
     return {
       ...renderContent(document),
+      cookies: document.cookies,
       headers: document.headers,
       status: document.status,
       url: document.url,

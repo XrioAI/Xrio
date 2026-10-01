@@ -26,8 +26,9 @@ export interface StructuredContent {
   };
 }
 
-interface ResponseDetails {
-  headers: Record<string, string | string[]>;
+export interface ResponseDetails {
+  cookies: string[];
+  headers: Record<string, string | undefined>;
   status: number;
   url: string;
 }

@@ -151,6 +151,7 @@ describe(XrioClient, () => {
       const result = await new XrioClient().scrape({ format, url: `${origin}/redirect` });
 
       expect(Object.keys(result).toSorted()).toStrictEqual([
+        "cookies",
         "data",
         "format",
         "headers",
@@ -158,16 +159,17 @@ describe(XrioClient, () => {
         "url",
       ]);
       expect(result).toMatchObject({
+        cookies,
         format,
         headers: {
           "content-type": "text/html; charset=utf-8",
-          "set-cookie": cookies,
           "x-source": "document",
         },
         status: 200,
         url: `${origin}/pages/document`,
       });
-      expect(result.headers).not.toHaveProperty("Set-Cookie");
+      expect(result.headers).not.toHaveProperty("set-cookie");
+      expect(result.headers).not.toHaveProperty("X-Source");
     },
   );
 
@@ -241,7 +243,7 @@ describe(XrioClient, () => {
     expect(titled.data.metadata.title).toBe("Title");
     expect(titled.data.content.markdown).toBe("Body only");
     expect(titled.data.content.text).toBe("Body only");
-    expect(page.headers).not.toHaveProperty("set-cookie");
+    expect(page.cookies).toStrictEqual([]);
   });
 
   it("keeps mode overrides local to one call and rejects browser modes", async () => {
@@ -285,7 +287,7 @@ describe(XrioClient, () => {
       ]);
 
       for (const result of [source, markdown, page]) {
-        expect(result).toMatchObject({ headers: { "set-cookie": cookies }, status, url });
+        expect(result).toMatchObject({ cookies, status, url });
         expect(result).not.toHaveProperty("error");
       }
 
@@ -312,12 +314,14 @@ describe(XrioClient, () => {
     });
   });
 
-  it("preserves response headers on unsupported-content errors", async () => {
-    await expect(
-      new XrioClient().scrape({ format: "html", url: `${origin}/json` }),
-    ).rejects.toMatchObject({
-      headers: { "content-type": "application/json", "set-cookie": cookies },
+  it("preserves response headers and cookies on unsupported-content errors", async () => {
+    const rejection = new XrioClient().scrape({ format: "html", url: `${origin}/json` });
+
+    await expect(rejection).rejects.toMatchObject({
+      cookies,
+      headers: { "content-type": "application/json" },
     });
+    await expect(rejection).rejects.not.toHaveProperty(["headers", "set-cookie"]);
   });
 
   it("validates URLs before fetching", async () => {

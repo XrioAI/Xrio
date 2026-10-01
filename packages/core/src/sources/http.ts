@@ -1,14 +1,24 @@
-import type { DocumentRequest, SourceDocument } from "../types.ts";
+import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
 
-const readHtmlDocument = async (response: Response): Promise<SourceDocument> => {
-  const headers: SourceDocument["headers"] = Object.fromEntries(response.headers);
-  const cookies = response.headers.getSetCookie();
+const readResponseDetails = (response: Response): ResponseDetails => {
+  const headers: ResponseDetails["headers"] = {};
 
-  if (cookies.length > 0) {
-    headers["set-cookie"] = cookies;
+  for (const [name, value] of response.headers) {
+    if (name !== "set-cookie") {
+      headers[name] = value;
+    }
   }
 
-  const details = { headers, status: response.status, url: response.url };
+  return {
+    cookies: response.headers.getSetCookie(),
+    headers,
+    status: response.status,
+    url: response.url,
+  };
+};
+
+const readHtmlDocument = async (response: Response): Promise<SourceDocument> => {
+  const details = readResponseDetails(response);
   const contentType = response.headers.get("content-type") ?? "";
   const [mediaType] = contentType.split(";");
 
