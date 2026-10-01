@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip/schema.json",
   "workspaces": {
     "packages/core": {
-      "entry": ["src/client.ts!"]
+      "entry": ["src/client.ts!", "examples/*.ts"]
     }
   }
 }

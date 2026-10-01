@@ -11,6 +11,12 @@ export default defineConfig({
     { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
   ],
   options: { typeAware: true },
+  overrides: [
+    {
+      files: ["packages/core/examples/**/*.ts"],
+      rules: { "no-console": "off" },
+    },
+  ],
   rules: {
     "anti-slop/no-array-filter-map": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",
