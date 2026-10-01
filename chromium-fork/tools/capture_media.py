@@ -29,9 +29,11 @@ import http.server
 import json
 import pathlib
 import platform
+import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -202,8 +204,7 @@ def main():
     # capture differ from its pair by a feature nobody recorded, silently.
     xrio_launch.assert_no_feature_conflict(args.chrome_flag)
 
-    root = pathlib.Path(__file__).resolve().parent / "mroot"
-    root.mkdir(exist_ok=True)
+    root = pathlib.Path(tempfile.mkdtemp(prefix="xrio-media-"))
     (root / "index.html").write_text(PAGE, encoding="utf-8")
     server, port = serve(root)
     url = f"http://127.0.0.1:{port}/index.html"
@@ -233,6 +234,7 @@ def main():
                 browser.close()
     finally:
         server.shutdown()
+        shutil.rmtree(root, ignore_errors=True)
 
     capture = {
         "schema": "xrio-media-capture/v1",
