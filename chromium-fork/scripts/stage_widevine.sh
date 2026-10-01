@@ -9,6 +9,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 curl -fsSL --retry 5 -o "$tmp/chrome.deb" \
   "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROMIUM_VERSION}-1_amd64.deb"
+[ -n "${CHROME_DEB_SHA256:-}" ] || {
+  echo "set CHROME_DEB_SHA256 in VERSIONS to the sha256 of google-chrome-stable_${CHROMIUM_VERSION}-1_amd64.deb" >&2
+  echo "(Google lists it for the current stable in https://dl.google.com/linux/chrome/deb/dists/stable/main/binary-amd64/Packages)" >&2
+  exit 1
+}
+echo "$CHROME_DEB_SHA256  $tmp/chrome.deb" | sha256sum -c --quiet - \
+  || { echo "downloaded Chrome $CHROMIUM_VERSION does not match CHROME_DEB_SHA256" >&2; exit 1; }
 dpkg-deb -x "$tmp/chrome.deb" "$tmp/x"
 cdm="$tmp/x/opt/google/chrome/WidevineCdm"
 install -D -m 644 "$cdm/_platform_specific/linux_x64/libwidevinecdm.so" "$dest/libwidevinecdm.so"
