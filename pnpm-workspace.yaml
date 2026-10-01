@@ -4,6 +4,11 @@ overrides:
   vitest@*: 5.0.1
 allowBuilds:
   esbuild: true
+  sharp: true
+  puppeteer: false
+  # The landing page uses browser WebGPU; server GPU bindings are unused.
+  "@vgpu/adapter-node": false
+  webgpu: false
 patchedDependencies:
   oxlint-plugin-complexity@3.0.1: patches/oxlint-plugin-complexity@3.0.1.patch
   ultracite@7.12.2: patches/ultracite@7.12.2.patch
