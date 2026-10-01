@@ -1,5 +1,7 @@
 import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
 
+const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
+
 const readResponseDetails = (response: Response): ResponseDetails => {
   const headers: ResponseDetails["headers"] = {};
 
@@ -17,6 +19,31 @@ const readResponseDetails = (response: Response): ResponseDetails => {
   };
 };
 
+const readBodyPreview = async (body: ReadableStream<Uint8Array> | null): Promise<string> => {
+  if (body === null) {
+    return "";
+  }
+
+  const decoder = new TextDecoder();
+  let preview = "";
+  let remainingBytes = UNSUPPORTED_BODY_PREVIEW_BYTES;
+
+  for await (const chunk of body) {
+    const kept = chunk.subarray(0, remainingBytes);
+
+    preview += decoder.decode(kept, { stream: true });
+    remainingBytes -= kept.byteLength;
+
+    if (remainingBytes === 0) {
+      break;
+    }
+  }
+
+  preview += decoder.decode();
+
+  return preview;
+};
+
 const readHtmlDocument = async (response: Response): Promise<SourceDocument> => {
   const details = readResponseDetails(response);
   const contentType = response.headers.get("content-type") ?? "";
@@ -25,10 +52,11 @@ const readHtmlDocument = async (response: Response): Promise<SourceDocument> => 
   // ponytail: HTML input only; add plain-text and JSON parsing when needed.
   if (mediaType.trim().toLowerCase() !== "text/html" || response.body === null) {
     const received = response.body === null ? "no response body" : contentType || "no content type";
+    const body = await readBodyPreview(response.body);
 
-    await response.body?.cancel();
     throw Object.assign(new Error(`Expected HTML from ${response.url}; received ${received}.`), {
       ...details,
+      body,
       code: "UNSUPPORTED_CONTENT_TYPE",
     });
   }

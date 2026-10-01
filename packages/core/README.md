@@ -54,7 +54,7 @@ const result = await pending;
 result.data;
 ```
 
-HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, `headers`, and `cookies`.
+HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, `headers`, and `cookies`. Its `body` holds at most the first 65,536 bytes of the response body, decoded as UTF-8, so plain-text and JSON block pages stay inspectable; it is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
 
 Errors created by this package have stable codes:
 

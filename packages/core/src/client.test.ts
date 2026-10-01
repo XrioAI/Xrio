@@ -36,6 +36,8 @@ const cookies = [
   "language=en; Path=/",
 ];
 
+const previewBytes = 65_536;
+
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost");
   const status = Number(url.searchParams.get("status") ?? 200);
@@ -61,6 +63,13 @@ const server = createServer((request, response) => {
       response
         .writeHead(status, { "content-type": "application/json", "set-cookie": cookies })
         .end("{}");
+
+      return;
+    }
+
+    case "/endless-plain": {
+      response.writeHead(403, { "content-type": "text/plain" });
+      response.write("x".repeat(previewBytes + 1024));
 
       return;
     }
@@ -298,21 +307,26 @@ describe(XrioClient, () => {
   );
 
   it.each([
-    { path: "/plain", status: 200 },
-    { path: "/json?status=403", status: 403 },
-    { path: "/missing-type", status: 200 },
-    { path: "/empty", status: 204 },
-    { path: "/empty-html", status: 204 },
-  ])("rejects unsupported content from $path with response details", async ({ path, status }) => {
-    await expect(
-      new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
-    ).rejects.toMatchObject({
-      code: "UNSUPPORTED_CONTENT_TYPE",
-      name: "Error",
-      status,
-      url: `${origin}${path}`,
-    });
-  });
+    { body: "Not HTML", path: "/plain", status: 200 },
+    { body: "{}", path: "/json?status=403", status: 403 },
+    { body: html, path: "/missing-type", status: 200 },
+    { body: "", path: "/empty", status: 204 },
+    { body: "", path: "/empty-html", status: 204 },
+    { body: "x".repeat(previewBytes), path: "/endless-plain", status: 403 },
+  ])(
+    "rejects unsupported content from $path with response details",
+    async ({ body, path, status }) => {
+      await expect(
+        new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
+      ).rejects.toMatchObject({
+        body,
+        code: "UNSUPPORTED_CONTENT_TYPE",
+        name: "Error",
+        status,
+        url: `${origin}${path}`,
+      });
+    },
+  );
 
   it("preserves response headers and cookies on unsupported-content errors", async () => {
     const rejection = new XrioClient().scrape({ format: "html", url: `${origin}/json` });
