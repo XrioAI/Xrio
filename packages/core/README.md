@@ -7,17 +7,28 @@ import { XrioClient } from "@xrio/core";
 
 const xrio = new XrioClient();
 
-const page = await xrio.scrape({
+const result = await xrio.scrape({
   url: "https://example.com",
   format: "json",
   timeoutMs: 60_000,
 });
 
-page.metadata.title;
-page.content.markdown;
+result.data.metadata.title;
+result.data.content.markdown;
+result.status;
+result.headers["content-type"];
+result.url;
 ```
 
-`format` is required. `html` and `markdown` return strings; `json` returns a `StructuredContent` object with:
+`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, format }`:
+
+- `data`: an HTML or Markdown string, or `StructuredContent` for `json`.
+- `url`: the final response URL after redirects.
+- `status`: the actual HTTP response status, including non-2xx statuses.
+- `headers`: a plain object with lowercase keys and string values. When present, `set-cookie` is an array containing each cookie separately.
+- `format`: the requested format. Checking this field narrows the type of `data` in TypeScript.
+
+For `json`, `data` retains the existing `StructuredContent` fields:
 
 - `metadata`: final response `url`, `title`, `description`, and `language`. Missing descriptive metadata is `null`.
 - `content`: `markdown`, plain `text`, `links: { text, href }[]`, and `images: { alt, src }[]`.
@@ -37,10 +48,23 @@ const pending = xrio.scrape({
 });
 
 // Call controller.abort() from the caller's cancellation handler.
-const markdown = await pending;
+const result = await pending;
+result.data;
 ```
 
-Non-success HTTP statuses and responses without a `text/html` content type reject. Network, timeout, and cancellation errors propagate from native fetch. There are no retries.
+HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, and `headers`.
+
+Errors created by this package have stable codes:
+
+| Code                       | Error class | Meaning                                                       |
+| -------------------------- | ----------- | ------------------------------------------------------------- |
+| `INVALID_OPTIONS`          | `TypeError` | Invalid format, mode, browser path, timeout, or URL protocol. |
+| `UNSUPPORTED_CONTENT_TYPE` | `Error`     | The response cannot be processed as an HTML document.         |
+| `MODE_NOT_IMPLEMENTED`     | `Error`     | Headed or headless mode is not implemented.                   |
+
+Native errors propagate unchanged, including URL parsing (`ERR_INVALID_URL`), network, timeout, and cancellation failures. There is no blanket catch or error wrapping, and there are no retries. Consumers can inspect `error.code` on package errors after narrowing the caught value; native errors retain their own identifiers and causes.
+
+Migration: HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
 
 The client resolves options, selects a document source by mode, and selects a content operation by format. The source and format mappings are independent. To implement a mode, add its source handler and update the mode mapping; HTTP loading and the scrape workflow do not need to change.
 

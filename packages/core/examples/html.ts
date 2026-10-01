@@ -6,6 +6,6 @@ const client = new XrioClient();
 
 const url = "https://example.com";
 
-const html = await client.scrape({ format: "html", url });
+const result = await client.scrape({ format: "html", url });
 
-console.log(html);
+console.log(result.data);

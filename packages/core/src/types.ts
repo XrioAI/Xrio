@@ -26,8 +26,20 @@ export interface StructuredContent {
   };
 }
 
-export interface SourceDocument {
+interface ResponseDetails {
+  headers: Record<string, string | string[]>;
+  status: number;
   url: string;
+}
+
+export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
+  [Selected in Format]: ResponseDetails & {
+    data: Selected extends "json" ? StructuredContent : string;
+    format: Selected;
+  };
+}[Format];
+
+export interface SourceDocument extends ResponseDetails {
   html: string;
 }
 

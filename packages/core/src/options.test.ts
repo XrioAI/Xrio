@@ -19,7 +19,11 @@ describe("scrape options", () => {
 
     // @ts-expect-error JavaScript callers can bypass the required override path.
     expect(() => resolveScrapeOptions({ ...options, mode: "headless" }, mode)).toThrow(
-      "browserPath is required",
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "browserPath is required for headless mode.",
+        name: "TypeError",
+      }),
     );
   });
 
@@ -29,12 +33,14 @@ describe("scrape options", () => {
       expect(() =>
         // @ts-expect-error JavaScript callers can supply unsupported formats.
         resolveScrapeOptions({ format, url: "https://example.com" }, { mode: "http" }),
-      ).toThrow("Unknown scrape format");
+      ).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS", name: "TypeError" }));
     },
   );
 
   it("rejects an unsupported mode before dispatch", () => {
     // @ts-expect-error JavaScript callers can supply unsupported modes.
-    expect(() => resolveClientOptions({ mode: "toString" })).toThrow("Unknown scrape mode");
+    expect(() => resolveClientOptions({ mode: "toString" })).toThrow(
+      expect.objectContaining({ code: "INVALID_OPTIONS", name: "TypeError" }),
+    );
   });
 });

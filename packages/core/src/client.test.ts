@@ -31,10 +31,22 @@ const html = `<!doctype html>
 </body>
 </html>`;
 
+const cookies = [
+  "session=abc; Expires=Wed, 21 Oct 2037 07:28:00 GMT; Path=/; HttpOnly",
+  "language=en; Path=/",
+];
+
 const server = createServer((request, response) => {
-  switch (request.url ?? "/") {
+  const url = new URL(request.url ?? "/", "http://localhost");
+  const status = Number(url.searchParams.get("status") ?? 200);
+
+  switch (url.pathname) {
+    case "/waiting": {
+      break;
+    }
+
     case "/redirect": {
-      response.writeHead(302, { location: "/pages/document" }).end();
+      response.writeHead(302, { location: "/pages/document", "x-source": "redirect" }).end();
 
       return;
     }
@@ -46,7 +58,9 @@ const server = createServer((request, response) => {
     }
 
     case "/json": {
-      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+      response
+        .writeHead(status, { "content-type": "application/json", "set-cookie": cookies })
+        .end("{}");
 
       return;
     }
@@ -57,8 +71,20 @@ const server = createServer((request, response) => {
       return;
     }
 
-    case "/failed": {
-      response.writeHead(404, { "content-type": "text/html" }).end(html);
+    case "/empty": {
+      response.writeHead(204).end();
+
+      return;
+    }
+
+    case "/empty-html": {
+      response.writeHead(204, { "content-type": "text/html" }).end();
+
+      return;
+    }
+
+    case "/disconnect": {
+      request.socket.destroy();
 
       return;
     }
@@ -85,7 +111,13 @@ const server = createServer((request, response) => {
     }
 
     default: {
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
+      response
+        .writeHead(status, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Set-Cookie": cookies,
+          "X-Source": "document",
+        })
+        .end(html);
     }
   }
 });
@@ -113,6 +145,32 @@ describe(XrioClient, () => {
     await closed;
   });
 
+  it.each(["html", "markdown", "json"] as const)(
+    "returns the shared result fields and final response headers for %s",
+    async (format) => {
+      const result = await new XrioClient().scrape({ format, url: `${origin}/redirect` });
+
+      expect(Object.keys(result).toSorted()).toStrictEqual([
+        "data",
+        "format",
+        "headers",
+        "status",
+        "url",
+      ]);
+      expect(result).toMatchObject({
+        format,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "set-cookie": cookies,
+          "x-source": "document",
+        },
+        status: 200,
+        url: `${origin}/pages/document`,
+      });
+      expect(result.headers).not.toHaveProperty("Set-Cookie");
+    },
+  );
+
   it("preserves HTML and shares body-wide Markdown with JSON after redirects", async () => {
     const client = new XrioClient();
     const url = `${origin}/redirect`;
@@ -120,15 +178,15 @@ describe(XrioClient, () => {
     const markdown = await client.scrape({ format: "markdown", url });
     const page = await client.scrape({ format: "json", url });
 
-    expect(source).toBe(html);
-    expect(page.content.markdown).toBe(markdown);
-    expect(page.metadata).toStrictEqual({
+    expect(source.data).toBe(html);
+    expect(page.data.content.markdown).toBe(markdown.data);
+    expect(page.data.metadata).toStrictEqual({
       description: "A test page",
       language: "en",
       title: "Head title & metadata",
       url: `${origin}/pages/document`,
     });
-    expect(page.content.links).toStrictEqual([
+    expect(page.data.content.links).toStrictEqual([
       { href: `${origin}/navigation`, text: "Navigation" },
       { href: `${origin}/docs/tea`, text: "Tea" },
       { href: `${origin}/docs/tea`, text: "Tea again" },
@@ -137,7 +195,7 @@ describe(XrioClient, () => {
       { href: `${origin}/docs/hidden`, text: "Template link" },
       { href: `${origin}/docs/contact`, text: "Contact" },
     ]);
-    expect(page.content.images).toStrictEqual([
+    expect(page.data.content.images).toStrictEqual([
       { alt: "Tea photo", src: `${origin}/docs/tea.png` },
       { alt: "Tea photo again", src: `${origin}/docs/tea.png` },
       { alt: "", src: `${origin}/docs/hidden.png` },
@@ -146,7 +204,7 @@ describe(XrioClient, () => {
 
   it("converts the whole body while excluding document-head content", async () => {
     const page = await new XrioClient().scrape({ format: "json", url: `${origin}/redirect` });
-    const { markdown, text } = page.content;
+    const { markdown, text } = page.data.content;
 
     for (const fragment of [
       "# Catalog",
@@ -176,59 +234,105 @@ describe(XrioClient, () => {
     const page = await client.scrape({ format: "json", url: `${origin}/fragment` });
     const titled = await client.scrape({ format: "json", url: `${origin}/implicit-head` });
 
-    expect(page).toStrictEqual({
+    expect(page.data).toStrictEqual({
       content: { images: [], links: [], markdown: "Body only", text: "Body only" },
       metadata: { description: null, language: null, title: null, url: `${origin}/fragment` },
     });
-    expect(titled.metadata.title).toBe("Title");
-    expect(titled.content.markdown).toBe("Body only");
-    expect(titled.content.text).toBe("Body only");
+    expect(titled.data.metadata.title).toBe("Title");
+    expect(titled.data.content.markdown).toBe("Body only");
+    expect(titled.data.content.text).toBe("Body only");
+    expect(page.headers).not.toHaveProperty("set-cookie");
   });
 
   it("keeps mode overrides local to one call and rejects browser modes", async () => {
     const client = new XrioClient({ browserPath: "/browser", mode: "headed" });
     const url = `${origin}/fragment`;
 
-    await expect(client.scrape({ format: "html", url })).rejects.toThrow(
-      "headed mode is not implemented",
-    );
-    await expect(client.scrape({ format: "html", mode: "http", url })).resolves.toBe(
-      "<p>Body only</p>",
-    );
-    await expect(client.scrape({ format: "html", url })).rejects.toThrow(
-      "headed mode is not implemented",
-    );
+    await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
+      code: "MODE_NOT_IMPLEMENTED",
+      message: "The headed mode is not implemented.",
+      name: "Error",
+    });
+    await expect(client.scrape({ format: "html", mode: "http", url })).resolves.toMatchObject({
+      data: "<p>Body only</p>",
+      format: "html",
+      status: 200,
+      url,
+    });
+    await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
+      code: "MODE_NOT_IMPLEMENTED",
+      message: "The headed mode is not implemented.",
+    });
     await expect(
       new XrioClient().scrape({ browserPath: "/browser", format: "json", mode: "headless", url }),
-    ).rejects.toThrow("headless mode is not implemented");
+    ).rejects.toMatchObject({
+      code: "MODE_NOT_IMPLEMENTED",
+      message: "The headless mode is not implemented.",
+      name: "Error",
+    });
   });
 
-  it("rejects HTTP failures with their status and URL", async () => {
-    const client = new XrioClient();
+  it.each([202, 403, 404, 500])(
+    "returns HTML responses with HTTP %s in every format",
+    async (status) => {
+      const client = new XrioClient();
+      const url = `${origin}/pages/document?status=${status}`;
 
-    await expect(client.scrape({ format: "html", url: `${origin}/failed` })).rejects.toThrow(
-      `HTTP 404 while scraping ${origin}/failed`,
-    );
-  });
+      const [source, markdown, page] = await Promise.all([
+        client.scrape({ format: "html", url }),
+        client.scrape({ format: "markdown", url }),
+        client.scrape({ format: "json", url }),
+      ]);
 
-  it.each(["/plain", "/json", "/missing-type"])(
-    "rejects non-HTML responses from %s",
-    async (path) => {
-      await expect(
-        new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
-      ).rejects.toThrow("Expected HTML");
+      for (const result of [source, markdown, page]) {
+        expect(result).toMatchObject({ headers: { "set-cookie": cookies }, status, url });
+        expect(result).not.toHaveProperty("error");
+      }
+
+      expect(source.data).toBe(html);
+      expect(markdown.data).toContain("# Catalog");
+      expect(page.data.content.markdown).toBe(markdown.data);
     },
   );
+
+  it.each([
+    { path: "/plain", status: 200 },
+    { path: "/json?status=403", status: 403 },
+    { path: "/missing-type", status: 200 },
+    { path: "/empty", status: 204 },
+    { path: "/empty-html", status: 204 },
+  ])("rejects unsupported content from $path with response details", async ({ path, status }) => {
+    await expect(
+      new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      name: "Error",
+      status,
+      url: `${origin}${path}`,
+    });
+  });
+
+  it("preserves response headers on unsupported-content errors", async () => {
+    await expect(
+      new XrioClient().scrape({ format: "html", url: `${origin}/json` }),
+    ).rejects.toMatchObject({
+      headers: { "content-type": "application/json", "set-cookie": cookies },
+    });
+  });
 
   it("validates URLs before fetching", async () => {
     const client = new XrioClient();
 
-    await expect(client.scrape({ format: "html", url: "file:///tmp/page.html" })).rejects.toThrow(
-      "HTTP or HTTPS",
-    );
-    await expect(client.scrape({ format: "html", url: "relative/path" })).rejects.toThrow(
-      "Invalid URL",
-    );
+    await expect(
+      client.scrape({ format: "html", url: "file:///tmp/page.html" }),
+    ).rejects.toMatchObject({
+      code: "INVALID_OPTIONS",
+      name: "TypeError",
+    });
+    await expect(client.scrape({ format: "html", url: "relative/path" })).rejects.toMatchObject({
+      code: "ERR_INVALID_URL",
+      name: "TypeError",
+    });
   });
 
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
@@ -236,7 +340,7 @@ describe(XrioClient, () => {
     async (timeoutMs) => {
       await expect(
         new XrioClient().scrape({ format: "html", timeoutMs, url: origin }),
-      ).rejects.toThrow("timeoutMs must be an integer");
+      ).rejects.toMatchObject({ code: "INVALID_OPTIONS", name: "TypeError" });
     },
   );
 
@@ -256,6 +360,17 @@ describe(XrioClient, () => {
     }
   });
 
+  it("propagates native network and timeout errors", async () => {
+    const client = new XrioClient();
+
+    await expect(
+      client.scrape({ format: "html", url: `${origin}/disconnect` }),
+    ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKET" }, name: "TypeError" });
+    await expect(
+      client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/waiting` }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
   it("allows callers to abort before fetching or during a request", async () => {
     const client = new XrioClient();
     const controller = new AbortController();
@@ -273,8 +388,15 @@ describe(XrioClient, () => {
     await expect(
       client.scrape({ format: "html", signal: controller.signal, url: origin }),
     ).rejects.toMatchObject({ name: "AbortError" });
-    await expect(client.scrape({ format: "html", url: `${origin}/fragment` })).resolves.toBe(
-      "<p>Body only</p>",
-    );
+    const reason = new Error("Stopped by caller");
+
+    await expect(
+      client.scrape({ format: "html", signal: AbortSignal.abort(reason), url: origin }),
+    ).rejects.toBe(reason);
+    await expect(
+      client.scrape({ format: "html", url: `${origin}/fragment` }),
+    ).resolves.toMatchObject({
+      data: "<p>Body only</p>",
+    });
   });
 });

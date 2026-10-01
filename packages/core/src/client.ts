@@ -8,11 +8,17 @@ import type {
   ResolvedMode,
   ScrapeFormat,
   ScrapeOptions,
+  ScrapeResult,
   SourceDocument,
-  StructuredContent,
 } from "./types.ts";
 
-export type { ModeOptions, ScrapeFormat, ScrapeOptions, StructuredContent } from "./types.ts";
+export type {
+  ModeOptions,
+  ScrapeFormat,
+  ScrapeOptions,
+  ScrapeResult,
+  StructuredContent,
+} from "./types.ts";
 
 const sources = {
   headed: loadHeadedDocument,
@@ -21,10 +27,14 @@ const sources = {
 } satisfies Record<ResolvedMode["mode"], (request: DocumentRequest) => Promise<SourceDocument>>;
 
 const formats = {
-  html: getHtml,
-  json: extractContent,
-  markdown: renderMarkdown,
-} satisfies Record<ScrapeFormat, (document: SourceDocument) => string | StructuredContent>;
+  html: (document) => ({ data: getHtml(document), format: "html" }),
+  json: (document) => ({ data: extractContent(document), format: "json" }),
+  markdown: (document) => ({ data: renderMarkdown(document), format: "markdown" }),
+} satisfies {
+  [Format in ScrapeFormat]: (
+    document: SourceDocument,
+  ) => Pick<ScrapeResult<Format>, "data" | "format">;
+};
 
 export class XrioClient {
   readonly #mode: ResolvedMode;
@@ -33,16 +43,21 @@ export class XrioClient {
     this.#mode = resolveClientOptions(options);
   }
 
-  scrape(options: ScrapeOptions<"html" | "markdown">): Promise<string>;
-  scrape(options: ScrapeOptions<"json">): Promise<StructuredContent>;
-  scrape(options: ScrapeOptions): Promise<string | StructuredContent>;
-  async scrape(options: ScrapeOptions): Promise<string | StructuredContent> {
+  scrape<Format extends ScrapeFormat>(
+    options: ScrapeOptions<Format>,
+  ): Promise<ScrapeResult<Format>>;
+  async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
     const request = resolveScrapeOptions(options, this.#mode);
     const loadDocument = sources[request.mode];
     const renderContent = formats[request.format];
 
     const document = await loadDocument(request);
 
-    return renderContent(document);
+    return {
+      ...renderContent(document),
+      headers: document.headers,
+      status: document.status,
+      url: document.url,
+    };
   }
 }

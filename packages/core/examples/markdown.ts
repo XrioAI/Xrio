@@ -5,6 +5,6 @@ const client = new XrioClient({ mode: "http" });
 
 const url = "https://example.com";
 
-const markdown = await client.scrape({ format: "markdown", url });
+const result = await client.scrape({ format: "markdown", url });
 
-console.log(markdown);
+console.log(result.data);

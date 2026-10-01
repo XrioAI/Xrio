@@ -5,8 +5,8 @@ const client = new XrioClient();
 
 const url = "https://example.com";
 
-const page = await client.scrape({ format: "json", url });
+const result = await client.scrape({ format: "json", url });
 
-// JSON mode returns an object. Descriptive metadata fields may be null.
-// page.content includes Markdown, text, links, and images.
-console.log(JSON.stringify(page, null, 2));
+// result.data contains structured content. Descriptive metadata fields may be null.
+// result.status, result.headers, and result.url describe the final HTTP response.
+console.log(JSON.stringify(result, null, 2));

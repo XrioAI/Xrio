@@ -1,23 +1,29 @@
 import type { DocumentRequest, SourceDocument } from "../types.ts";
 
 const readHtmlDocument = async (response: Response): Promise<SourceDocument> => {
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`HTTP ${response.status} while scraping ${response.url}.`);
+  const headers: SourceDocument["headers"] = Object.fromEntries(response.headers);
+  const cookies = response.headers.getSetCookie();
+
+  if (cookies.length > 0) {
+    headers["set-cookie"] = cookies;
   }
 
+  const details = { headers, status: response.status, url: response.url };
   const contentType = response.headers.get("content-type") ?? "";
   const [mediaType] = contentType.split(";");
 
   // ponytail: HTML input only; add plain-text and JSON parsing when needed.
-  if (mediaType.trim().toLowerCase() !== "text/html") {
+  if (mediaType.trim().toLowerCase() !== "text/html" || response.body === null) {
+    const received = response.body === null ? "no response body" : contentType || "no content type";
+
     await response.body?.cancel();
-    throw new Error(
-      `Expected HTML from ${response.url}; received ${contentType || "no content type"}.`,
-    );
+    throw Object.assign(new Error(`Expected HTML from ${response.url}; received ${received}.`), {
+      ...details,
+      code: "UNSUPPORTED_CONTENT_TYPE",
+    });
   }
 
-  return { html: await response.text(), url: response.url };
+  return { ...details, html: await response.text() };
 };
 
 export const loadHttpDocument = async ({

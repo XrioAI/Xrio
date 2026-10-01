@@ -27,9 +27,9 @@ try {
 }
 
 // An HTTP override works today and does not change the client's headless default.
-const html = await client.scrape({ format: "html", mode: "http", url });
+const result = await client.scrape({ format: "html", mode: "http", url });
 
-console.log(html);
+console.log(result.data);
 
 // TypeScript rejects these configurations:
 // new XrioClient({ mode: "headless" }); // browserPath is required.

@@ -12,7 +12,9 @@ describe("content formats", () => {
     },
   ])("shares Markdown URL resolution with structured content: $base", ({ base, href }) => {
     const document = {
+      headers: {},
       html: `<p><a href="tea">Tea</a></p>${base}`,
+      status: 200,
       url: "https://example.com/pages/catalog",
     };
 

@@ -13,9 +13,9 @@ const cancellation = setTimeout(() => {
 }, 100);
 
 try {
-  const markdown = await client.scrape({ format: "markdown", signal: controller.signal, url });
+  const result = await client.scrape({ format: "markdown", signal: controller.signal, url });
 
-  console.log(markdown);
+  console.log(result.data);
 } catch (error) {
   if (!controller.signal.aborted) {
     throw error;
