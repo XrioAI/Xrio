@@ -135,12 +135,13 @@ const readDocument = async (
 
   if (mediaType.trim().toLowerCase() !== "text/html" || body === null) {
     const received = body === null ? "no response body" : contentType || "no content type";
+    const block = classifyResponse({ html: undefined, requestUrls, response: details });
     const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline, response.url);
 
     throw new XrioError(
       "UNSUPPORTED_CONTENT_TYPE",
       `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
-      { details: { ...details, body: decodeBody(preview.bytes, contentType) } },
+      { details: { ...details, block, body: decodeBody(preview.bytes, contentType) } },
     );
   }
 

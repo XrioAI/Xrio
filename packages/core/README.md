@@ -75,6 +75,8 @@ HTML responses return normally even for HTTP 403, 404, or 500; callers decide wh
 
 Evidence has tiers. E0 decides alone. E1 decides alone. Its markup rules fire only on a document small enough to be an interstitial (at most 50,000 characters of HTML and 5,000 of text, counted as code points with entities decoded), and the vendor sensors that also load on working pages need fewer than 100 text characters as well; an E1 challenge cookie needs only an HTML response. Every pass over the markup, the request URLs and the cookies runs in time linear in its input, and markup rules that apply at any size read only the first 1 MiB of the document, so a hostile page cannot stall classification. E2 is weak, and decides `blocked` only when two signals come from different families; one family is `suspect`. Status codes are E2 at most, so a 403 alone is never `blocked`. E3 suppressors cancel E1 and E2 for non-HTML, JSON and XML bodies. These page-shape thresholds come from [crawl4ai](https://github.com/unclecode/crawl4ai) (Apache-2.0).
 
+Responses that are not HTML are classified without a body, and the report rides on the `UNSUPPORTED_CONTENT_TYPE` error's `details.block`. Only E0 evidence that needs no body, such as a challenge header or a waiting-room URL, can decide them; status and request-log evidence is listed but does not decide, and the challenge cookie, which needs an HTML response, is not checked.
+
 In http mode the classifier sees only the redirect chain as request URLs, so two limits apply:
 
 - a single-page-app shell (a small document with little text and a lot of script) can read as `suspect`;
@@ -98,7 +100,7 @@ try {
 | Code                       | Error class | When                                                                                                                              |
 | -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, or a URL that is relative, not HTTP(S), or carries credentials. |
-| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details and a body preview.                                                |
+| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details, a body preview, and the block report.                             |
 | `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                         |
 | `NETWORK_ERROR`            | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504).                   |
 | `TLS_CERTIFICATE_INVALID`  | `XrioError` | The certificate was rejected.                                                                                                     |
@@ -115,7 +117,7 @@ Migration:
 
 - HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
 - `UNSUPPORTED_CONTENT_TYPE` and `MODE_NOT_IMPLEMENTED` are now `XrioError`s. Response fields moved from the error itself to `error.details`.
-- Results carry a new `block` report.
+- Results and `UNSUPPORTED_CONTENT_TYPE` details carry a new `block` report.
 - Timeouts reject with `TIMEOUT` instead of a native `TimeoutError`, invalid URLs with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`, and network failures with the codes above instead of native `fetch` errors.
 - http mode no longer uses native `fetch`, so requests look like Chrome on the wire and ambient proxy variables no longer apply.
 
