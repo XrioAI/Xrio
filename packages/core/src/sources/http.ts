@@ -25,6 +25,8 @@ const chromeProfile = {
   os: "linux",
 } satisfies CreateSessionOptions;
 
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
 
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
@@ -97,7 +99,15 @@ const readDocument = async (
     );
   }
 
-  const { bytes } = await readBody(body, Number.POSITIVE_INFINITY, deadline);
+  const { bytes, truncated } = await readBody(body, MAX_BODY_BYTES, deadline);
+
+  if (truncated) {
+    throw new XrioError(
+      "RESPONSE_TOO_LARGE",
+      `The response from ${redactUrl(response.url)} is larger than ${MAX_BODY_BYTES} bytes.`,
+      { details: undefined },
+    );
+  }
 
   return { ...details, html: decodeBody(bytes, contentType) };
 };
