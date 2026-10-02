@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { inspect } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
@@ -344,6 +345,16 @@ describe(XrioClient, () => {
       code: "INVALID_OPTIONS",
       name: "TypeError",
     });
+
+    const withCredentials = client.scrape({
+      format: "html",
+      url: "https://user:secret@xrio.invalid/",
+    });
+
+    await expect(withCredentials).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+    await expect(withCredentials).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Number.POSITIVE_INFINITY }).includes("secret"),
+    );
   });
 
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(

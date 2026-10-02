@@ -1,4 +1,4 @@
-import { XrioError } from "../errors.ts";
+import { redactUrl, XrioError } from "../errors.ts";
 import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
 
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
@@ -57,7 +57,7 @@ const readHtmlDocument = async (response: Response): Promise<SourceDocument> => 
 
     throw new XrioError(
       "UNSUPPORTED_CONTENT_TYPE",
-      `Expected HTML from ${response.url}; received ${received}.`,
+      `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
       { details: { ...details, body } },
     );
   }
