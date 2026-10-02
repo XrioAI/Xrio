@@ -11,6 +11,7 @@ import { responseDetailsFrom } from "./response.ts";
 
 const chromeProfile = {
   browser: "chrome_149",
+  defaultHeaders: { Connection: "keep-alive" },
   emulation: {
     http2Options: {
       enablePush: false,
@@ -22,6 +23,24 @@ const chromeProfile = {
       maxHeaderListSize: 262_144,
       settingsOrder: ["HeaderTableSize", "EnablePush", "InitialWindowSize", "MaxHeaderListSize"],
     },
+    origHeaders: [
+      "Host",
+      "Connection",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform",
+      "Upgrade-Insecure-Requests",
+      "User-Agent",
+      "Accept",
+      "Sec-Fetch-Site",
+      "Sec-Fetch-Mode",
+      "Sec-Fetch-User",
+      "Sec-Fetch-Dest",
+      "Accept-Encoding",
+      "Accept-Language",
+      "Priority",
+      "Cookie",
+    ],
   },
   os: "linux",
 } satisfies CreateSessionOptions;

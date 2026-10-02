@@ -23,7 +23,32 @@ const HOP = /^\/hop\/(?<remaining>\d+)$/u;
 
 const USER_AGENT_MAJOR = /Chrome\/(?<major>\d+)\.0\.0\.0/u;
 
+const CHROME_HTTP1_HEADER_ORDER = [
+  "Host",
+  "Connection",
+  "sec-ch-ua",
+  "sec-ch-ua-mobile",
+  "sec-ch-ua-platform",
+  "Upgrade-Insecure-Requests",
+  "User-Agent",
+  "Accept",
+  "Sec-Fetch-Site",
+  "Sec-Fetch-Mode",
+  "Sec-Fetch-User",
+  "Sec-Fetch-Dest",
+  "Accept-Encoding",
+  "Accept-Language",
+  "Priority",
+];
+
 const html = (body: string) => `<!doctype html><html><head></head><body>${body}</body></html>`;
+
+const headerNames = (requestHead: string) =>
+  requestHead
+    .split("\r\n")
+    .slice(1)
+    .filter((line) => line !== "")
+    .map((line) => line.split(":", 1)[0]);
 
 const startRawOrigin = async (answer: (socket: Socket, requestHead: string) => void) => {
   const server = createTcpServer((socket) => {
@@ -366,5 +391,23 @@ describe("http mode edge responses", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("sends HTTP/1.1 headers in Chrome's order and case, keeping the connection alive", async () => {
+    const requestHeads: string[] = [];
+
+    const { origin, server } = await startRawOrigin((socket, requestHead) => {
+      requestHeads.push(requestHead);
+      socket.end("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    });
+
+    try {
+      await client.scrape({ format: "html", url: `${origin}/` });
+    } finally {
+      server.close();
+    }
+
+    expect(requestHeads.map(headerNames)).toStrictEqual([CHROME_HTTP1_HEADER_ORDER]);
+    expect(requestHeads[0]).toContain("\r\nConnection: keep-alive\r\n");
   });
 });
