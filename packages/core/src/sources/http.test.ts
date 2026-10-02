@@ -155,7 +155,7 @@ describe("http mode", () => {
   let fixture: FixtureServer;
   let origin: string;
   let fixturePort: number;
-  const client = new XrioClient();
+  const client = new XrioClient({ mode: "http" });
 
   beforeAll(async () => {
     fixture = await startFixtureServer(routes);
@@ -297,7 +297,10 @@ describe("http mode", () => {
       tunnelTo: fixturePort,
     });
 
-    const proxied = new XrioClient({ proxy: proxy.url.replace("://", "://user:p%40ss@") });
+    const proxied = new XrioClient({
+      mode: "http",
+      proxy: proxy.url.replace("://", "://user:p%40ss@"),
+    });
 
     await expect(
       proxied.scrape({ format: "html", url: "http://origin.test/" }),
@@ -358,7 +361,7 @@ describe("http mode", () => {
 });
 
 describe("http mode edge responses", () => {
-  const client = new XrioClient();
+  const client = new XrioClient({ mode: "http" });
 
   it("reports a connection reset mid-body as NETWORK_ERROR straight away", async () => {
     await using fixture = await startFixtureServer(routes);

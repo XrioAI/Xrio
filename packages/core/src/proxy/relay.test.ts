@@ -13,7 +13,7 @@ import { manualClock } from "../testing/manual-clock.ts";
 import { startRelay } from "./relay.ts";
 
 const proxyEndpoint = (url: string) => {
-  const { proxy } = resolveClientOptions({ proxy: url });
+  const { proxy } = resolveClientOptions({ mode: "http", proxy: url });
 
   if (proxy === undefined) {
     throw new Error("Expected a proxy endpoint.");
