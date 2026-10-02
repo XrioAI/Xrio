@@ -433,18 +433,6 @@ describe("XrioClient errors", () => {
     });
   });
 
-  it("refuses a proxy in http mode until it can be used, without echoing its credentials", async () => {
-    const rejection = new XrioClient({ proxy: "http://user:secret@proxy.test:8000" }).scrape({
-      format: "html",
-      url: origin,
-    });
-
-    await expect(rejection).rejects.toMatchObject({ code: "INVALID_OPTIONS", name: "TypeError" });
-    await expect(rejection).rejects.toSatisfy(
-      (error) => !inspect(error, { depth: Number.POSITIVE_INFINITY }).includes("secret"),
-    );
-  });
-
   it("rejects with errors that isXrioError recognizes by code", async () => {
     const client = new XrioClient();
 

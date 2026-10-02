@@ -2,7 +2,7 @@ import { createSession, RequestError } from "wreq-js";
 import type { CreateSessionOptions, Response as ClientResponse, Session } from "wreq-js";
 
 import type { Deadline } from "../deadline.ts";
-import { invalidOptions, redactUrl, XrioError } from "../errors.ts";
+import { redactUrl, XrioError } from "../errors.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
@@ -255,11 +255,7 @@ export const loadHttpDocument = async ({
   proxy,
   deadline,
 }: DocumentRequest): Promise<SourceDocument> => {
-  if (proxy !== undefined) {
-    throw invalidOptions("proxy is not supported in http mode yet.");
-  }
-
-  await using relay = await startRelay(deadline);
+  await using relay = await startRelay(proxy, deadline);
   await using session = await createSession({ ...chromeProfile, proxy: relay.url, timeout: 0 });
 
   return await readDocument(await fetchFollowingRedirects(session, url, deadline, relay), deadline);

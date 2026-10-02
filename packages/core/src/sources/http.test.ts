@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { resolveProfile } from "wreq-js";
 
 import { XrioClient } from "../client.ts";
+import { startFakeHttpProxy, startFakeSocksProxy } from "../testing/fake-proxies.ts";
 import {
   closedLoopbackPort,
   listenOnLoopback,
@@ -120,11 +121,13 @@ const routes = (request: IncomingMessage, response: ServerResponse) => {
 describe("http mode", () => {
   let fixture: FixtureServer;
   let origin: string;
+  let fixturePort: number;
   const client = new XrioClient();
 
   beforeAll(async () => {
     fixture = await startFixtureServer(routes);
     ({ origin } = fixture);
+    fixturePort = Number(new URL(origin).port);
   });
 
   afterAll(async () => {
@@ -203,15 +206,15 @@ describe("http mode", () => {
   });
 
   it("ignores ambient proxy variables", async () => {
-    const deadProxy = `http://127.0.0.1:${await closedLoopbackPort()}`;
+    await using ambient = await startFakeHttpProxy({ tunnelTo: fixturePort });
 
     const ambientVariables = {
-      ALL_PROXY: deadProxy,
-      HTTPS_PROXY: deadProxy,
-      HTTP_PROXY: deadProxy,
+      ALL_PROXY: ambient.url,
+      HTTPS_PROXY: ambient.url,
+      HTTP_PROXY: ambient.url,
       NO_PROXY: "",
-      http_proxy: deadProxy,
-      https_proxy: deadProxy,
+      http_proxy: ambient.url,
+      https_proxy: ambient.url,
     };
 
     const saved = new Map(Object.keys(ambientVariables).map((name) => [name, process.env[name]]));
@@ -222,6 +225,7 @@ describe("http mode", () => {
       await expect(client.scrape({ format: "html", url: `${origin}/` })).resolves.toMatchObject({
         status: 200,
       });
+      expect(ambient.requests).toHaveLength(0);
     } finally {
       for (const [name, value] of saved) {
         if (value === undefined) {
@@ -232,6 +236,71 @@ describe("http mode", () => {
         }
       }
     }
+  });
+
+  it("scrapes through an authenticated HTTP proxy", async () => {
+    await using proxy = await startFakeHttpProxy({
+      requireCredentials: "user:p@ss",
+      tunnelTo: fixturePort,
+    });
+
+    const proxied = new XrioClient({ proxy: proxy.url.replace("://", "://user:p%40ss@") });
+
+    await expect(
+      proxied.scrape({ format: "html", url: "http://origin.test/" }),
+    ).resolves.toMatchObject({
+      status: 200,
+      url: "http://origin.test/",
+    });
+    expect(proxy.requests).toStrictEqual([
+      { authority: "http://origin.test/", authorization: `Basic ${btoa("user:p@ss")}` },
+    ]);
+  });
+
+  it("scrapes through an authenticated SOCKS5 proxy that resolves the target name", async () => {
+    await using proxy = await startFakeSocksProxy({
+      requireCredentials: "user:secret",
+      tunnelTo: fixturePort,
+    });
+
+    await expect(
+      client.scrape({
+        format: "html",
+        proxy: proxy.url.replace("://", "://user:secret@"),
+        url: "http://origin.test/",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(proxy.requests).toStrictEqual([{ authority: "origin.test", authorization: undefined }]);
+  });
+
+  it.each([
+    { code: "PROXY_AUTH_FAILED", connectStatus: 407 },
+    { code: "NETWORK_ERROR", connectStatus: 502 },
+    { code: "PROXY_CONNECT_FAILED", connectStatus: 403 },
+  ])(
+    "reports a CONNECT $connectStatus from the proxy as $code",
+    async ({ code, connectStatus }) => {
+      await using proxy = await startFakeHttpProxy({ connectStatus, tunnelTo: fixturePort });
+
+      await expect(
+        client.scrape({ format: "html", proxy: proxy.url, url: "https://origin.test/" }),
+      ).rejects.toMatchObject({ code });
+    },
+  );
+
+  it("reports a proxy that refuses connections as PROXY_UNREACHABLE", async () => {
+    const port = await closedLoopbackPort();
+
+    const rejection = client.scrape({
+      format: "html",
+      proxy: `http://user:secret@127.0.0.1:${port}`,
+      url: "https://origin.test/",
+    });
+
+    await expect(rejection).rejects.toMatchObject({ code: "PROXY_UNREACHABLE" });
+    await expect(rejection).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Infinity }).includes("secret"),
+    );
   });
 });
 
