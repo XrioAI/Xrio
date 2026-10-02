@@ -111,7 +111,7 @@ const USER_AGENT_MAJOR = /Chrome\/(?<major>\d+)\./u;
 
 const fetchEchoBody = async (echoUrl: string): Promise<string> => {
   try {
-    const result = await new XrioClient().scrape({ format: "html", url: echoUrl });
+    const result = await new XrioClient({ mode: "http" }).scrape({ format: "html", url: echoUrl });
 
     return result.data;
   } catch (error) {

@@ -21,8 +21,8 @@ declare const error: unknown;
 
 describe("XrioClient types", () => {
   it("the public API requires explicit formats and complete browser-mode overrides", () => {
-    const client = new XrioClient();
-    const browser = new XrioClient({ browserPath: "/browser", mode: "headed" });
+    const client = new XrioClient({ mode: "http" });
+    const browser = new XrioClient({ browserPath: "/browser" });
     const url = "https://example.com";
 
     expectTypeOf(client.scrape({ format: "html", url })).toEqualTypeOf<
@@ -57,6 +57,10 @@ describe("XrioClient types", () => {
 
     // @ts-expect-error A format is required, even with client defaults.
     void client.scrape({ url });
+    // @ts-expect-error The default headed mode requires a browser path.
+    void new XrioClient();
+    // @ts-expect-error The default headed mode requires a browser path.
+    void new XrioClient({});
     // @ts-expect-error Browser client defaults require a path.
     void new XrioClient({ mode: "headless" });
     // @ts-expect-error Explicit browser overrides require their own path.
@@ -64,7 +68,7 @@ describe("XrioClient types", () => {
     // @ts-expect-error A configured browser path does not weaken override requirements.
     void browser.scrape({ format: "html", mode: "headless", url });
     // @ts-expect-error Timeouts belong to scrape(), not the constructor.
-    void new XrioClient({ timeoutMs: 1000 });
+    void new XrioClient({ mode: "http", timeoutMs: 1000 });
   });
 
   it("exposes each response header as an optional string and cookies separately", () => {
@@ -73,7 +77,7 @@ describe("XrioClient types", () => {
   });
 
   it("accepts a proxy as a client default and as a per-scrape override", () => {
-    const client = new XrioClient({ proxy: "socks5h://proxy.test:1080" });
+    const client = new XrioClient({ mode: "http", proxy: "socks5h://proxy.test:1080" });
 
     expectTypeOf<ClientOptions["proxy"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf(

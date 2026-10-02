@@ -3,13 +3,23 @@ import type { Deadline } from "./deadline.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
 
-export type ModeOptions =
-  | { mode?: "http"; browserPath?: never }
-  | { mode: "headless" | "headed"; browserPath: string };
+interface HttpMode {
+  mode: "http";
+  browserPath?: never;
+}
+
+interface BrowserMode {
+  mode: "headless" | "headed";
+  browserPath: string;
+}
+
+export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
+
+type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
 
 export type ClientOptions = ModeOptions & { proxy?: string; maxBrowsers?: number };
 
-export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOptions & {
+export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
   format: Format;
   proxy?: string;
@@ -55,7 +65,7 @@ export interface SourceDocument extends ResponseDetails {
 
 export type RenderedDocument = Pick<SourceDocument, "html" | "url">;
 
-export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
+export type ResolvedMode = HttpMode | BrowserMode;
 
 export interface ProxyEndpoint {
   protocol: "http" | "https" | "socks5";

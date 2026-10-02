@@ -54,7 +54,7 @@ export class XrioClient {
   readonly #inFlight = new Set<Promise<unknown>>();
   #closed = false;
 
-  constructor(options: ClientOptions = {}) {
+  constructor(options: ClientOptions) {
     this.#defaults = resolveClientOptions(options);
     this.#browsers = createBrowsers(patchrightDriver, this.#defaults.maxBrowsers);
   }

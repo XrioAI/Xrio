@@ -157,7 +157,10 @@ describe(XrioClient, () => {
   it.each(["html", "markdown", "json"] as const)(
     "returns the shared result fields and final response headers for %s",
     async (format) => {
-      const result = await new XrioClient().scrape({ format, url: `${origin}/redirect` });
+      const result = await new XrioClient({ mode: "http" }).scrape({
+        format,
+        url: `${origin}/redirect`,
+      });
 
       expect(Object.keys(result).toSorted()).toStrictEqual([
         "block",
@@ -184,7 +187,7 @@ describe(XrioClient, () => {
   );
 
   it("preserves HTML and shares body-wide Markdown with JSON after redirects", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
     const url = `${origin}/redirect`;
     const source = await client.scrape({ format: "html", url });
     const markdown = await client.scrape({ format: "markdown", url });
@@ -215,7 +218,11 @@ describe(XrioClient, () => {
   });
 
   it("converts the whole body while excluding document-head content", async () => {
-    const page = await new XrioClient().scrape({ format: "json", url: `${origin}/redirect` });
+    const page = await new XrioClient({ mode: "http" }).scrape({
+      format: "json",
+      url: `${origin}/redirect`,
+    });
+
     const { markdown, text } = page.data.content;
 
     for (const fragment of [
@@ -242,7 +249,7 @@ describe(XrioClient, () => {
   });
 
   it("handles omitted document wrappers and missing metadata", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
     const page = await client.scrape({ format: "json", url: `${origin}/fragment` });
     const titled = await client.scrape({ format: "json", url: `${origin}/implicit-head` });
 
@@ -257,7 +264,7 @@ describe(XrioClient, () => {
   });
 
   it("keeps mode overrides local to one call", async () => {
-    const client = new XrioClient({ browserPath: "/nonexistent/chrome", mode: "headed" });
+    const client = new XrioClient({ browserPath: "/nonexistent/chrome" });
     const url = `${origin}/fragment`;
 
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
@@ -276,7 +283,7 @@ describe(XrioClient, () => {
   });
 
   it("rejects scrapes once the client is closed", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
 
     await client.close();
 
@@ -291,7 +298,7 @@ describe(XrioClient, () => {
     let disposed: XrioClient;
 
     {
-      await using client = new XrioClient();
+      await using client = new XrioClient({ mode: "http" });
       disposed = client;
     }
 
@@ -303,7 +310,7 @@ describe(XrioClient, () => {
   it.each([202, 403, 404, 500])(
     "returns HTML responses with HTTP %s in every format",
     async (status) => {
-      const client = new XrioClient();
+      const client = new XrioClient({ mode: "http" });
       const url = `${origin}/pages/document?status=${status}`;
 
       const [source, markdown, page] = await Promise.all([
@@ -334,7 +341,7 @@ describe(XrioClient, () => {
     "rejects unsupported content from $path with response details",
     async ({ body, path, status }) => {
       await expect(
-        new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
+        new XrioClient({ mode: "http" }).scrape({ format: "json", url: `${origin}${path}` }),
       ).rejects.toMatchObject({
         code: "UNSUPPORTED_CONTENT_TYPE",
         details: { body, status, url: `${origin}${path}` },
@@ -344,7 +351,10 @@ describe(XrioClient, () => {
   );
 
   it("preserves response headers and cookies on unsupported-content errors", async () => {
-    const rejection = new XrioClient().scrape({ format: "html", url: `${origin}/json` });
+    const rejection = new XrioClient({ mode: "http" }).scrape({
+      format: "html",
+      url: `${origin}/json`,
+    });
 
     await expect(rejection).rejects.toMatchObject({
       details: { cookies, headers: { "content-type": "application/json" } },
@@ -353,7 +363,7 @@ describe(XrioClient, () => {
   });
 
   it("validates URLs before fetching", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
 
     await expect(
       client.scrape({ format: "html", url: "file:///tmp/page.html" }),
@@ -381,13 +391,13 @@ describe(XrioClient, () => {
     "rejects invalid timeout %s",
     async (timeoutMs) => {
       await expect(
-        new XrioClient().scrape({ format: "html", timeoutMs, url: origin }),
+        new XrioClient({ mode: "http" }).scrape({ format: "html", timeoutMs, url: origin }),
       ).rejects.toMatchObject({ code: "INVALID_OPTIONS", name: "TypeError" });
     },
   );
 
   it("allows callers to abort before fetching or during a request", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
     const controller = new AbortController();
     onRequest = () => {
       controller.abort();
@@ -432,7 +442,7 @@ describe("XrioClient errors", () => {
   it.each(["/waiting", "/slow"])(
     "rejects with TIMEOUT when the deadline passes while loading %s",
     async (path) => {
-      const rejection = new XrioClient().scrape({
+      const rejection = new XrioClient({ mode: "http" }).scrape({
         format: "html",
         timeoutMs: 100,
         url: `${origin}${path}`,
@@ -445,7 +455,7 @@ describe("XrioClient errors", () => {
 
   it("maps a dropped connection to NETWORK_ERROR and keeps the client error as the cause", async () => {
     await expect(
-      new XrioClient().scrape({ format: "html", url: `${origin}/disconnect` }),
+      new XrioClient({ mode: "http" }).scrape({ format: "html", url: `${origin}/disconnect` }),
     ).rejects.toMatchObject({
       cause: { name: "RequestError" },
       code: "NETWORK_ERROR",
@@ -454,7 +464,7 @@ describe("XrioClient errors", () => {
   });
 
   it("rejects with errors that isXrioError recognizes by code", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
 
     await expect(client.scrape({ format: "html", url: `${origin}/plain` })).rejects.toSatisfy(
       (error) => isXrioError(error, "UNSUPPORTED_CONTENT_TYPE"),

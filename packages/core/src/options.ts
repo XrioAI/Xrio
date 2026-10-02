@@ -25,7 +25,7 @@ const defaultProxyPorts = { http: 80, https: 443, socks5: 1080 } as const satisf
   number
 >;
 
-const resolveMode = ({ mode = "http", browserPath }: ModeOptions): ResolvedMode => {
+const resolveMode = ({ mode = "headed", browserPath }: ModeOptions): ResolvedMode => {
   switch (mode) {
     case "http": {
       return { mode };
@@ -120,11 +120,17 @@ const resolveMaxBrowsers = (maxBrowsers: number | undefined): number | undefined
   return maxBrowsers;
 };
 
-export const resolveClientOptions = (options: ClientOptions): ClientDefaults => ({
-  maxBrowsers: resolveMaxBrowsers(options.maxBrowsers),
-  mode: resolveMode(options),
-  proxy: options.proxy === undefined ? undefined : parseProxy(options.proxy),
-});
+export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
+  if (options === undefined) {
+    throw invalidOptions("browserPath is required for headed mode.");
+  }
+
+  return {
+    maxBrowsers: resolveMaxBrowsers(options.maxBrowsers),
+    mode: resolveMode(options),
+    proxy: options.proxy === undefined ? undefined : parseProxy(options.proxy),
+  };
+};
 
 export const resolveScrapeOptions = (
   options: ScrapeOptions,
