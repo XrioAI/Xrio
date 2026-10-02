@@ -104,3 +104,31 @@ export const startDeadline = (
     throwIfExpired,
   };
 };
+
+export const untilDeadline = async <Result>(
+  start: () => Promise<Result>,
+  deadline: Deadline,
+): Promise<Result> => {
+  deadline.throwIfExpired();
+  const operation = start();
+  const expired = Promise.withResolvers<never>();
+
+  const abort = () => {
+    expired.reject(deadline.signal.reason);
+  };
+
+  deadline.signal.addEventListener("abort", abort, { once: true });
+
+  if (deadline.signal.aborted) {
+    abort();
+  }
+
+  try {
+    return await Promise.race([operation, expired.promise]);
+  } catch (error) {
+    deadline.throwIfExpired();
+    throw error;
+  } finally {
+    deadline.signal.removeEventListener("abort", abort);
+  }
+};

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { startDeadline } from "./deadline.ts";
+import { startDeadline, untilDeadline } from "./deadline.ts";
 import { manualClock } from "./testing/manual-clock.ts";
 
 describe(startDeadline, () => {
@@ -129,5 +129,77 @@ describe("deadline stages", () => {
     }
 
     expect(pendingTimers()).toBe(1);
+  });
+});
+
+describe(untilDeadline, () => {
+  it("never starts work once the clock has passed the deadline, before its timer fires", async () => {
+    let now = 0;
+    const clock = { now: () => now, setTimer: () => () => {} };
+    const deadline = startDeadline(1000, undefined, clock);
+    const started: string[] = [];
+
+    now = 1000;
+
+    await expect(
+      untilDeadline(async () => {
+        started.push("work");
+
+        return await Promise.resolve("done");
+      }, deadline),
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(started).toStrictEqual([]);
+  });
+
+  it("settles with the deadline's reason while the work is still pending", async () => {
+    const { advance, clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+    const work = Promise.withResolvers<string>();
+    const settled = untilDeadline(async () => await work.promise, deadline);
+
+    advance(1000);
+
+    await expect(settled).rejects.toMatchObject({ code: "TIMEOUT" });
+    work.reject(new Error("The abandoned work failed later."));
+  });
+
+  it("reports the deadline's reason for work that fails as the deadline passes", async () => {
+    let now = 0;
+    const clock = { now: () => now, setTimer: () => () => {} };
+    const deadline = startDeadline(1000, undefined, clock);
+
+    const settled = untilDeadline(async () => {
+      now = 1000;
+
+      return await Promise.reject(new Error("The driver's own timeout fired first."));
+    }, deadline);
+
+    await expect(settled).rejects.toMatchObject({ code: "TIMEOUT" });
+  });
+
+  it("rejects with the caller's reason when the caller aborts", async () => {
+    const { clock } = manualClock();
+    const controller = new AbortController();
+    const reason = new Error("Stopped by caller");
+    const deadline = startDeadline(1000, controller.signal, clock);
+
+    const settled = untilDeadline(
+      async () => await Promise.withResolvers<string>().promise,
+      deadline,
+    );
+
+    controller.abort(reason);
+
+    await expect(settled).rejects.toBe(reason);
+  });
+
+  it("keeps the work's own error while the deadline is live", async () => {
+    const { clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+    const failure = new Error("The browser refused.");
+
+    await expect(untilDeadline(async () => await Promise.reject(failure), deadline)).rejects.toBe(
+      failure,
+    );
   });
 });
