@@ -10,6 +10,7 @@ interface StageTiming {
 export interface InternalEvent {
   event:
     | "browser-launched"
+    | "cdp-message-dropped"
     | "document-rebind"
     | "raw-header-fallback"
     | "request-log-dropped"
