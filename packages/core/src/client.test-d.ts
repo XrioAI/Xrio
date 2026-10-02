@@ -103,12 +103,15 @@ describe("XrioClient types", () => {
 
     expectTypeOf<XrioError<"MODE_NOT_IMPLEMENTED">["details"]>().toEqualTypeOf<undefined>();
     expectTypeOf<XrioError<"TIMEOUT">["details"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<XrioError<"PROXY_CONNECT_FAILED">["details"]>().toEqualTypeOf<{
+      status: number;
+    }>();
     // @ts-expect-error Unsupported-content errors require their response details.
     void new XrioError("UNSUPPORTED_CONTENT_TYPE", "Missing details");
     // @ts-expect-error A code type argument needs the code it names.
     void isXrioError<"MODE_NOT_IMPLEMENTED">(error);
     // @ts-expect-error Details must belong to the code, even with a widened code type.
-    void new XrioError<XrioErrorCode>("UNSUPPORTED_CONTENT_TYPE", "Missing body", {
+    void new XrioError<XrioErrorCode>("PROXY_CONNECT_FAILED", "Missing status", {
       details: undefined,
     });
     // @ts-expect-error Codes are a closed set.
