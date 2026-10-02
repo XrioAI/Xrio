@@ -2,8 +2,10 @@ import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
   MODE_NOT_IMPLEMENTED: undefined;
+  NETWORK_ERROR: undefined;
   RESPONSE_TOO_LARGE: undefined;
   TIMEOUT: undefined;
+  TLS_CERTIFICATE_INVALID: undefined;
   UNSUPPORTED_CONTENT_TYPE: ResponseDetails & { body: string };
 }
 
@@ -41,8 +43,10 @@ type ErrorByCode = { [Code in XrioErrorCode]: XrioError<Code> } & {
 const errorClasses = {
   INVALID_OPTIONS: TypeError,
   MODE_NOT_IMPLEMENTED: XrioError,
+  NETWORK_ERROR: XrioError,
   RESPONSE_TOO_LARGE: XrioError,
   TIMEOUT: XrioError,
+  TLS_CERTIFICATE_INVALID: XrioError,
   UNSUPPORTED_CONTENT_TYPE: XrioError,
 } satisfies Record<ErrorCode, TypeErrorConstructor | typeof XrioError>;
 

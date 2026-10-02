@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import type { Socket } from "node:net";
 
@@ -82,6 +84,11 @@ const routes = (request: IncomingMessage, response: ServerResponse) => {
 
   if (charsetPage !== undefined) {
     response.writeHead(200, { "content-type": charsetPage.contentType }).end(charsetPage.bytes);
+  } else if (url.pathname === "/reset-mid-body") {
+    response.writeHead(200, { "content-length": "1000", "content-type": "text/html" });
+    response.write("<p>partial", () => {
+      response.socket?.destroy();
+    });
   } else if (url.pathname === "/large") {
     writeLargeBody(response);
   } else {
@@ -134,6 +141,33 @@ describe("http mode", () => {
     expect(`chrome_${major}`).toBe(resolveProfile("chrome"));
   });
 
+  it("maps a rejected certificate to TLS_CERTIFICATE_INVALID", async () => {
+    const server = createHttpsServer({
+      cert: readFileSync(new URL("../testing/test-only-cert.pem", import.meta.url)),
+      key: readFileSync(new URL("../testing/test-only-key.pem", import.meta.url)),
+    });
+
+    const port = await listenOnLoopback(server);
+
+    try {
+      await expect(
+        client.scrape({ format: "html", url: `https://127.0.0.1:${port}/` }),
+      ).rejects.toMatchObject({
+        code: "TLS_CERTIFICATE_INVALID",
+      });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("maps a DNS failure to NETWORK_ERROR", async () => {
+    await expect(
+      client.scrape({ format: "html", url: "http://nonexistent.invalid/" }),
+    ).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+    });
+  });
+
   it("ignores ambient proxy variables", async () => {
     const deadProxy = `http://127.0.0.1:${await closedLoopbackPort()}`;
 
@@ -170,6 +204,30 @@ describe("http mode", () => {
 describe("http mode edge responses", () => {
   const client = new XrioClient();
 
+  it("reports a connection reset mid-body as NETWORK_ERROR straight away", async () => {
+    await using fixture = await startFixtureServer(routes);
+    const started = performance.now();
+
+    await expect(
+      client.scrape({ format: "html", timeoutMs: 10_000, url: `${fixture.origin}/reset-mid-body` }),
+    ).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  it("reports a status below 100 as NETWORK_ERROR", async () => {
+    const { origin, server } = await startRawOrigin((socket) => {
+      socket.end("HTTP/1.1 099 Odd\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    });
+
+    try {
+      await expect(client.scrape({ format: "html", url: `${origin}/` })).rejects.toMatchObject({
+        code: "NETWORK_ERROR",
+      });
+    } finally {
+      server.close();
+    }
+  });
+
   it("returns a response whose reason phrase holds a control character", async () => {
     const { origin, server } = await startRawOrigin((socket) => {
       socket.end("HTTP/1.1 200 O\u0001K\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
@@ -180,6 +238,20 @@ describe("http mode edge responses", () => {
         data: "hi",
         status: 200,
       });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("classifies a transport failure by the error, not by the request URL", async () => {
+    const { origin, server } = await startRawOrigin((socket) => {
+      socket.destroy();
+    });
+
+    try {
+      await expect(
+        client.scrape({ format: "html", url: `${origin}/CERTIFICATE_VERIFY_FAILED` }),
+      ).rejects.toMatchObject({ code: "NETWORK_ERROR" });
     } finally {
       server.close();
     }

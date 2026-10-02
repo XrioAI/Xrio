@@ -1,9 +1,10 @@
-import { createSession } from "wreq-js";
-import type { CreateSessionOptions, Response as ClientResponse } from "wreq-js";
+import { createSession, RequestError } from "wreq-js";
+import type { CreateSessionOptions, Response as ClientResponse, Session } from "wreq-js";
 
 import type { Deadline } from "../deadline.ts";
 import { invalidOptions, redactUrl, XrioError } from "../errors.ts";
 import { startRelay } from "../proxy/relay.ts";
+import type { Relay } from "../proxy/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
 import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";
@@ -31,10 +32,17 @@ const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
 
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
+const FAILURE_AFTER_REQUEST_URI = /for uri \(\S*\): (?<failure>.*)$/su;
+
+const CERTIFICATE_FAILURE = /CERTIFICATE_VERIFY_FAILED/u;
+
+const TUNNEL_FAILURE = /ProxyConnect/u;
+
 const readBody = async (
   body: ReadableStream<Uint8Array> | null,
   maxBytes: number,
   deadline: Deadline,
+  url: string,
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> => {
   deadline.throwIfExpired();
 
@@ -74,6 +82,12 @@ const readBody = async (
     await reader.cancel();
 
     return { bytes: Buffer.concat(chunks), truncated: true };
+  } catch (error) {
+    deadline.throwIfExpired();
+    throw new XrioError("NETWORK_ERROR", `Reading the response from ${redactUrl(url)} failed.`, {
+      cause: error,
+      details: undefined,
+    });
   } finally {
     deadline.signal.removeEventListener("abort", cancelOnAbort);
   }
@@ -90,7 +104,7 @@ const readDocument = async (
 
   if (mediaType.trim().toLowerCase() !== "text/html" || body === null) {
     const received = body === null ? "no response body" : contentType || "no content type";
-    const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline);
+    const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline, response.url);
 
     throw new XrioError(
       "UNSUPPORTED_CONTENT_TYPE",
@@ -99,7 +113,7 @@ const readDocument = async (
     );
   }
 
-  const { bytes, truncated } = await readBody(body, MAX_BODY_BYTES, deadline);
+  const { bytes, truncated } = await readBody(body, MAX_BODY_BYTES, deadline, response.url);
 
   if (truncated) {
     throw new XrioError(
@@ -110,6 +124,61 @@ const readDocument = async (
   }
 
   return { ...details, html: decodeBody(bytes, contentType) };
+};
+
+const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {
+  const failure = FAILURE_AFTER_REQUEST_URI.exec(error.message)?.groups?.failure ?? "";
+
+  if (TUNNEL_FAILURE.test(failure)) {
+    return (
+      relay.failureFor(url.hostname) ??
+      new XrioError("NETWORK_ERROR", `Could not open a tunnel to ${url.host}.`, {
+        cause: error,
+        details: undefined,
+      })
+    );
+  }
+
+  if (CERTIFICATE_FAILURE.test(failure)) {
+    return new XrioError(
+      "TLS_CERTIFICATE_INVALID",
+      `The certificate for ${url.host} was rejected.`,
+      {
+        cause: error,
+        details: undefined,
+      },
+    );
+  }
+
+  return new XrioError("NETWORK_ERROR", `The request to ${redactUrl(url)} failed.`, {
+    cause: error,
+    details: undefined,
+  });
+};
+
+const fetchOnce = async (
+  session: Session,
+  url: URL,
+  deadline: Deadline,
+  relay: Relay,
+): Promise<ClientResponse> => {
+  deadline.throwIfExpired();
+  let response: ClientResponse;
+
+  try {
+    response = await session.fetch(url.href, { signal: deadline.signal });
+  } catch (error) {
+    throw error instanceof RequestError ? translateRequestError(error, url, relay) : error;
+  }
+
+  const relayFailure = url.protocol === "http:" ? relay.failureFor(url.hostname) : undefined;
+
+  if (relayFailure !== undefined) {
+    await response.body?.cancel();
+    throw relayFailure;
+  }
+
+  return response;
 };
 
 export const loadHttpDocument = async ({
@@ -124,8 +193,5 @@ export const loadHttpDocument = async ({
   await using relay = await startRelay(deadline);
   await using session = await createSession({ ...chromeProfile, proxy: relay.url, timeout: 0 });
 
-  deadline.throwIfExpired();
-  const response = await session.fetch(url.href, { signal: deadline.signal });
-
-  return await readDocument(response, deadline);
+  return await readDocument(await fetchOnce(session, url, deadline, relay), deadline);
 };

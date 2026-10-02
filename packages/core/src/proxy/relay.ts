@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import type { Deadline } from "../deadline.ts";
+import { XrioError } from "../errors.ts";
 
 const DIAL_TIMEOUT_MS = 10_000;
 
@@ -27,6 +28,7 @@ interface Target {
 
 export interface Relay extends AsyncDisposable {
   readonly url: string;
+  readonly failureFor: (hostname: string) => XrioError | undefined;
 }
 
 const unbracketed = (hostname: string): string => hostname.replaceAll(IPV6_BRACKETS, "");
@@ -45,6 +47,9 @@ const parseAuthority = (authority: string | undefined): Target | undefined => {
 
   return { hostname: url.hostname, port: url.port === "" ? 80 : Number(url.port) };
 };
+
+const networkError = (message: string, cause?: unknown) =>
+  new XrioError("NETWORK_ERROR", message, { cause, details: undefined });
 
 const forwardedHeaders = (rawHeaders: string[]): string[] => {
   const headers: string[] = [];
@@ -100,6 +105,7 @@ class ProxyRelay {
   readonly #deadline: Deadline;
   readonly #clientAuthorization: Buffer;
   readonly #sockets = new Set<Duplex>();
+  readonly #hostFailures = new Map<string, XrioError>();
 
   constructor(deadline: Deadline, token: string) {
     this.#deadline = deadline;
@@ -113,6 +119,10 @@ class ProxyRelay {
       presented.byteLength === this.#clientAuthorization.byteLength &&
       timingSafeEqual(presented, this.#clientAuthorization)
     );
+  }
+
+  failureFor(hostname: string): XrioError | undefined {
+    return this.#hostFailures.get(hostname);
   }
 
   track<Stream extends Duplex>(socket: Stream): Stream {
@@ -149,8 +159,9 @@ class ProxyRelay {
     let tunnel: Duplex;
 
     try {
-      tunnel = await this.#dial(target.hostname, target.port);
-    } catch {
+      tunnel = await this.#connectDirectly(target);
+    } catch (error) {
+      this.#recordFailure(target, error instanceof XrioError ? error : undefined);
       client.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
 
       return;
@@ -177,11 +188,13 @@ class ProxyRelay {
       return;
     }
 
+    const target = { hostname: url.hostname, port: url.port === "" ? 80 : Number(url.port) };
     let socket: Duplex;
 
     try {
-      socket = await this.#dial(url.hostname, url.port === "" ? 80 : Number(url.port));
-    } catch {
+      socket = await this.#connectDirectly(target);
+    } catch (error) {
+      this.#recordFailure(target, error instanceof XrioError ? error : undefined);
       response.writeHead(502).end();
 
       return;
@@ -223,6 +236,16 @@ class ProxyRelay {
     request.pipe(outbound);
   }
 
+  #recordFailure(target: Target, error: XrioError | undefined): void {
+    if (error === undefined || this.#deadline.signal.aborted) {
+      return;
+    }
+
+    if (!this.#hostFailures.has(target.hostname)) {
+      this.#hostFailures.set(target.hostname, error);
+    }
+  }
+
   async #dial(hostname: string, port: number): Promise<Socket> {
     using stage = this.#deadline.startStage(DIAL_TIMEOUT_MS);
 
@@ -238,6 +261,15 @@ class ProxyRelay {
     }
 
     return socket;
+  }
+
+  async #connectDirectly(target: Target): Promise<Duplex> {
+    try {
+      return await this.#dial(target.hostname, target.port);
+    } catch (error) {
+      this.#deadline.signal.throwIfAborted();
+      throw networkError(`Could not connect to ${target.hostname}:${target.port}.`, error);
+    }
   }
 }
 
@@ -292,6 +324,7 @@ export const startRelay = async (deadline: Deadline): Promise<Relay> => {
       server.close();
       await closed;
     },
+    failureFor: (hostname) => relay.failureFor(hostname),
     url: `http://${RELAY_USER}:${token}@127.0.0.1:${port}`,
   };
 };
