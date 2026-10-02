@@ -25,7 +25,8 @@
     "wreq-js": "3.2.0"
   },
   "devDependencies": {
-    "@xrio/typescript-config": "workspace:*"
+    "@xrio/typescript-config": "workspace:*",
+    "devtools-protocol": "0.0.1707781"
   },
   "engines": {
     "node": ">=24.0.0"

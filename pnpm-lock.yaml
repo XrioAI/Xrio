@@ -294,6 +294,9 @@ importers:
       '@xrio/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      devtools-protocol:
+        specifier: 0.0.1707781
+        version: 0.0.1707781
 
   packages/typescript-config: {}
 
@@ -2345,6 +2348,9 @@ packages:
 
   devtools-protocol@0.0.1687809:
     resolution: {integrity: sha512-t7kSb+UKYdyxcmqy98U2P86ne6rCve3DIJ4+lp54i/hhClgFuG35JrLj23rO14Jw3sWDsp7i+22QhNU0+/qk8g==}
+
+  devtools-protocol@0.0.1707781:
+    resolution: {integrity: sha512-numJ0dGA85+Y3PpRG1gBEaNTyLFZTejHTB2cbG/0aTgzd56cgoUN0JzRVdI2nAPWXoCuPtYKf8eyKb5VBavz2g==}
 
   diff@8.0.4:
     resolution: {integrity: sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==}
@@ -4914,6 +4920,8 @@ snapshots:
   detect-libc@2.1.2: {}
 
   devtools-protocol@0.0.1687809: {}
+
+  devtools-protocol@0.0.1707781: {}
 
   diff@8.0.4:
     optional: true
