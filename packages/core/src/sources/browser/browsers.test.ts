@@ -8,6 +8,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
+import { DRIVERS, isDriverName } from "../../testing/drivers.ts";
+import type { DriverName } from "../../testing/drivers.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { findBrowserPid, killProcessGroup, scratchRoot, waitForExit } from "./browser-process.ts";
@@ -20,6 +22,8 @@ const ABORT_DURING_LAUNCH_MS = 200;
 const LAUNCH_DEADLINE_MS = 500;
 
 const TEARDOWN_SETTLED_WITHIN_MS = 11_500;
+
+const DRIVER_NAMES = Object.keys(DRIVERS).filter(isDriverName);
 
 const isLaunchStage = (message: unknown): message is { stage: "launch"; durationMs: number } =>
   typeof message === "object" &&
@@ -75,8 +79,13 @@ const removeLeftoverScratch = async (): Promise<void> => {
   );
 };
 
-const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) => {
-  const browsers = createBrowsers(patchrightDriver, 2);
+const load = async (
+  driver: DriverName,
+  scenario: string,
+  timeoutMs = 10_000,
+  signal?: AbortSignal,
+) => {
+  const browsers = createBrowsers(DRIVERS[driver], 2);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -92,9 +101,9 @@ const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) 
   }
 };
 
-describe("browser lifecycle on the fake browser", () => {
+describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver) => {
   it.each(["normal", "fragmented"])("renders over the pipe with %s framing", async (scenario) => {
-    const document = await load(scenario);
+    const document = await load(driver, scenario);
 
     expect(document).toMatchObject({
       cookies: ["a=1", "b=2"],
@@ -107,7 +116,7 @@ describe("browser lifecycle on the fake browser", () => {
   });
 
   it("reports a launch failure with the end of Chrome's stderr", async () => {
-    await expect(load("no-start")).rejects.toSatisfy(
+    await expect(load(driver, "no-start")).rejects.toSatisfy(
       (error) =>
         isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
         error.details.stderr.includes("fake chrome cannot start"),
@@ -116,7 +125,7 @@ describe("browser lifecycle on the fake browser", () => {
   });
 
   it("refuses a Chrome older than the supported range", async () => {
-    await expect(load("old")).rejects.toSatisfy(
+    await expect(load(driver, "old")).rejects.toSatisfy(
       (error) =>
         isXrioError(error, "BROWSER_LAUNCH_FAILED") && error.message.includes("older than 150"),
     );
@@ -124,26 +133,28 @@ describe("browser lifecycle on the fake browser", () => {
   });
 
   it("reports a browser that dies mid-scrape", async () => {
-    await expect(load("crash-on-navigate")).rejects.toMatchObject({ code: "BROWSER_CRASHED" });
+    await expect(load(driver, "crash-on-navigate")).rejects.toMatchObject({
+      code: "BROWSER_CRASHED",
+    });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
   it("kills a browser that ignores Browser.close", async () => {
-    await expect(load("ignore-close")).resolves.toMatchObject({ status: 200 });
+    await expect(load(driver, "ignore-close")).resolves.toMatchObject({ status: 200 });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
   it("cleans up after a caller abort during launch", async () => {
     const reason = new Error("Stopped by caller");
     const controller = new AbortController();
-    const loading = load("slow-start", 10_000, controller.signal);
+    const loading = load(driver, "slow-start", 10_000, controller.signal);
 
     setTimeout(() => {
       controller.abort(reason);
     }, ABORT_DURING_LAUNCH_MS);
     await expect(loading).rejects.toBe(reason);
     await expect(
-      load("slow-start", 10_000, AbortSignal.timeout(ABORT_DURING_LAUNCH_MS)),
+      load(driver, "slow-start", 10_000, AbortSignal.timeout(ABORT_DURING_LAUNCH_MS)),
     ).rejects.toMatchObject({
       name: "TimeoutError",
     });
@@ -155,7 +166,7 @@ describe("browser lifecycle on the fake browser", () => {
 
     const observedDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) =>
-        await patchrightDriver.launch(plan, deadline, (cleanup) => {
+        await DRIVERS[driver].launch(plan, deadline, (cleanup) => {
           const observed = { settled: false };
 
           cleanups.push(observed);
@@ -194,9 +205,9 @@ const queuedRequest = async () => ({
   url: new URL("https://fake.test/"),
 });
 
-describe(createBrowsers, () => {
+describe.each(DRIVER_NAMES)("createBrowsers on %s", (driver) => {
   it("queues past maxBrowsers and counts the wait against the deadline", async () => {
-    const browsers = createBrowsers(patchrightDriver, 1);
+    const browsers = createBrowsers(DRIVERS[driver], 1);
     const request = await queuedRequest();
     using held = startDeadline(1500);
     using queued = startDeadline(200);
@@ -213,7 +224,7 @@ describe(createBrowsers, () => {
   });
 
   it("lets accepted work finish when closed, and rejects new work afterwards", async () => {
-    const browsers = createBrowsers(patchrightDriver, 1);
+    const browsers = createBrowsers(DRIVERS[driver], 1);
     const request = await queuedRequest();
     const normal = { ...request, browserPath: await fakeChromePath("normal") };
     using held = startDeadline(1000);

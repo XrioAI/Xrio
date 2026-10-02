@@ -1,3 +1,6 @@
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { ChannelListener } from "node:diagnostics_channel";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../../../deadline.ts";
@@ -12,6 +15,14 @@ import { cdpDriver } from "./driver.ts";
 const LAUNCH_CAP_MS = 30_000;
 
 const SCRAPE_DEADLINE_MS = 120_000;
+
+const isRebind = (message: unknown): message is { event: "document-rebind"; detail: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  message.event === "document-rebind" &&
+  "detail" in message &&
+  typeof message.detail === "string";
 
 describe("the CDP driver's launch", () => {
   it("fails a launch whose first page never attaches within 30 s, long before the scrape deadline", async () => {
@@ -50,6 +61,43 @@ describe("the CDP driver's launch", () => {
     );
     expect(deadline.signal.aborted).toBeFalsy();
     await browsers.close();
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+});
+
+describe("the CDP driver's capture", () => {
+  it("treats a capture that fails as a newer document commits as replaced, and captures the newer one", async () => {
+    const rebinds: string[] = [];
+
+    const record: ChannelListener = (message) => {
+      if (isRebind(message)) {
+        rebinds.push(message.detail);
+      }
+    };
+
+    subscribe("xrio:event", record);
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+
+    try {
+      const document = await browsers.load({
+        browserPath: await fakeChromePath("navigate-during-capture"),
+        deadline,
+        mode: "headless",
+        proxy: undefined,
+        url: new URL("https://fake.test/page"),
+      });
+
+      expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
+      expect(document.html).toContain("<p>fake page</p>");
+      expect(rebinds).toStrictEqual([
+        "The main-frame document changed during capture; capturing its replacement.",
+      ]);
+    } finally {
+      unsubscribe("xrio:event", record);
+      await browsers.close();
+    }
+
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 });

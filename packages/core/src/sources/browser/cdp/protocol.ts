@@ -24,7 +24,7 @@ export interface TargetSession<Kind extends TargetScope = TargetScope> {
 
 export type AnyTargetSession = { [Kind in TargetScope]: TargetSession<Kind> }[TargetScope];
 
-export type Session = BrowserSession | AnyTargetSession;
+type Session = BrowserSession | AnyTargetSession;
 
 export const BROWSER: BrowserSession = { scope: "browser" };
 
@@ -38,7 +38,7 @@ const EVERY_TARGET = [
   "other",
 ] as const satisfies readonly TargetScope[];
 
-export const ALLOWED_COMMANDS = {
+const ALLOWED_COMMANDS = {
   "Browser.close": ["browser"],
   "Browser.getVersion": ["browser"],
   "Browser.setDownloadBehavior": ["browser"],
@@ -55,7 +55,7 @@ export const ALLOWED_COMMANDS = {
 
 export type Method = keyof typeof ALLOWED_COMMANDS;
 
-export type ScopeOf<Name extends Method> = (typeof ALLOWED_COMMANDS)[Name][number];
+type ScopeOf<Name extends Method> = (typeof ALLOWED_COMMANDS)[Name][number];
 
 export type FrameHost = (typeof FRAME_HOSTS)[number];
 
@@ -137,10 +137,3 @@ export type DomainEvent = {
     readonly params: ProtocolMapping.Events[Name][0];
   };
 }[ConsumedMethod];
-
-export const allowedPairs = (): ReadonlySet<string> =>
-  new Set(
-    Object.entries(ALLOWED_COMMANDS).flatMap(([method, scopes]) =>
-      scopes.map((scope) => `${scope} ${method}`),
-    ),
-  );

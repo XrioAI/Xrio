@@ -14,6 +14,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../deadline.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
 import { busyPageStarted, conformancePages } from "../../testing/conformance-pages.ts";
+import { DRIVERS } from "../../testing/drivers.ts";
+import type { DriverName } from "../../testing/drivers.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
@@ -22,7 +24,6 @@ import type { SourceDocument } from "../../types.ts";
 import { scratchRoot, sweepAbandonedScratch } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { planLaunch } from "./launch-plan.ts";
-import { patchrightDriver } from "./patchright/driver.ts";
 
 const SCRAPE_CHILD = fileURLToPath(new URL("../../testing/scrape-child.ts", import.meta.url));
 
@@ -89,6 +90,53 @@ const capturedPages = [
   { landsOn: ["huge"], path: "/huge" },
   { landsOn: ["alert"], path: "/alert" },
 ];
+
+const STATIC_PAGE_COMMANDS = [
+  "browser Browser.close",
+  "browser Browser.getVersion",
+  "browser Browser.setDownloadBehavior",
+  "browser Target.setAutoAttach",
+  "main Network.enable",
+  "main Page.createIsolatedWorld",
+  "main Page.enable",
+  "main Page.navigate",
+  "main Page.setLifecycleEventsEnabled",
+  "main Runtime.evaluate",
+  "main Runtime.runIfWaitingForDebugger",
+  "main Target.setAutoAttach",
+];
+
+const ALLOWED_PAIRS = new Set([
+  "browser Browser.close",
+  "browser Browser.getVersion",
+  "browser Browser.setDownloadBehavior",
+  "browser Target.setAutoAttach",
+  "main Network.enable",
+  "main Page.createIsolatedWorld",
+  "main Page.enable",
+  "main Page.handleJavaScriptDialog",
+  "main Page.navigate",
+  "main Page.setLifecycleEventsEnabled",
+  "main Runtime.evaluate",
+  "main Runtime.runIfWaitingForDebugger",
+  "main Target.setAutoAttach",
+  "popup Network.enable",
+  "popup Runtime.runIfWaitingForDebugger",
+  "popup Target.setAutoAttach",
+  "iframe Network.enable",
+  "iframe Runtime.runIfWaitingForDebugger",
+  "iframe Target.setAutoAttach",
+  "worker Network.enable",
+  "worker Runtime.runIfWaitingForDebugger",
+  "service_worker Network.enable",
+  "service_worker Runtime.runIfWaitingForDebugger",
+  "shared_worker Network.enable",
+  "shared_worker Runtime.runIfWaitingForDebugger",
+  "other Network.enable",
+  "other Runtime.runIfWaitingForDebugger",
+]);
+
+const FAVICON = "/favicon.ico";
 
 const markerOf = (html: string): string | undefined => MARKER.exec(html)?.groups?.marker;
 
@@ -189,8 +237,13 @@ const recordStages = () => {
   };
 };
 
-const runChildScrape = (mode: "headless" | "headed", url: string, env: NodeJS.ProcessEnv = {}) =>
-  spawn(process.execPath, [SCRAPE_CHILD, mode, chromePath(), url], {
+const runChildScrape = (
+  driver: DriverName,
+  mode: "headless" | "headed",
+  url: string,
+  env: NodeJS.ProcessEnv = {},
+) =>
+  spawn(process.execPath, [SCRAPE_CHILD, mode, chromePath(), url, driver], {
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -213,15 +266,27 @@ const waitUntil = async (condition: () => Promise<boolean>, budgetMs: number): P
 
 const MODES = ["headless", "headed"] as const;
 
+type Mode = (typeof MODES)[number];
+
+const DRIVERS_UNDER_TEST = [
+  { driver: "cdp", probe: { visibility: "visible", webdriver: "false" } },
+  { driver: "patchright", probe: { focus: "true", visibility: "visible", webdriver: "false" } },
+] as const satisfies readonly { driver: DriverName; probe: Readonly<Record<string, string>> }[];
+
+const RUNS = DRIVERS_UNDER_TEST.flatMap((driver) => MODES.map((mode) => ({ ...driver, mode })));
+
+const DRIVER_RUNS = RUNS.map(({ driver, mode }) => ({ driver, mode }));
+
 let server: FixtureServer;
 
 const load = async (
-  mode: (typeof MODES)[number],
+  driver: DriverName,
+  mode: Mode,
   route: string,
   timeoutMs = 20_000,
   signal?: AbortSignal,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(patchrightDriver, 1);
+  const browsers = createBrowsers(DRIVERS[driver], 1);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -247,13 +312,50 @@ const serveFixturePages = () => {
   });
 };
 
-describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
+const isSentCommand = (message: unknown): message is { scope: string; method: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "scope" in message &&
+  typeof message.scope === "string" &&
+  "method" in message &&
+  typeof message.method === "string";
+
+const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<string[]> => {
+  const sent = new Set<string>();
+
+  const record: ChannelListener = (message) => {
+    if (isSentCommand(message)) {
+      sent.add(`${message.scope} ${message.method}`);
+    }
+  };
+
+  subscribe("xrio:cdp-command", record);
+
+  try {
+    for (const route of routes) {
+      // oxlint-disable-next-line eslint/no-await-in-loop
+      await load("cdp", mode, route);
+    }
+  } finally {
+    unsubscribe("xrio:cdp-command", record);
+  }
+
+  return [...sent].toSorted();
+};
+
+const probed = (html: string, keys: readonly string[]) => {
+  const groups = PROBE.exec(html)?.groups ?? {};
+
+  return Object.fromEntries(keys.map((key) => [key, groups[key]]));
+};
+
+describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, probe }) => {
   serveFixturePages();
 
   it.each(capturedPages)(
     "binds $path's response to the document it captured",
     async ({ landsOn, path: route }) => {
-      const document = await load(mode, route);
+      const document = await load(driver, mode, route);
       const marker = markerOf(document.html) ?? "";
 
       expect(landsOn).toContain(marker);
@@ -263,29 +365,23 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
         status: 200,
       });
       expect(pathOf(document.url)).toBe(marker === "landing" ? "/landing" : `/${marker}`);
-      expect({ ...PROBE.exec(document.html)?.groups }).toStrictEqual({
-        focus: "true",
-        visibility: "visible",
-        webdriver: "false",
-      });
+      expect(probed(document.html, Object.keys(probe))).toStrictEqual(probe);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
 
   it("sends cookies set on each redirect hop to the next", async () => {
-    const document = await load(mode, "/redirect/1");
+    const document = await load(driver, mode, "/redirect/1");
 
     expect(document.html).toContain('<p id="sent-cookies">hop1=1; hop2=1</p>');
-    expect(document.requestUrls.map(pathOf)).toStrictEqual([
-      "/redirect/1",
-      "/redirect/2",
-      "/landing",
-    ]);
+    expect(document.requestUrls.map(pathOf).filter((visited) => visited !== FAVICON)).toStrictEqual(
+      ["/redirect/1", "/redirect/2", "/landing"],
+    );
   });
 
   it("logs requests from cross-origin frames and workers, but not from Chrome's own extensions", async () => {
-    const framed = await load(mode, "/iframe");
-    const worker = await load(mode, "/worker");
+    const framed = await load(driver, mode, "/iframe");
+    const worker = await load(driver, mode, "/worker");
 
     expect(framed.requestUrls).toContain(`${server.crossOrigin}/framed`);
     expect(framed.requestUrls).toContain(`${server.crossOrigin}/framed-pixel`);
@@ -298,16 +394,16 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
   });
 
   it("returns a 401 with WWW-Authenticate as data", async () => {
-    const document = await load(mode, "/basic-auth");
+    const document = await load(driver, mode, "/basic-auth");
 
     expect(document).toMatchObject({ headers: { "x-page": "basic-auth" }, status: 401 });
     expect(markerOf(document.html)).toBe("basic-auth");
   });
 
   it("reads pages under a strict CSP, in legacy charsets and as XHTML", async () => {
-    const strict = await load(mode, "/strict-csp");
-    const legacy = await load(mode, "/legacy-charset");
-    const xhtml = await load(mode, "/xhtml");
+    const strict = await load(driver, mode, "/strict-csp");
+    const legacy = await load(driver, mode, "/legacy-charset");
+    const xhtml = await load(driver, mode, "/xhtml");
 
     expect(markerOf(strict.html)).toBe("strict-csp");
     expect(legacy.html).toContain('<p id="text">Привет</p>');
@@ -317,9 +413,9 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
 
   it("captures Chrome's viewers for JSON, XML and PDF until Phase 4 gates them", async () => {
     const [json, xml, pdf] = [
-      await load(mode, "/json"),
-      await load(mode, "/xml"),
-      await load(mode, "/pdf"),
+      await load(driver, mode, "/json"),
+      await load(driver, mode, "/xml"),
+      await load(driver, mode, "/pdf"),
     ];
 
     expect(json.html).toContain('<pre>{"page":"json"}</pre>');
@@ -329,11 +425,11 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
   });
 });
 
-describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
+describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mode }) => {
   serveFixturePages();
 
   it.each(["/download", "/no-content"])("reports %s as an aborted navigation", async (route) => {
-    await expect(load(mode, route)).rejects.toMatchObject({
+    await expect(load(driver, mode, route)).rejects.toMatchObject({
       code: "NETWORK_ERROR",
       details: { netError: "net::ERR_ABORTED" },
     });
@@ -343,7 +439,9 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
   it("times out a capture the page never answers, and leaves nothing behind", async () => {
     using stages = recordStages();
 
-    await expect(load(mode, "/busy", BUSY_TIMEOUT_MS)).rejects.toMatchObject({ code: "TIMEOUT" });
+    await expect(load(driver, mode, "/busy", BUSY_TIMEOUT_MS)).rejects.toMatchObject({
+      code: "TIMEOUT",
+    });
     expect([...stages.timings.keys()]).toContain("capture");
     expect(timeUntilSettled(stages.timings)).toBeLessThan(BUSY_TIMEOUT_MS + SETTLE_SLACK_MS);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -351,7 +449,7 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
 
   it("launches Chrome with exactly the planned argv", async () => {
     const controller = new AbortController();
-    const loading = load(mode, "/busy", 20_000, controller.signal);
+    const loading = load(driver, mode, "/busy", 20_000, controller.signal);
 
     await busyPageStarted();
     const pid = lastLaunchedPid() ?? 0;
@@ -380,7 +478,7 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
     const before = SIGNALS.map((signal) => process.listenerCount(signal));
     const controller = new AbortController();
     const reason = new Error("Stopped by caller");
-    const loading = load(mode, "/busy", 20_000, controller.signal);
+    const loading = load(driver, mode, "/busy", 20_000, controller.signal);
 
     await busyPageStarted();
     expect(SIGNALS.map((signal) => process.listenerCount(signal))).toStrictEqual(before);
@@ -392,7 +490,7 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
 
   it("reports a renderer that dies mid-capture as BROWSER_CRASHED", async () => {
     using stages = recordStages();
-    const loading = load(mode, "/busy");
+    const loading = load(driver, mode, "/busy");
 
     await stages.ended("navigation");
     const profile = await profileOf(lastLaunchedPid() ?? 0);
@@ -404,7 +502,7 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
   });
 
   it("leaves no Chrome process when its Node owner is killed, and the sweep removes its directory", async () => {
-    const child = runChildScrape(mode, `${server.origin}/busy`);
+    const child = runChildScrape(driver, mode, `${server.origin}/busy`);
     const lines = createInterface({ input: child.stdout });
 
     const [launchLine] = await Promise.all([
@@ -427,9 +525,15 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
     ).resolves.toContain(path.dirname(profile));
     expect(existsSync(profile)).toBeFalsy();
   });
+});
+
+describe.each(MODES)("commands Patchright sends, %s", (mode) => {
+  serveFixturePages();
 
   it("sends Chrome only the commands in the known Patchright set", async () => {
-    const child = runChildScrape(mode, `${server.origin}/static`, { DEBUG: "pw:protocol" });
+    const child = runChildScrape("patchright", mode, `${server.origin}/static`, {
+      DEBUG: "pw:protocol",
+    });
 
     const [trace, output] = await Promise.all([
       text(child.stderr),
@@ -443,5 +547,26 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
       sentCommands(trace).filter((command) => !KNOWN_PATCHRIGHT_COMMANDS.has(command)),
     ).toStrictEqual([]);
     expect(sentCommands(trace)).toContain("browser>page Page.setLifecycleEventsEnabled");
+  });
+});
+
+describe.each(MODES)("commands our CDP client sends, %s", (mode) => {
+  serveFixturePages();
+
+  it("sends exactly the expected commands to load a static page", async () => {
+    await expect(tappedCommands(mode, ["/static"])).resolves.toStrictEqual(STATIC_PAGE_COMMANDS);
+  });
+
+  it("sends only allowlisted commands to frames, workers and dialogs", async () => {
+    const sent = await tappedCommands(mode, ["/static", "/iframe", "/worker", "/alert"]);
+
+    expect(sent.filter((pair) => !ALLOWED_PAIRS.has(pair))).toStrictEqual([]);
+    expect(sent).toStrictEqual(
+      expect.arrayContaining([
+        "iframe Runtime.runIfWaitingForDebugger",
+        "main Page.handleJavaScriptDialog",
+        "worker Runtime.runIfWaitingForDebugger",
+      ]),
+    );
   });
 });
