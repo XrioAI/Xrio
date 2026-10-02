@@ -6,6 +6,7 @@ interface XrioErrorDetails {
   RESPONSE_TOO_LARGE: undefined;
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
+  TOO_MANY_REDIRECTS: undefined;
   UNSUPPORTED_CONTENT_TYPE: ResponseDetails & { body: string };
 }
 
@@ -47,6 +48,7 @@ const errorClasses = {
   RESPONSE_TOO_LARGE: XrioError,
   TIMEOUT: XrioError,
   TLS_CERTIFICATE_INVALID: XrioError,
+  TOO_MANY_REDIRECTS: XrioError,
   UNSUPPORTED_CONTENT_TYPE: XrioError,
 } satisfies Record<ErrorCode, TypeErrorConstructor | typeof XrioError>;
 

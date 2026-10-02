@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import type { Socket } from "node:net";
+import { inspect } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { resolveProfile } from "wreq-js";
@@ -16,6 +17,8 @@ import {
 import type { FixtureServer } from "../testing/fixture-server.ts";
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+const HOP = /^\/hop\/(?<remaining>\d+)$/u;
 
 const USER_AGENT_MAJOR = /Chrome\/(?<major>\d+)\.0\.0\.0/u;
 
@@ -81,14 +84,26 @@ const writeLargeBody = (response: ServerResponse) => {
 const routes = (request: IncomingMessage, response: ServerResponse) => {
   const url = new URL(request.url ?? "/", "http://fixture.test");
   const charsetPage = charsetPages.get(url.pathname);
+  const remaining = HOP.exec(url.pathname)?.groups?.remaining;
 
   if (charsetPage !== undefined) {
     response.writeHead(200, { "content-type": charsetPage.contentType }).end(charsetPage.bytes);
+  } else if (remaining !== undefined && remaining !== "0") {
+    response
+      .writeHead(302, {
+        location: `/hop/${Number(remaining) - 1}`,
+        "set-cookie": `hop${remaining}=1; Path=/`,
+      })
+      .end();
   } else if (url.pathname === "/reset-mid-body") {
     response.writeHead(200, { "content-length": "1000", "content-type": "text/html" });
     response.write("<p>partial", () => {
       response.socket?.destroy();
     });
+  } else if (url.pathname === "/empty-location") {
+    response
+      .writeHead(302, { "content-type": "text/html", location: "" })
+      .end(html("<p>moved</p>"));
   } else if (url.pathname === "/large") {
     writeLargeBody(response);
   } else {
@@ -130,6 +145,25 @@ describe("http mode", () => {
   it("rejects a decoded body over 32 MiB", async () => {
     await expect(client.scrape({ format: "html", url: `${origin}/large` })).rejects.toMatchObject({
       code: "RESPONSE_TOO_LARGE",
+    });
+  });
+
+  it("sends cookies set on one redirect hop with the next and returns the final URL", async () => {
+    const result = await client.scrape({ format: "json", url: `${origin}/hop/2` });
+
+    expect(result.url).toBe(`${origin}/hop/0`);
+    expect(result.data.content.text).toContain("hop2=1; hop1=1");
+  });
+
+  it("follows 20 redirects and refuses the 21st", async () => {
+    await expect(client.scrape({ format: "html", url: `${origin}/hop/20` })).resolves.toMatchObject(
+      {
+        status: 200,
+        url: `${origin}/hop/0`,
+      },
+    );
+    await expect(client.scrape({ format: "html", url: `${origin}/hop/21` })).rejects.toMatchObject({
+      code: "TOO_MANY_REDIRECTS",
     });
   });
 
@@ -212,6 +246,47 @@ describe("http mode edge responses", () => {
       client.scrape({ format: "html", timeoutMs: 10_000, url: `${fixture.origin}/reset-mid-body` }),
     ).rejects.toMatchObject({ code: "NETWORK_ERROR" });
     expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  it("returns a redirect status whose Location is empty instead of following it", async () => {
+    await using fixture = await startFixtureServer(routes);
+
+    await expect(
+      client.scrape({ format: "html", url: `${fixture.origin}/empty-location` }),
+    ).resolves.toMatchObject({ status: 302, url: `${fixture.origin}/empty-location` });
+  });
+
+  it("refuses a redirect to a URL that carries credentials without contacting it", async () => {
+    let connections = 0;
+
+    const destination = await startRawOrigin((socket) => {
+      socket.resetAndDestroy();
+    });
+
+    destination.server.on("connection", () => {
+      connections += 1;
+    });
+    const credentialed = destination.origin.replace("://", "://user:secret@");
+
+    const redirector = await startRawOrigin((socket) => {
+      socket.end(
+        `HTTP/1.1 302 Found\r\nLocation: ${credentialed}/after\r\nContent-Length: 0\r\n\r\n`,
+      );
+    });
+
+    try {
+      const rejection = client.scrape({ format: "html", url: `${redirector.origin}/` });
+
+      await expect(rejection).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+      await expect(rejection).rejects.toSatisfy(
+        (error) => !inspect(error, { depth: Infinity }).includes("secret"),
+      );
+    } finally {
+      destination.server.close();
+      redirector.server.close();
+    }
+
+    expect(connections).toBe(0);
   });
 
   it("reports a status below 100 as NETWORK_ERROR", async () => {
