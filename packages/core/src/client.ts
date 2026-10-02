@@ -4,8 +4,9 @@ import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
 import { loadHeadedDocument, loadHeadlessDocument } from "./sources/browser.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type {
+  ClientDefaults,
+  ClientOptions,
   DocumentRequest,
-  ModeOptions,
   ResolvedMode,
   ScrapeFormat,
   ScrapeOptions,
@@ -18,6 +19,7 @@ export { isXrioError, XrioError } from "./errors.ts";
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
 
 export type {
+  ClientOptions,
   ModeOptions,
   ScrapeFormat,
   ScrapeOptions,
@@ -51,17 +53,17 @@ const formats = {
 };
 
 export class XrioClient {
-  readonly #mode: ResolvedMode;
+  readonly #defaults: ClientDefaults;
 
-  constructor(options: ModeOptions = {}) {
-    this.#mode = resolveClientOptions(options);
+  constructor(options: ClientOptions = {}) {
+    this.#defaults = resolveClientOptions(options);
   }
 
   scrape<Format extends ScrapeFormat>(
     options: ScrapeOptions<Format>,
   ): Promise<ScrapeResult<Format>>;
   async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
-    const { format, signal, source, timeoutMs } = resolveScrapeOptions(options, this.#mode);
+    const { format, signal, source, timeoutMs } = resolveScrapeOptions(options, this.#defaults);
     using deadline = startDeadline(timeoutMs, signal);
 
     const document = await loadDocument({ ...source, deadline });

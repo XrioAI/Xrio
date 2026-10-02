@@ -6,9 +6,12 @@ export type ModeOptions =
   | { mode?: "http"; browserPath?: never }
   | { mode: "headless" | "headed"; browserPath: string };
 
+export type ClientOptions = ModeOptions & { proxy?: string };
+
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOptions & {
   url: string;
   format: Format;
+  proxy?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -48,7 +51,23 @@ export interface SourceDocument extends ResponseDetails {
 
 export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
 
-type SourceRequest = ResolvedMode & { url: URL };
+export interface ProxyEndpoint {
+  protocol: "http" | "https" | "socks5";
+  hostname: string;
+  port: number;
+  credentials: { username: string; password: string } | undefined;
+  redactedUrl: string;
+}
+
+export interface ClientDefaults {
+  mode: ResolvedMode;
+  proxy: ProxyEndpoint | undefined;
+}
+
+type SourceRequest = ResolvedMode & {
+  url: URL;
+  proxy: ProxyEndpoint | undefined;
+};
 
 export type DocumentRequest = SourceRequest & { deadline: Deadline };
 

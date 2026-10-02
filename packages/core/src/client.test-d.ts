@@ -2,6 +2,7 @@ import { describe, expectTypeOf, it } from "vite-plus/test";
 
 import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import type {
+  ClientOptions,
   ErrorCode,
   InvalidOptionsError,
   ScrapeFormat,
@@ -63,6 +64,19 @@ describe("XrioClient types", () => {
   it("exposes each response header as an optional string and cookies separately", () => {
     expectTypeOf<ScrapeResult["headers"]["content-type"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ScrapeResult["cookies"]>().toEqualTypeOf<string[]>();
+  });
+
+  it("accepts a proxy as a client default and as a per-scrape override", () => {
+    const client = new XrioClient({ proxy: "socks5h://proxy.test:1080" });
+
+    expectTypeOf<ClientOptions["proxy"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf(
+      client.scrape({
+        format: "html",
+        proxy: "http://proxy.test:8000",
+        url: "https://example.com",
+      }),
+    ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
   });
 
   it("narrows errors and their details by code", () => {
