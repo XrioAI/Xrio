@@ -1,7 +1,7 @@
 import { htmlToMarkdown } from "@mdream/js";
 import type { ElementNode, TransformPlugin } from "@mdream/js";
 
-import type { SourceDocument } from "../types.ts";
+import type { RenderedDocument } from "../types.ts";
 
 export const htmlPlugins = { tagOverrides: { noscript: "div" } } as const;
 
@@ -34,7 +34,7 @@ export const bodyContent: TransformPlugin = {
 export const resolveUrl = (value: string, baseUrl: string): string =>
   URL.parse(value, baseUrl)?.href ?? value;
 
-export const readBaseUrl = ({ html, url }: SourceDocument): string => {
+export const readBaseUrl = ({ html, url }: RenderedDocument): string => {
   let baseHref: string | undefined;
 
   htmlToMarkdown(html, {

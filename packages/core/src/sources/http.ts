@@ -1,6 +1,7 @@
 import { createSession, RequestError } from "wreq-js";
 import type { CreateSessionOptions, Response as ClientResponse, Session } from "wreq-js";
 
+import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
 import { startRelay } from "../proxy/relay.ts";
@@ -118,8 +119,13 @@ const readBody = async (
   }
 };
 
+interface FollowedResponse {
+  response: ClientResponse;
+  requestUrls: string[];
+}
+
 const readDocument = async (
-  response: ClientResponse,
+  { requestUrls, response }: FollowedResponse,
   deadline: Deadline,
 ): Promise<SourceDocument> => {
   const details = responseDetailsFrom(response.url, response.status, response.headers);
@@ -148,7 +154,9 @@ const readDocument = async (
     );
   }
 
-  return { ...details, html: decodeBody(bytes, contentType) };
+  const html = decodeBody(bytes, contentType);
+
+  return { ...details, block: classifyResponse({ html, requestUrls, response: details }), html };
 };
 
 const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {
@@ -233,13 +241,16 @@ const fetchFollowingRedirects = async (
   url: URL,
   deadline: Deadline,
   relay: Relay,
-  redirects = 0,
-): Promise<ClientResponse> => {
+  requestUrls: string[] = [],
+): Promise<FollowedResponse> => {
   const response = await fetchOnce(session, url, deadline, relay);
   const location = redirectTarget(response);
+  const redirects = requestUrls.length;
+
+  requestUrls.push(url.href);
 
   if (!REDIRECT_STATUSES.has(response.status) || location === undefined) {
-    return response;
+    return { requestUrls, response };
   }
 
   await response.body?.cancel();
@@ -259,7 +270,7 @@ const fetchFollowingRedirects = async (
     resolveRedirect(location, response.url),
     deadline,
     relay,
-    redirects + 1,
+    requestUrls,
   );
 };
 
