@@ -5,6 +5,7 @@ import type { Deadline } from "../deadline.ts";
 import { invalidOptions, redactUrl, XrioError } from "../errors.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
+import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";
 
 const chromeProfile = {
@@ -27,8 +28,6 @@ const chromeProfile = {
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
 
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
-
-const utf8 = new TextDecoder();
 
 const readBody = async (
   body: ReadableStream<Uint8Array> | null,
@@ -94,13 +93,13 @@ const readDocument = async (
     throw new XrioError(
       "UNSUPPORTED_CONTENT_TYPE",
       `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
-      { details: { ...details, body: utf8.decode(preview.bytes) } },
+      { details: { ...details, body: decodeBody(preview.bytes, contentType) } },
     );
   }
 
   const { bytes } = await readBody(body, Number.POSITIVE_INFINITY, deadline);
 
-  return { ...details, html: utf8.decode(bytes) };
+  return { ...details, html: decodeBody(bytes, contentType) };
 };
 
 export const loadHttpDocument = async ({
