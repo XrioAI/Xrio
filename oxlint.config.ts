@@ -1,10 +1,12 @@
 import { defineConfig } from "oxlint";
 import antiSlop from "ultracite/oxlint/anti-slop";
 import core from "ultracite/oxlint/core";
+import next from "ultracite/oxlint/next";
+import react from "ultracite/oxlint/react";
 import vitest from "ultracite/oxlint/vitest";
 
 export default defineConfig({
-  extends: [core, vitest, antiSlop],
+  extends: [core, react, next, vitest, antiSlop],
   ignorePatterns: core.ignorePatterns,
   jsPlugins: [
     "oxlint-plugin-complexity",
@@ -26,4 +28,5 @@ export default defineConfig({
     "complexity/complexity": ["error", { cognitive: 15, cyclomatic: 20, minLines: 0 }],
     "vite-plus/prefer-vite-plus-imports": "error",
   },
+  settings: { next: { rootDir: ["apps/landing/"] } },
 });

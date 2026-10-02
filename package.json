@@ -11,7 +11,8 @@
     "knip": "vp exec knip --production",
     "ready": "vp run check && vp run test",
     "test": "vp test",
-    "typecheck": "vp exec tsc --noEmit"
+    "typecheck": "vp exec tsc --noEmit",
+    "web:dev": "vp run --filter @xrio/landing dev"
   },
   "devDependencies": {
     "@types/node": "26.6.3",

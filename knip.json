@@ -1,6 +1,9 @@
 {
-  "$schema": "https://unpkg.com/knip/schema.json",
+  "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
+    "apps/landing": {
+      "entry": ["src/components/sections/design-panel.tsx!", "src/components/sections/pricing.tsx!"]
+    },
     "packages/core": {
       "entry": ["src/client.ts!", "examples/*.ts"]
     }

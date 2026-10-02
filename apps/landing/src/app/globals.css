@@ -1,0 +1,1487 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ── RADIUS TIERS ──
+   Radius scales with the object, in three tiers rather than continuously. A single flat
+   value cannot serve both a 122px button and a 1064px card: the same 6px reads as a clear
+   round on the button and as very nearly square on the card. Continuous proportionality is
+   the other failure — radius as a fraction of size turns big surfaces into lozenges.
+
+   So: tier by what the object IS.
+     control  buttons, chips, inputs, fields, tooltips, popovers — anything you act on
+     surface  cards, grids, panels, wells — anything that holds other things
+     stage    the hero container, which is a backdrop rather than a component
+
+   Nesting rule, separate from the tiers: two rounded corners only read as concentric when
+   the inner radius equals the outer minus the gap between them. That governs when the gap
+   is SMALLER than the radius — tight nesting, where the arcs are visibly parallel. When the
+   gap is larger (the panel's 14px paddings, pricing's 24px insets) the corners are far
+   enough apart to read as independent, and each takes its own tier. The page's original
+   14 > 10 > 6 ladder was wrong for the opposite reason to a flat value: it varied the
+   radius on tightly nested elements, where concentricity — not tiering — should decide.
+
+   Two things stay square, geometrically rather than stylistically: 50% for actual circles,
+   and half-height caps on the 2px slider tracks, where the radius only rounds the ends of a
+   line. Full-bleed bands (nav, hero section) and single-side dividers take no radius at all.
+
+   Only the border-radius scale is real: rounded-sm/md/lg/xl etc. are used
+   throughout the site and are keyed to --radius below. Everything else that
+   used to live here (shadcn's color/dark-mode token system, its Tailwind
+   import, the .dark variant) fed only the 4 unused ui/ primitives — nothing
+   in the shipped site toggles a .dark class or reads --background/--border/
+   etc.; the real theming is the --xrio-* system below, switched via
+   [data-palette]/[data-scheme]. */
+@theme inline {
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --radius: 0.625rem;
+}
+
+@layer base {
+  body {
+    background: var(--xrio-bg, #000);
+    color: var(--xrio-fg, #c6d8ee);
+    /* Fixed, not tokenised. --xrio-body-font was here so the Font switch could retype the whole
+       page; that switch is display-only now (see handleFont), so nothing ever set this and the
+       var resolved to its own fallback on every render. */
+    font-family: var(--font-space-grotesk), system-ui, sans-serif;
+  }
+}
+
+/* ── XRIO DESIGN TOKENS ── */
+/* Defaults match the Gilded palette (DesignPanel.tsx THEMES.p5) so first paint = panel's active state */
+:root {
+  --xrio-bg: #080808;
+  --xrio-fg: #fff;
+  --xrio-fg2: rgba(255, 255, 255, 0.8);
+  --xrio-fg3: rgba(255, 255, 255, 0.22);
+  --xrio-fg4: rgba(255, 255, 255, 0.08);
+  --xrio-fg-hi: rgba(255, 255, 255, 0.9);
+  --xrio-fg-mid: rgba(255, 255, 255, 0.5);
+  --xrio-fg-dim: rgba(255, 255, 255, 0.35);
+  --xrio-fg-lo: rgba(255, 255, 255, 0.2);
+  --xrio-border: rgba(255, 255, 255, 0.07);
+  --xrio-border2: rgba(255, 255, 255, 0.13);
+  --xrio-border3: rgba(255, 255, 255, 0.16);
+  --xrio-border4: rgba(255, 255, 255, 0.32);
+  --xrio-surface: rgba(255, 255, 255, 0.03);
+  --xrio-tint: rgba(255, 255, 255, 0.14);
+  --xrio-accent: #d3bd89;
+  --xrio-accent2: #f5f5f0;
+  --xrio-accent-fg: #080808;
+  /* Defaults match --xrio-accent so pre-hydration paint and dark palettes are unchanged;
+     applyTheme overrides them per-theme (only Vellum currently differs). */
+  --xrio-accent-hover: #d3bd89;
+  /* The accent re-weighted to survive as running text. Only Cyanotype needs a distinct value —
+     its accent is a pale button fill that measures 1.6:1 as prose on its own ground. Every other
+     palette's accent is already an ink, so this falls back to the accent itself; falling back to
+     accentFg instead would paint near-black text on a near-black page. */
+  --xrio-accent-text: #d3bd89;
+  /* ── ACCENT AS FILL vs ACCENT AS MARK ──
+     Two tokens because on paper one colour cannot do both jobs, and the reason is arithmetic
+     rather than taste. Clearing 4.5:1 as text on a white page caps a colour's luminance, and any
+     yellow held under that cap reads olive or brown — which is exactly why Vellum's accent looked
+     brown. A yellow that actually looks yellow can only ever be a FILL with dark text on it.
+
+     So --xrio-accent stays the colour that MARKS: text, hairlines, slider tracks, the logo, focus
+     rings — everything measured against the page. --xrio-accent-fill is the colour that FILLS,
+     measured only against the label sitting on it, which is where the whole brightness range
+     opens up. It defaults to the accent, so the dark palettes are unchanged and only Vellum
+     supplies a distinct value. */
+  --xrio-accent-fill: var(--xrio-accent);
+  --xrio-glow: rgba(211, 189, 137, 0.17);
+  --xrio-glow2: rgba(245, 245, 240, 0.14);
+  /* See RADIUS TIERS above. Named by role, not by size, so a use site says what it is. */
+  --xrio-r-control: var(--radius-sm); /*  6px */
+  --xrio-r-surface: var(--radius-lg); /* 10px */
+  --xrio-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --xrio-logo-font: "Anta", system-ui, sans-serif;
+  --xrio-bg-r: 8;
+  --xrio-bg-g: 8;
+  --xrio-bg-b: 8;
+
+  /* The nav's height, and therefore the hero's top padding and the top edge of the band the
+     copy and the disk are both centred in. A token because three places have to agree on it:
+     Nav.tsx sets the bar, Hero.tsx pads the section by it, and BlackholeContext mirrors it as
+     NAV_PAD for anchorY (JS, so it cannot read this). 60, down from 72: the bar carries a 19px
+     wordmark and a 27px badge, so 72 was 45px of air around 27px of content, and every pixel of
+     it came off the top of the frame. */
+  --xrio-nav-h: 60px;
+}
+
+/* ── HERO "Anything." ──
+   fg2 everywhere — the plain foreground at 80%, which is what makes it read as the same soft grey
+   on Haze as on the other dark palettes.
+
+   Vellum used to override this to --xrio-accent-muted so the word matched the nav's disabled
+   "Coming Soon" badge exactly. That badge is no longer a fill at all (see DISABLED "COMING SOON"
+   BADGE below), so the thing this was matching no longer exists and the token it read is gone.
+   One ink weight for the word on all four palettes. */
+.xrio-hero-anything {
+  color: var(--xrio-fg2);
+}
+
+/* ── LOGO MARK ──
+   The ring-and-disc coin art is retired in favour of the cropped bird-only mark from
+   proxidize/px-scraper's sidebar — same lineage (it descends from this repo's own
+   px-scraper's own mark), just the ring erased and cropped tight. That source asset carries no
+   colour of its own (grey strokes + alpha), so it's rendered as a CSS mask rather than a flat
+   image tag: the visible pixels take background-color instead of being locked to whatever
+   shade shipped in the PNG. That's also how px-scraper itself uses it, over its rail's primary.
+
+   currentColor, so it inherits the same --xrio-fg the <a> hands the wordmark. The lockup is ONE
+   mark and both halves must be one colour: the bird used to take accent2 and only the wordmark
+   took currentColor, which on Haze painted a #9ba9bb bird beside a white "xrio" — the identity
+   picking up a palette tint that nothing else in the nav has. Nav.tsx's own comment already
+   claimed both halves could not drift apart; now that is true.
+
+   A consequence worth keeping: the mark never carries an accent, so it cannot inherit an
+   accent's contrast problem either. The [data-scheme="light"] override that used to reset this
+   to ink on paper is gone with it — there is nothing left to reset. */
+.xrio-logo {
+  display: inline-block;
+  mask-image: url(/logo-macaw-mark.png);
+  -webkit-mask-image: url(/logo-macaw-mark.png);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  background-color: currentColor;
+}
+/* ── WORDMARK ──
+   "xrio" is a mask, not text, for the same reason the bird beside it is: it needs a stroke weight
+   Anta does not ship. The geometry is what the mark is chosen for — the flat-terminal r above all
+   — and Anta is single-weight 400, whose stems measure 3.6px against the bird's 1.53px at the size
+   the two sit at. Every lighter face that has that r is a different r.
+
+   So the glyphs are Anta's own outlines with every edge shaved back by morphological erosion,
+   baked at the nav's 28px, and tracked at ZERO: the gaps are Anta's own sidebearings and nothing
+   else. The bake and every step before it added tracking on top — 0.08em in the live text it
+   replaced, then 0.075/0.07 (too loose / too tight against the old heavier shave), then 0.065,
+   0.041, and finally none. A lockup is not running text; the word wants to be one mark beside the
+   bird, and every em of tracking was working against that. Being a mask rather than an image means it still takes
+   background-color, so it follows the palette like everything else, and it is a 3x asset shown at
+   1x so it stays sharp on retina.
+
+   TRACKING IS RE-CUT FROM THE PNG, NOT RE-BAKED FROM THE FONT. The four glyphs are separated by
+   whole empty columns, so tightening is a matter of sliding them together: split the asset on
+   those columns, close each of the three gaps by the same whole number of 3x pixels, re-composite.
+   That keeps the eroded letterforms bit-identical, which re-rendering from Anta would not — the
+   erosion is a whole-pixel operation and a fresh bake can land the shave a pixel differently.
+   1px at 3x over a 28px bake is 1/84 em. The 0.065em bake carried 5.46px of tracking in every
+   gap, so closing 5 lands +0.0055em — the nearest whole pixel to zero, and 6 would overshoot to
+   -0.0064. The asset went 153 -> 138 wide and the gaps 10/9/10 -> 5/4/5. Note the `r` carries a
+   1px-detached arm tip (its own column 78 in the 153px asset): it is part of the glyph, not a
+   gap, and must travel with it.
+
+   The gaps are NOT equalised. 10/9/10 is what Anta's sidebearings asked for and 5/4/5 preserves
+   that relationship; subtract from each, never flatten them to one number. Subtracting is also
+   one-way — the closed columns are gone from the asset, so loosening again means re-baking from
+   Anta and re-deriving the shave.
+
+   THE SHAVE IS A FRACTION OF X-HEIGHT (2%), NOT A PIXEL COUNT. It was chosen on a comparison
+   sheet whose glyphs were drawn at x-height 58px, where it measured 1.5px; Anta at the nav's 28px
+   has a 14px x-height, so the same 1.5px there is four times the shave and erases the letterforms
+   outright — which is exactly what the first cut of this did. 2% of x-height is 0.28px at the
+   nav's size. Rebuild from the fraction, never from the pixel figure.
+
+   It also has to be built at a high supersample to be adjustable at all: erosion is a whole-pixel
+   operation, so at 6x the whole band from ~2.4% to ~3.0% quantises to the same 2px kernel and a
+   tenth of a percent changes nothing. 24x is what makes 0.1% steps real.
+
+   The <a> carries the accessible name now — the text node it replaced used to supply it. */
+.xrio-wordmark {
+  display: inline-block;
+  /* 4% off 51.0 x 19.3. Both axes, so mask-size: contain has the same ratio to fit and the
+     letterforms do not re-letterbox inside the box. Width then tracks the asset's own width:
+     tightening the tracking makes the PNG narrower without changing its height, and a box left
+     at the old ratio would letterbox the word and re-open the space the tightening just closed.
+     48.96 * 138/153. */
+  width: 44.16px;
+  height: 18.53px;
+  mask-image: url(/logo-xrio-wordmark.png);
+  -webkit-mask-image: url(/logo-xrio-wordmark.png);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  background-color: currentColor;
+}
+
+/* The command prompt is ink, so it follows the theme's ink rule: accent2 on the dark palettes
+   (where that light metal IS the ink), the dark accent on the light palettes — accent2 is
+   material there, and would land near 1.5:1 on paper. */
+.xrio-prompt {
+  color: var(--xrio-accent2);
+}
+:root[data-scheme="light"] .xrio-prompt {
+  color: var(--xrio-accent);
+}
+
+/* ── RECESSED WELL ──
+   A surface a step darker than the card housing it — the command bars read this way. Dark
+   palettes just darken further; light palettes can't go
+   dark without breaking the paper look, so they get a much fainter tint instead — same
+   direction, scaled to what each scheme can carry. */
+:root {
+  --xrio-well: rgba(0, 0, 0, 0.32);
+}
+:root[data-scheme="light"] {
+  --xrio-well: rgba(0, 0, 0, 0.045);
+}
+
+/* ── HERO STAGE ──
+   The outer card the dashboard preview sits in, docked into the hero's bottom band. Its own
+   tier (see RADIUS TIERS) because it is a backdrop, not a component: at --xrio-r-control a
+   surface this wide reads as a very large button.
+
+   The fill is an OCCLUSION, not a tint. A translucent scrim was the obvious move — it is what
+   the nav does — but measured over this band the disk sits at L 0.0052 on Gilded and 0.8632 on
+   Vellum, and a black wash gives the same *relative* step on both while reading as 1.01:1 on
+   Gilded (invisible) and needing a 35% wash on Vellum to clear 1.5:1, i.e. a mid-grey slab on
+   white paper. Painting the page colour instead makes the disk's strands terminate at the edge:
+   the cutout is literal, and it needs no per-palette tuning because it is not a tint at all.
+
+   NO BORDER. The argument above used to end with a hairline being load-bearing rather than trim,
+   and it was sound at the time: the plate then sat at the page's own colour, so on Vellum the
+   disk darkened the paper by only ~2.7% across this band and occlusion alone drew a strong edge
+   where strands were dense and nothing where they were sparse. Two things retired that. The
+   plate now sits BELOW the page rather than at it, which is a real step on paper (1.08:1) that
+   holds all the way round regardless of what the disk is doing. And the inset is ~100px, so the
+   space itself is now the strongest edge signal in the composition — a 1px line around that much
+   negative space reads as a box drawn on the hero, which is the thing this frame keeps being
+   asked not to be.
+
+   On the dark palettes the plate is left with no drawn edge at all, and that is the intent: what
+   marks the frame there is the disk's strands TERMINATING, clipped against this element's
+   rounded rect. The cutout is the edge. Below the fold there is no disk and so no edge, which
+   costs nothing — the card is the only thing down there to see. */
+/* ── FROSTED MATERIAL ──
+   The nav and the plate are ONE material, not two colours that happen to be close: both are this
+   token, and neither can drift from the other because there is only one of it. That is what the
+   reading order needs — simulation first, then plate and card, then nav — and a plate that is a
+   different colour from the nav inverts the last two before anything on the page has been read.
+
+   Derived from --xrio-bg rather than written per palette, so Haze's blue-black ground frosts to a
+   blue-black grey and no palette needs its own value. 94.6% + 5.4% white puts the tint at #151515
+   on Gilded; at 68% over the page that composites to ~#111111, 1.06:1.
+
+   TINT IS THE GREY DIAL, ALPHA IS THE GLASS DIAL, and they are kept apart because they do not
+   trade cleanly. The tint walked 7% -> 5% -> 6% -> 5.4%, and the fractional value is not
+   over-precision: one percent of the tint is only ~2.5 sRGB values on the tint and ~1.7 after the
+   alpha, so whole-percent steps are coarser than the difference being judged. 7% at 72% alpha put
+   the plate at #151515 (1.09:1) and read as too light; 5% at 62% took it to #101010 (1.05:1) and
+   thinned the foot further than it needed. This is the midpoint of the last two.
+
+   The reason a value this low can read as too light at all is that the frost does not deliver it
+   flat. The blur puts the disk's outer strands through the plate's whole top band, so the top
+   renders well ABOVE its own composite while the foot sits exactly at it — judge the treatment by
+   its brightest region, not by the token. Landing on the same #121212 as the old opaque ladder's
+   4% floor, the one that was "a lift you caught only at the edge", is not the same thing as that
+   floor was: this one carries a bloom across its top and nothing behind it at the foot.
+
+   WHAT MAKES ANY GREY AFFORDABLE HERE is that it is not the only thing separating the plate from
+   the card. The card carries a --xrio-border2 hairline of its own, so the fill contrast between
+   the two (1.36:1 against flat black, 1.28:1 against this grey) is a supporting cue rather than
+   the whole edge. Without that hairline a grey this close would put the two within the 1.14:1 that
+   once had them reading as one dim mass — and note the direction: darkening the plate WIDENS that
+   gap, so every step down the grey dial costs the card nothing.
+
+   AND THE FROST IS THE VISUAL INTEREST, replacing the ruled grid that was here. Blur plus
+   translucency means the plate is not one tone: across its top the simulation's outer strands
+   bleed through as a soft bloom, and below the fold, where there is nothing behind it, it settles
+   to the flat grey. Same treatment as the nav gets over the disk, so the two read as the same
+   pane of glass at opposite ends of the section — and it costs no new pattern on a page whose
+   every other surface is a flat wash inside a hairline. */
+:root {
+  --xrio-frost-tint: color-mix(in srgb, var(--xrio-bg) 94.6%, #fff);
+  /* 68%. Dropping alpha does two things at once: it darkens the composite over a black page and
+     puts more of the disk through the top band, so the plate reads thinner and darker together.
+     Below the fold there is nothing behind it, so down there alpha is PURELY the darkening half —
+     which is why 62% went too thin at the foot and the tint had to come back up to compensate.
+     Holding at 68% while the tint moves is what keeps that compensation legible as one dial. */
+  --xrio-frost: color-mix(in srgb, var(--xrio-frost-tint) 68%, transparent);
+  /* 12px, having gone 18 -> 22 -> here. Blur radius is THICKNESS: a wide kernel smears the
+     strands far from where they actually are, which reads as a deep frosted slab, and a narrow one
+     keeps them near their true positions, which reads as a thin clear pane. 22px was the former
+     and this is deliberately the latter — at 12px the disk stays recognisable as the disk through
+     the plate's top band rather than dissolving into a wash, which is what makes the plate read as
+     something laid OVER the artwork instead of a soft-edged hole in it. */
+  --xrio-frost-blur: 12px;
+  /* The two frosted panes' INNER edge — the only depth cue either one gets, and it points
+     inward on purpose. The plate's outer drop shadow was removed because a shadow cast onto
+     the page says "object in front of it", and the plate is the opposite: a recess the card
+     sits in. Shading turned inward says exactly that, and the nav — glass laid over the disk
+     at the other end of the same section — gets the same edge so the two still read as one
+     material. It is a GLOW on the dark palettes and a SHADOW on paper — the SIGN is the whole
+     adaptation here, not the weight: black over #111111 does nothing whichever number you pick,
+     so the dark palettes have to shade upward to be seen at all. The two alphas landing a
+     hundredth apart is therefore not a missed step, it is what parity looks like once the
+     direction is right. Paper walked 0.14 -> 0.07 -> 0.04: it started at the retired plate shadow's
+     own light value, read as a smudge rather than an edge, and halving it once was not enough.
+     The shading is not the boundary here, the hairline under it is, so this only has to suggest
+     thickness behind that line — anything that resolves as its own mark on paper is already past
+     that. Below ~0.03 the plate goes flat. */
+  --xrio-pane-inner: rgba(255, 255, 255, 0.06);
+}
+:root[data-scheme="light"] {
+  /* Signed for paper, but NOT the same size step. 5.4% black off #F1F2F3 gave a #E8E9EA
+     composite at 1.10:1, half again the darkening the same number buys on the dark palettes —
+     paper has far more room below it than #080808 has above it, so an equal percentage is not an
+     equal move. 3% lands ~#ECEDEE and 1.06:1, matching Gilded's own 1.06 against its ground, so
+     the two schemes now sit the same distance off their page rather than the same percentage. */
+  --xrio-frost-tint: color-mix(in srgb, var(--xrio-bg) 97%, #000);
+  --xrio-pane-inner: rgba(0, 0, 0, 0.04);
+}
+
+/* ── REGISTRATION TICKS ──
+   Four 6px L-marks inset 4px from the frame, 1px stroke — the viewfinder's corner marks from
+   the design spec. On the OUTERMOST frame of a block and never on a cell inside it — that is what
+   keeps them reading as registration marks rather than decoration, and it is a rule about nesting,
+   not about count. So the pricing cards, the credits table and the url field carry them alongside
+   the output-format panel and the "what it handles" grid, while the tier grid nested inside a
+   pricing card and the six cells inside that features grid do not.
+   The parent needs position:relative; the marks are aria-hidden decoration. Being absolutely
+   positioned also keeps them out of flex/grid flow, so a grid parent's cells are unaffected. */
+/* inset 3px, not 4: the tick radius is the host's radius minus this inset, so at the page's
+   6px radius a 4px inset left only 2px of curve on a 6px arm — geometrically concentric but
+   too small to read as anything but a square corner. 3px doubles the curve to half the arm
+   while keeping the two arcs parallel. Larger frames get proportionally more curve for free. */
+.xrio-ticks {
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+}
+.xrio-ticks i {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  /* --xrio-tick-ink, not --xrio-accent: on a palette whose accent is a pale blue the marks came
+     out blue, and registration marks read as printer's marks only when they are ink-coloured. */
+  border: 0 solid var(--xrio-tick-ink, var(--xrio-accent));
+  /* The L-marks follow their frame's corner instead of cutting across it — concentric with the
+     host, since the marks sit inset 3px and take the host's radius minus that inset, keeping the
+     two arcs parallel. The surface tier is the DEFAULT, supplied as a var() fallback at each use
+     below rather than declared here: a custom property declared on this element would outrank the
+     same property inherited from the host, so a host could never override it. */
+  /* Decorative registration marks, not a focus indicator — the 3:1 non-text minimum doesn't
+     bind here (unlike the spec's viewfinder, where the frame IS the focus ring). 0.55 keeps
+     them legible on the low-contrast accents without turning them into loud brackets. */
+  opacity: 0.55;
+  transition: opacity 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Cyanotype's accent is Haze's pale blue, which as a corner mark reads as a stray blue bracket
+   rather than a registration tick. Its own near-black ink instead. Every other palette leaves the
+   token unset and falls back to the accent, so none of them change. */
+:root[data-palette="cyan"] {
+  --xrio-tick-ink: #08272f;
+}
+
+.xrio-ticks i:nth-child(1) {
+  top: 0;
+  left: 0;
+  border-top-width: 1px;
+  border-left-width: 1px;
+  border-top-left-radius: var(--xrio-tick-r, calc(var(--xrio-r-surface) - 3px));
+}
+.xrio-ticks i:nth-child(2) {
+  top: 0;
+  right: 0;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-top-right-radius: var(--xrio-tick-r, calc(var(--xrio-r-surface) - 3px));
+}
+.xrio-ticks i:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-bottom-left-radius: var(--xrio-tick-r, calc(var(--xrio-r-surface) - 3px));
+}
+.xrio-ticks i:nth-child(4) {
+  bottom: 0;
+  right: 0;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+  border-bottom-right-radius: var(--xrio-tick-r, calc(var(--xrio-r-surface) - 3px));
+}
+/* The finder locks on: ticks step to full metal together on hover/focus. */
+.xrio-ticks-host:hover .xrio-ticks i,
+.xrio-ticks-host:focus-within .xrio-ticks i {
+  opacity: 1;
+}
+
+/* ── DISABLED "COMING SOON" BADGE ──
+   An outline, not a fill. This chip is an inert <span> announcing a state; a filled rectangle is
+   the grammar of a button, and every fill this rule tried carried the same defect — the disabled
+   element outweighed the live ones beside it.
+
+   Measured fill-vs-page before the change: Gilded 1.17:1, Cyanotype 1.20:1, Vellum 5.29:1. The
+   dark palettes' fg4 wash was already doing almost nothing, so dropping it costs them nothing.
+   Vellum's opaque muted ink was the outlier — a mid-grey slab that read as the heaviest object
+   in the nav while "Docs / Examples / Changelog" sat beside it as plain text. Chasing that with
+   a paler per-theme fill only rearms the trap for the next palette; removing the fill disarms it
+   by construction.
+
+   The quiet now comes from the container, so the label is free to be normal ink. fg-mid holds
+   ~5.2:1 on the dark palettes but only ~3.1:1 on paper — alpha buys far less separation over a
+   light ground — so the light schemes step up to fg2 (7.9:1 Vellum, 7.2:1 Cyanotype). Same
+   asymmetry, same remedy as .xrio-ink-link-dim below.
+
+   The 1px hairline is decorative: the chip is not an interactive control and its meaning is
+   carried entirely by the label, so WCAG 1.4.11's 3:1 does not bind on the border. */
+.xrio-badge-soon {
+  background: none;
+  border: 1px solid var(--xrio-border4);
+  color: var(--xrio-fg-mid);
+  cursor: default;
+}
+:root[data-scheme="light"] .xrio-badge-soon {
+  color: var(--xrio-fg2);
+}
+
+/* ── PRIMARY CTA ──
+   Same construction as the nav badge but at full strength: accent-fill as fill, the theme's
+   accent-fg as label. Borderless on every palette — an inset ring was tried to give the yellow
+   a silhouette on paper (it is only 1.54:1 there) and cut for being too heavy. Revisit if this
+   ever becomes a live control, when WCAG 1.4.11's 3:1 starts binding on that boundary. */
+.xrio-cta-primary {
+  background: var(--xrio-accent-fill);
+  color: var(--xrio-accent-fg, #fff);
+  cursor: default;
+}
+
+/* ── DIM INK ──
+   The one weight for de-emphasised copy that still has to be read: eyebrows, meta labels, the
+   quieter half of a link pair. fg-mid alone cannot do this job on both schemes — it clears
+   4.5:1 on the dark palettes (~5.2:1) but reaches only ~3.1:1 on Vellum/Cyanotype's paper,
+   because alpha buys far less separation over a light ground than over near-black. The light
+   value is mixed toward the palette's own ink rather than expressed as opacity, so it composites
+   opaquely and cannot bleach whatever sits behind it.
+
+   Measured: 4.88:1 on Vellum, 4.56:1 on Cyanotype. Cyanotype's margin is thin — if its paper or
+   ink moves, re-measure this before assuming it still passes. 65% is the value .xrio-ink-link-dim
+   already used for exactly this problem; kept rather than re-derived so there is one number. */
+:root {
+  --xrio-ink-dim: var(--xrio-fg-mid);
+}
+[data-scheme="light"] {
+  --xrio-ink-dim: color-mix(in srgb, var(--xrio-fg) 65%, var(--xrio-bg));
+}
+
+/* ── INK LINKS ──
+   Shared hover treatment for the plain text links (Nav, Hero, Footer, ClosingCTA)
+   that previously each hand-rolled their own onMouseEnter/onMouseLeave pair to
+   swap `color`. One CSS rule covers hover AND keyboard focus, which the manual
+   JS version never did. */
+.xrio-ink-link {
+  color: var(--xrio-fg2);
+}
+.xrio-ink-link:hover,
+.xrio-ink-link:focus-visible {
+  color: var(--xrio-fg);
+}
+
+/* fg3 (0.22 alpha) reads at ~1.9:1 on the dark palettes' near-black canvas — well under the
+   4.5:1 this text needs. fg-mid (0.50) clears that on the dark palettes (~5.2:1) but only
+   reaches ~3.1:1 on Vellum/Cyanotype's light paper, so light themes get their own value via
+   color-mix rather than opacity — opacity would also dim the .cs-link "Coming soon" tooltip
+   this element carries. Kept at the same specificity as the hover rule below (no :root prefix)
+   and declared first, so hover still wins on tie via source order. */
+.xrio-ink-link-dim {
+  color: var(--xrio-ink-dim);
+}
+.xrio-ink-link-dim:hover,
+.xrio-ink-link-dim:focus-visible {
+  color: var(--xrio-fg2);
+}
+
+/* ── CS-LINK TOOLTIP ── */
+.cs-link {
+  position: relative;
+}
+.cs-link::after {
+  content: "Coming soon";
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  background: var(--xrio-bg);
+  color: var(--xrio-fg2);
+  border: 1px solid var(--xrio-border2);
+  font-family: var(--xrio-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: var(--xrio-r-control);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+}
+.cs-link:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+@keyframes sbar {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-bar {
+    animation: none;
+  }
+}
+
+/* ── RESPONSIVE ── */
+/* CodeCompare: side-by-side border on md+, top border when stacked */
+.code-compare-right {
+  border-top: 1px solid var(--xrio-border3);
+}
+@media (min-width: 768px) {
+  .code-compare-right {
+    border-top: none;
+    border-left: 1px solid var(--xrio-border3);
+  }
+}
+
+/* DataStream canvas — rotate 90° on mobile so stream opens toward bottom */
+@media (max-width: 767px) {
+  .stream-canvas-wrap {
+    transform-origin: center center;
+    transform: rotate(90deg) scaleX(1.8);
+  }
+}
+
+/* ── PRICING ── */
+.pricing-tier {
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.pricing-tier:hover {
+  transform: translateY(-3px);
+  background: var(--xrio-fg4) !important;
+}
+
+/* Rate grid: dividers between cells only — stacked on mobile, columnar on md+. */
+.pricing-grid > * + * {
+  border-top: 1px solid var(--xrio-border3);
+}
+@media (min-width: 768px) {
+  .pricing-grid > * + * {
+    border-top: none;
+    border-left: 1px solid var(--xrio-border3);
+  }
+}
+
+/* Commitment slider. Track is painted via a gradient stop at --pricing-slider-pct
+   so the filled portion tracks the thumb without a second element. */
+.pricing-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+  display: block;
+}
+.pricing-slider::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--xrio-accent-fill) 0%,
+    var(--xrio-accent-fill) var(--pricing-slider-pct, 0%),
+    var(--xrio-border3) var(--pricing-slider-pct, 0%),
+    var(--xrio-border3) 100%
+  );
+}
+.pricing-slider::-moz-range-track {
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--xrio-accent-fill) 0%,
+    var(--xrio-accent-fill) var(--pricing-slider-pct, 0%),
+    var(--xrio-border3) var(--pricing-slider-pct, 0%),
+    var(--xrio-border3) 100%
+  );
+}
+.pricing-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--xrio-accent-fill);
+  border: 3px solid var(--xrio-bg);
+  box-shadow:
+    0 0 0 1px var(--xrio-accent),
+    0 0 20px -4px var(--xrio-glow);
+  transition: transform 0.15s ease;
+}
+.pricing-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--xrio-accent-fill);
+  border: 3px solid var(--xrio-bg);
+  box-shadow:
+    0 0 0 1px var(--xrio-accent),
+    0 0 20px -4px var(--xrio-glow);
+  transition: transform 0.15s ease;
+}
+.pricing-slider:hover::-webkit-slider-thumb,
+.pricing-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+.pricing-slider:hover::-moz-range-thumb,
+.pricing-slider:focus-visible::-moz-range-thumb {
+  transform: scale(1.18);
+}
+.pricing-slider:focus {
+  outline: none;
+}
+.pricing-slider:focus-visible::-webkit-slider-runnable-track {
+  outline: 1px solid var(--xrio-accent);
+  outline-offset: 6px;
+}
+.pricing-slider:focus-visible::-moz-range-track {
+  outline: 1px solid var(--xrio-accent);
+  outline-offset: 6px;
+}
+
+.pricing-step {
+  transition: color 0.15s ease;
+}
+.pricing-step:hover {
+  color: var(--xrio-fg2) !important;
+}
+
+/* Slider-driven text scrambles to its new value via the useScramble hook in
+   Pricing.tsx — no CSS animation involved; reduced-motion is handled there. */
+
+/* Site-lookup URL field */
+.pricing-input {
+  background: var(--xrio-bg);
+  border: 1px solid var(--xrio-border3);
+  border-radius: var(--xrio-r-control);
+  color: var(--xrio-fg);
+  font-family: var(--xrio-mono);
+  font-size: 13px;
+  padding: 14px 16px;
+  width: 100%;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.pricing-input::placeholder {
+  color: var(--xrio-fg-dim);
+}
+.pricing-input:hover {
+  border-color: var(--xrio-border4);
+}
+.pricing-input:focus {
+  outline: none;
+  border-color: var(--xrio-accent);
+  box-shadow: 0 0 24px -8px var(--xrio-glow);
+}
+
+.pricing-submit {
+  /* Type matches the hero, nav and closing CTAs exactly: inherited sans, 13px,
+     weight 500, no tracking. This used to be 12px mono with .04em — the only
+     button on the page set in the mono, which read as a different control from
+     the two beside it. Padding stays larger: these are full-width blocks in a
+     grid, not inline buttons. */
+  font-size: 13px;
+  font-weight: 500;
+  padding: 14px 22px;
+  border: none;
+  /* Matches the hero and closing CTAs, which use Tailwind's rounded-sm
+     (--radius-sm, 0.25rem). Named via the token rather than hard-coding 4px so
+     the whole page's buttons stay in step if the scale is retuned. */
+  border-radius: var(--xrio-r-control);
+  cursor: pointer;
+  white-space: nowrap;
+  text-align: center;
+  text-decoration: none;
+  transition:
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+.pricing-submit:hover {
+  transform: translateY(-1px);
+}
+
+/* Ghost variant: the calculator and per-site lookup are peers of the free-credit
+   CTA, not lesser actions — outlined rather than filled so no single column in
+   the try-it row dominates. */
+.pricing-submit-ghost {
+  background: transparent;
+  color: var(--xrio-fg2);
+  border: 1px solid var(--xrio-border3);
+  transition:
+    border-color 0.18s ease,
+    color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+.pricing-submit-ghost:hover {
+  border-color: var(--xrio-accent);
+  color: var(--xrio-fg);
+  background: var(--xrio-fg4);
+}
+
+/* Suggestion dropdown — a real list, so it inherits the section's palette
+   instead of the OS-native datalist popup. */
+.site-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--xrio-bg);
+  border: 1px solid var(--xrio-border3);
+  border-radius: var(--xrio-r-control);
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.6);
+  max-height: 190px;
+  overflow-y: auto;
+  /* Clip the first/last option's square corners to the panel's rounded edge. */
+  overflow-x: hidden;
+}
+.site-suggest li + li {
+  border-top: 1px solid var(--xrio-border);
+}
+.site-suggest button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--xrio-mono);
+  font-size: 12px;
+  color: var(--xrio-fg2);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.site-suggest button:hover,
+.site-suggest button:focus-visible,
+.site-suggest li[aria-selected="true"] button {
+  background: var(--xrio-fg4);
+  color: var(--xrio-fg);
+  outline: none;
+}
+
+/* Result slot — one fixed height across the empty, unknown, and resolved states
+   so resolving a domain never reflows the column. Matches the input's height and
+   radius so the two sit level side by side. */
+.site-slot {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 11px 14px;
+  border-radius: var(--xrio-r-control);
+}
+
+/* Site-checker verdict appears in place as the domain resolves — fade it in so
+   it reads as an answer arriving rather than a layout jump. */
+.site-verdict {
+  animation: site-verdict-in 0.22s ease-out;
+}
+@keyframes site-verdict-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .site-verdict {
+    animation: none;
+  }
+}
+
+/* Credits draw-down table (credits pricing model). Two columns on md+, one
+   below. The 1px gap plus a background on the cells paints the grid lines, so no
+   cell needs to know whether it sits on an edge — which is what makes an odd row
+   count at the bottom of a 2-up grid render without a dangling rule. */
+.credit-table {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  background: var(--xrio-border3);
+  /* The 1px gaps are what let this background show through as hairline rules, which also
+     means the rows' own fills run right into the outer corners — so clipping is what makes
+     the radius visible at all here, exactly as on the Features grid. */
+  border-radius: var(--xrio-r-surface);
+  overflow: hidden;
+}
+/* Column-major on md+: fills the left column top-to-bottom before starting the
+   right, so the list reads down rather than across. Column flow needs the row
+   count fixed (otherwise it makes one long column), and --credit-rows carries it
+   in from the component so the CSS never disagrees with the data length.
+
+   grid-template-columns is deliberately absent here: with auto-flow column and a
+   fixed row count, the two tracks are implicit. Declaring both would fight over
+   which axis defines the break. */
+@media (min-width: 768px) {
+  .credit-table {
+    grid-auto-flow: column;
+    grid-template-rows: repeat(var(--credit-rows, 3), auto);
+    grid-auto-columns: 1fr;
+  }
+}
+/* Rows carry a raised surface over the footer's plain background. --xrio-surface
+   is a 3% fg wash on dark palettes, which vanishes against near-black, so the
+   row paints bg first and layers the wash on top to get a real step. */
+/* align-items: flex-start, not baseline. Baseline made the 22px credit figure and
+   its 13px title share a baseline (42 vs 41.25px), but a figure that much larger
+   has a far taller cap height, so equal baselines left the number's ink starting
+   5.55px ABOVE the title's — the number looked lifted out of its own row.
+
+   Aligning the block tops instead leaves the cap tops 0.55px apart — sub-pixel,
+   so the figure and its label start on one visual line with no nudge needed.
+   (It lands this close because the figure sets line-height: 1 and so carries
+   almost no half-leading of its own; if that changes, re-measure.) */
+.credit-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 18px 24px;
+  background: linear-gradient(var(--xrio-surface), var(--xrio-surface)), var(--xrio-bg);
+}
+@media (min-width: 768px) {
+  .credit-row {
+    padding: 20px 28px;
+  }
+}
+/* The cost figure column is fixed-width so every row's label starts on the same
+   vertical line regardless of how wide its unit string is.
+
+   100px: the widest unit is now "per 10 results" at 88.2px of ink, leaving ~12px
+   of trailing air before the 18px flex gap. Five of the six rows say "per page"
+   (50.4px), so most rows sit at ~50px of air and only the Search row tightens —
+   the remaining unevenness is the unit strings' own length difference, which a
+   fixed column cannot equalise without giving up the shared title edge.
+   History: 132px when "per browser minute" (113.4px) was the widest unit, which
+   left a 63px air spread; that row is now Screenshot / "per page". */
+.credit-row > :first-child {
+  flex: 0 0 100px;
+}
+/* Cost column mirrors the label column's structure — figure over unit, same 2px
+   gap — so both columns' first lines start together and their second lines follow
+   at the same rhythm. */
+.credit-row-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  min-width: 0;
+}
+/* The unit's ink sat 2.2px below the note's. Two causes stack up: the figure sets
+   line-height 1 (so its box ends right at its baseline, with no descender space)
+   while the title's 13px/1.5 box carries half-leading below it, and the 10.5px unit
+   has less half-leading above it than the 12px note.
+
+   Fixed on the gap, not the line box: enlarging the unit's line-height grows it
+   symmetrically and pushed the ink further DOWN (2.2 -> 3.32px). Pulling the gap
+   negative by the measured 2.2px raises the unit's cap onto the note's line. */
+.credit-row-cost .pricing-unit {
+  margin-top: -2.2px;
+}
+.credit-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The credit figures carry the accent — the color lands on the numbers, which are
+   what the table exists to communicate, and the surrounding text stays neutral.
+   Scoped to .credit-row so the 46px slider headline and trial figure keep accent2:
+   at that size the accent reads as a large flat color field rather than emphasis.
+
+   Applies to every palette including Cyanotype, so the numbers are the same color
+   as the CTA fill. Only Cyanotype's running copy is routed away from accent (see
+   the .pricing-accent-text override below); the figures are large bold numerals
+   and keep the accent. */
+.credit-row .pricing-figure {
+  color: var(--xrio-accent);
+}
+
+/* Footer note: page background against the rows' raised surface, accent ink.
+   Cyanotype's accent is its pale button *fill* — 1.48:1 as text on that theme's
+   ice ground — so light palettes use fg2 instead of the accent. */
+.credit-note {
+  background: var(--xrio-bg);
+  color: var(--xrio-accent);
+}
+:root[data-scheme="light"] .credit-note {
+  color: var(--xrio-fg2);
+}
+
+/* ── PRICING: CYANOTYPE'S PALE BLUE AS TEXT ──
+   Base values equal the dark-palette colors these elements used to set inline.
+   They live here because an inline style outranks a class, so the override below
+   could never win while the color stayed on the element.
+
+   Cyanotype's running COPY is the problem: its accent (#87d2f2) is the pale button
+   *fill*, and as prose on the ice ground it measures 1.6:1 — the light-blue text
+   that was actually hard to read. So .pricing-accent-text (the savings line, step
+   labels, feature bullets) swaps to accent-text (#3C5A68, 7.0:1), Cyanotype's own
+   ink-weight version of the same hue.
+
+   The credit FIGURES keep plain accent on every palette, Cyanotype included, so
+   they match the CTA fill — same #87d2f2 on the buttons and on the numbers. This
+   is a deliberate, requested exception to contrast: at 22px bold they are scored
+   against WCAG's 3:1 large-text bar and measure 1.48:1, so they do not meet it.
+   Accepted as an explicit design call: the pale blue IS Cyanotype's accent, and
+   tying the figures to the CTA fill was the point. Worth knowing the cost — the
+   credit cost appears nowhere else in the row, so on this one palette the numbers
+   are genuinely low-contrast rather than merely decorative. Do not copy this to
+   running copy — that is why .pricing-accent-text is routed away from accent just
+   below.
+
+   Still NOT touched: the --xrio-fg-dim and --xrio-fg-mid tokens themselves. An
+   earlier pass collapsed both to fg2 chasing a WCAG number and flattened the
+   hierarchy for no visible gain; that is still the wrong move. What changed is
+   which tokens the pricing CLASSES point at — see the note on .pricing-unit and
+   .pricing-dim below, which keeps two steps while making both legible. Vellum is
+   untouched entirely — its bronze is real ink. */
+.pricing-figure {
+  color: var(--xrio-accent2);
+}
+/* accent2 is fine on dark palettes (near-white on near-black), but on both light
+   palettes it's a mid-tone that measures ~1.9:1 as text — Vellum's accent2 is
+   documented material-only for exactly this reason. Figures fall back to the
+   palette's normal ink instead of inheriting that failure.
+
+   No :root prefix: that would out-specificity .pricing-figure.is-tbd (two
+   classes) and win the color even while RATES_TBD masks the figure, replacing
+   its dimmed em-dash with full-strength ink. Matching specificity here lets
+   source order settle it — .is-tbd is declared later, so it still wins. */
+[data-scheme="light"] .pricing-figure {
+  color: var(--xrio-fg);
+}
+/* Same specificity concern one level down: restate the accepted Cyanotype/
+   Vellum credit-row exception (accent, not accent2) so this fix stays scoped
+   to figures outside the credit row, without out-ranking .is-tbd there either. */
+[data-scheme="light"] .credit-row .pricing-figure {
+  color: var(--xrio-accent);
+}
+/* ── PRICING INK TIERS ──
+   Two dim tiers that both clear AA do not fit underneath body weight. For this type size the
+   4.5:1 floor sits at ~45% ink on the dark palettes but ~62% on paper — alpha buys far less
+   separation over a light ground — so the habitable band below fg2 is 45-50% on dark and
+   essentially nothing on light. At fg-mid/fg-dim these measured 3.19:1 on Gilded, 2.12:1 on
+   Vellum, 2.08:1 on Cyanotype, and .pricing-dim lands on the $100-$2,500 .pricing-step
+   BUTTONS, whose labels are interactive-control text.
+
+   So the pair moves up a notch instead of collapsing: units take fg2, dim copy takes ink-dim.
+   That is still two distinct steps, and the figures these annotate sit above both at full ink —
+   three ranked weights where there were two, all of them legible. --xrio-fg-dim keeps its own
+   role for .pricing-input::placeholder, where the minimum does not bind. */
+.pricing-unit {
+  color: var(--xrio-fg2);
+}
+.pricing-dim {
+  color: var(--xrio-ink-dim);
+}
+/* accent-text resolves to the plain accent on every palette whose accent is already an ink, so
+   this needs no per-palette override — Cyanotype's pale fill is the only one that differs. */
+.pricing-accent-text {
+  color: var(--xrio-accent-text);
+}
+
+@media (max-width: 520px) {
+  .credit-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .credit-row > :first-child {
+    flex: none;
+  }
+}
+
+/* The trial row needs no alignment CSS: it is bottom-aligned in the markup
+   (items-end), which lands the figure's baseline on the copy's last line within
+   0.6px for free — a 46px glyph at line-height 1 has almost no space below its
+   baseline, and 13px body text has little either. An earlier top-aligned version
+   needed hand-tuned per-item margins to fake a shared line; if you ever switch
+   back to items-start, that tuning comes back with it. */
+
+/* Try-it row: column dividers on md+, stacked rules below. The inline
+   borderRight is suppressed when stacked so no stray right-hand rule shows. */
+@media (max-width: 767px) {
+  .try-grid > * + * {
+    border-top: 1px solid var(--xrio-border3);
+  }
+  .try-column {
+    border-right: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pricing-submit:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pricing-tier:hover {
+    transform: none;
+  }
+  .pricing-slider::-webkit-slider-thumb,
+  .pricing-slider::-moz-range-thumb {
+    transition: none;
+  }
+}
+
+/* Design panel hidden on mobile (fixed 220px sidebar doesn't fit small viewports) */
+@media (max-width: 767px) {
+  #tp2-panel {
+    display: none !important;
+  }
+  [aria-label="Open theme panel"] {
+    display: none !important;
+  }
+}
+
+/* ── DESIGN PANEL ── */
+#tp2-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 220px;
+  background: var(--xrio-bg, #000);
+  border-left: 1px solid var(--xrio-border2);
+  backdrop-filter: blur(20px);
+  z-index: 590;
+  display: flex;
+  flex-direction: column;
+  padding: 64px 0 32px;
+  overflow-y: auto;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+}
+#tp2-panel.open {
+  transform: translateX(0);
+}
+
+.tp-section {
+  padding: 0 20px 22px;
+  border-bottom: 1px solid var(--xrio-border);
+}
+.tp-section + .tp-section {
+  padding-top: 20px;
+}
+.tp-section:last-child {
+  border-bottom: none;
+}
+
+.tp-label {
+  display: block;
+  font-family: var(--xrio-mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--xrio-fg-mid);
+  margin-bottom: 12px;
+}
+
+/* The label shares its row with the scheme switch. The margin moves off .tp-label and onto the
+   row so the gap below is the same 12px whether a section has a switch or just a label. */
+.tp-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.tp-label-row .tp-label {
+  margin-bottom: 0;
+}
+
+/* A segmented pair, not two .tp-theme-btn: those are full-width rows that preview a palette,
+   and this picks the paper all three of them are previewed on. It follows the active theme like
+   every other control — the fixed-chrome exception below is only for the chips themselves. */
+.tp-scheme {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--xrio-border2);
+  border-radius: var(--xrio-r-control);
+}
+.tp-scheme button {
+  font-family: var(--xrio-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border: none;
+  background: transparent;
+  color: var(--xrio-fg-dim);
+  cursor: pointer;
+  border-radius: calc(var(--xrio-r-control) - 2px);
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.tp-scheme button:hover {
+  color: var(--xrio-fg2);
+}
+.tp-scheme button.active {
+  color: var(--xrio-fg);
+  background: var(--xrio-fg4);
+}
+
+/* stacked full-width buttons — matches original */
+.tp-themes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tp-theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--xrio-border2);
+  background: transparent;
+  color: var(--xrio-fg2);
+  font-family: var(--xrio-mono);
+  font-size: 11px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+  border-radius: var(--xrio-r-control);
+}
+.tp-theme-btn:hover {
+  border-color: var(--xrio-border3);
+  color: var(--xrio-fg);
+}
+.tp-theme-btn.active {
+  border-color: var(--xrio-accent);
+  color: var(--xrio-fg);
+  background: var(--xrio-fg4);
+}
+
+/* ── PALETTE CHIPS: CHROME FIXED TO THE PAPER THEY SELECT ──
+   Every other control on the page follows the active theme through the token layer. These are
+   the exception: a palette chip previews what it switches *to*, so the chips must look light
+   while the scheme switch reads Light even though a dark theme is still applied, and vice
+   versa. That is precisely what the tokens cannot express — --xrio-fg et al. describe the
+   theme in force — so these few values are literal on purpose. Selectors carry .tp-theme-btn
+   as well so they outrank the base rule above regardless of source order.
+
+   The light field is NEUTRAL. It was Cyanotype's own ice (#EAF2F4) back when the chips were
+   individual palettes and the only light ones were Vellum and Cyanotype; now all three chips
+   carry it at once and an ice-blue field under the Mono chip contradicts the chip. The chip
+   field is the paper, and the dots are where the family shows.
+
+   Scope note: this applies only to the palette chips. Font and Corona buttons keep the base
+   styling and continue to follow the active theme. */
+.tp-theme-btn[data-theme-kind="light"] {
+  background: #efefef;
+  border-color: rgba(24, 24, 24, 0.2);
+  color: rgba(24, 24, 24, 0.72);
+}
+.tp-theme-btn[data-theme-kind="light"]:hover {
+  border-color: rgba(24, 24, 24, 0.38);
+  color: rgb(24, 24, 24);
+}
+.tp-theme-btn[data-theme-kind="light"].active {
+  background: #f8f8f8;
+  border-color: rgba(24, 24, 24, 0.55);
+  color: rgb(24, 24, 24);
+}
+
+.tp-theme-btn[data-theme-kind="dark"] {
+  background: #121212;
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.72);
+}
+.tp-theme-btn[data-theme-kind="dark"]:hover {
+  border-color: rgba(255, 255, 255, 0.34);
+  color: #fff;
+}
+.tp-theme-btn[data-theme-kind="dark"].active {
+  background: #1e1e1e;
+  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
+}
+
+/* The dot ring is a single translucent grey in the base rule, which vanishes against a light
+   chip. Give each kind a ring with contrast against its own field. */
+.tp-theme-btn[data-theme-kind="light"] .tp2-dots span {
+  border-color: rgba(24, 24, 24, 0.3);
+}
+.tp-theme-btn[data-theme-kind="dark"] .tp2-dots span {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.tp2-dots {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.tp2-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+.tp-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tp-slider-row + .tp-slider-row {
+  margin-top: 16px;
+}
+.tp-slider-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--xrio-mono);
+  font-size: 10px;
+  color: var(--xrio-fg2);
+}
+.tp-slider-head span:last-child {
+  color: var(--xrio-fg-mid);
+}
+
+.tp-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 2px;
+  background: var(--xrio-border3);
+  border-radius: 1px;
+  outline: none;
+  cursor: pointer;
+}
+.tp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--xrio-accent);
+  border: none;
+  cursor: pointer;
+}
+.tp-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--xrio-accent);
+  border: none;
+  cursor: pointer;
+}
+
+.tp-advanced-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--xrio-fg-mid);
+  font-family: var(--xrio-mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.tp-advanced-toggle:hover {
+  color: var(--xrio-fg2);
+}
+.tp-advanced-arrow {
+  transition: transform 0.18s ease;
+}
+.tp-advanced-arrow.open {
+  transform: rotate(180deg);
+}
+.tp-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+/* ── TBD FIGURES ──
+   While RATES_TBD is on, every price/rate renders as an em dash inside
+   .pricing-figure, which is display-weight 700 at up to 46px. At that size a dash
+   is a solid bar — heavier than the numeral it replaces, so the eye landed on the
+   blanks before the words. This dials the placeholder back to a quiet mark:
+   normal weight, dimmed, and narrowed so it reads as "not yet" rather than as
+   redaction. Applied via a class the component adds only while RATES_TBD is on,
+   so it disappears on its own when the real numbers land. */
+.pricing-figure.is-tbd {
+  /* !important on weight and size: these spans set fontWeight and fontSize inline
+     (each slot has its own clamp() ladder) and inline outranks a class, so without
+     it the rule only managed to recolor a still-bold 46px bar.
+
+     Size is set with clamp() ladders that mirror each slot's own, scaled to ~62%,
+     rather than with `em`. `em` resolves against the INHERITED size, not the
+     inline one this rule just overrode, which collapsed every figure to 9.92px. */
+  font-weight: 400 !important;
+  /* ink-dim, not fg-dim: fg-dim put this at 3.19:1 on Gilded and 2.08:1 on Cyanotype, which is
+     invisible rather than quiet. The reduced weight, size and tracking above are what actually
+     make it read as "not yet" — the colour step only has to stay subordinate to the figures,
+     and at full ink those sit 2.5x further up. */
+  color: var(--xrio-ink-dim);
+  /* The dash sits low in its box; nudge it toward the optical middle of the slot
+     the numeral would have filled. */
+  vertical-align: 0.18em;
+  letter-spacing: 0;
+}
+/* Credits headline + trial figure: clamp(32px, 4.2vw, 46px) and
+   clamp(34px, 4.4vw, 46px) -> ~62%. */
+.credit-row .pricing-figure.is-tbd {
+  font-size: 14px !important;
+}
+.pricing-tier .pricing-figure.is-tbd {
+  font-size: clamp(16px, 1.9vw, 21px) !important;
+}
+.pricing-headline-figure.is-tbd,
+.pricing-trial-figure.is-tbd {
+  font-size: clamp(20px, 2.6vw, 28px) !important;
+}
+
+/* ── SECTION PRIMITIVES ──
+   The small mono label and the section headline, both lifted verbatim from the shapes already
+   on the page: the label is Hero's 10px/.24em/ink-dim mark, the h2 is OutputFormats' heading.
+
+   The label is for INFORMATION — a version, a count, a tag on a diagram — never a category
+   eyebrow announcing the band you are already looking at. Hero's reads "curl-compatible ·
+   v0.9.1"; it tells you something. A row of bands each topped with its own name in caps is a
+   tic, and this page does not have it. */
+.xrio-kicker {
+  font-family: var(--xrio-mono);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  /* ink-dim, not fg-mid: at 10px this is the smallest type on the page and fg-mid measures
+     3.1:1 on the light palettes' paper. Same call Hero's eyebrow makes. */
+  color: var(--xrio-ink-dim);
+}
+.xrio-h2 {
+  font-family: var(--xrio-display-font, var(--font-space-grotesk), system-ui, sans-serif);
+  font-size: clamp(26px, 3.5vw, 42px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+/* ── PATCH MARQUEE ──
+   The patch list scrolls because the point of the section is that there are more of them than
+   fit — a static column that ends cleanly at 12 rows argues against its own headline. The list
+   is rendered TWICE and translated -50%, so the loop closes on itself with no gap and no JS.
+
+   The fade is a mask rather than two gradient overlays: overlays would need the band's own
+   background colour to hide anything, and this band is transparent so the page colour shows
+   through. A mask cuts the alpha of the rows themselves and works on every palette unchanged. */
+.patch-marquee {
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 86%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 14%,
+    #000 86%,
+    transparent 100%
+  );
+}
+.patch-marquee-track {
+  animation: patch-scroll 52s linear infinite;
+}
+@keyframes patch-scroll {
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+/* ── GAUNTLET RAIL ──
+   The belt runs off both ends of the visible rail, so a gate's wrap from the left edge back
+   round to the right — and the re-forming that goes with it — happens outside the box. The
+   mask only softens the entry and exit; it is not what hides the seam. */
+.gauntlet-rail {
+  mask-image: linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 5%,
+    #000 95%,
+    transparent 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .patch-marquee-track {
+    animation: none;
+  }
+}
+
+/* ── BENCHMARK SELECTOR ──
+   The type lives here rather than in a style object because an inline size cannot be changed at
+   a breakpoint, and the colour change on select is a transition for the same reason the rest of
+   this page's state changes are: a step between two inks reads as a glitch at this size. */
+.xrio-bench-pill {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+@media (min-width: 768px) {
+  .xrio-bench-pill {
+    font-size: 10.5px;
+    letter-spacing: 0.07em;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .xrio-bench-pill {
+    transition: none;
+  }
+}
