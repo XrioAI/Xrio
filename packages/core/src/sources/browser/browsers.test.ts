@@ -8,12 +8,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
-import { DRIVERS, isDriverName } from "../../testing/drivers.ts";
-import type { DriverName } from "../../testing/drivers.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { findBrowserPid, killProcessGroup, scratchRoot, waitForExit } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
+import { BROWSER_DRIVERS, isBrowserDriverName } from "./drivers.ts";
+import type { BrowserDriverName } from "./drivers.ts";
 import { patchrightDriver } from "./patchright/driver.ts";
 import type { BrowserDriver } from "./port.ts";
 
@@ -23,7 +23,7 @@ const LAUNCH_DEADLINE_MS = 500;
 
 const TEARDOWN_SETTLED_WITHIN_MS = 11_500;
 
-const DRIVER_NAMES = Object.keys(DRIVERS).filter(isDriverName);
+const DRIVER_NAMES = Object.keys(BROWSER_DRIVERS).filter(isBrowserDriverName);
 
 const isLaunchStage = (message: unknown): message is { stage: "launch"; durationMs: number } =>
   typeof message === "object" &&
@@ -80,12 +80,12 @@ const removeLeftoverScratch = async (): Promise<void> => {
 };
 
 const load = async (
-  driver: DriverName,
+  driver: BrowserDriverName,
   scenario: string,
   timeoutMs = 10_000,
   signal?: AbortSignal,
 ) => {
-  const browsers = createBrowsers(DRIVERS[driver], 2);
+  const browsers = createBrowsers(BROWSER_DRIVERS[driver], 2);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -166,7 +166,7 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
 
     const observedDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) =>
-        await DRIVERS[driver].launch(plan, deadline, (cleanup) => {
+        await BROWSER_DRIVERS[driver].launch(plan, deadline, (cleanup) => {
           const observed = { settled: false };
 
           cleanups.push(observed);
@@ -207,7 +207,7 @@ const queuedRequest = async () => ({
 
 describe.each(DRIVER_NAMES)("createBrowsers on %s", (driver) => {
   it("queues past maxBrowsers and counts the wait against the deadline", async () => {
-    const browsers = createBrowsers(DRIVERS[driver], 1);
+    const browsers = createBrowsers(BROWSER_DRIVERS[driver], 1);
     const request = await queuedRequest();
     using held = startDeadline(1500);
     using queued = startDeadline(200);
@@ -224,7 +224,7 @@ describe.each(DRIVER_NAMES)("createBrowsers on %s", (driver) => {
   });
 
   it("lets accepted work finish when closed, and rejects new work afterwards", async () => {
-    const browsers = createBrowsers(DRIVERS[driver], 1);
+    const browsers = createBrowsers(BROWSER_DRIVERS[driver], 1);
     const request = await queuedRequest();
     const normal = { ...request, browserPath: await fakeChromePath("normal") };
     using held = startDeadline(1000);

@@ -14,8 +14,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../deadline.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
 import { busyPageStarted, conformancePages } from "../../testing/conformance-pages.ts";
-import { DRIVERS } from "../../testing/drivers.ts";
-import type { DriverName } from "../../testing/drivers.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
@@ -23,6 +21,8 @@ import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../te
 import type { SourceDocument } from "../../types.ts";
 import { scratchRoot, sweepAbandonedScratch } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
+import { BROWSER_DRIVERS } from "./drivers.ts";
+import type { BrowserDriverName } from "./drivers.ts";
 import { planLaunch } from "./launch-plan.ts";
 
 const SCRAPE_CHILD = fileURLToPath(new URL("../../testing/scrape-child.ts", import.meta.url));
@@ -240,7 +240,7 @@ const recordStages = () => {
 };
 
 const runChildScrape = (
-  driver: DriverName,
+  driver: BrowserDriverName,
   mode: "headless" | "headed",
   url: string,
   env: NodeJS.ProcessEnv = {},
@@ -273,7 +273,10 @@ type Mode = (typeof MODES)[number];
 const DRIVERS_UNDER_TEST = [
   { driver: "cdp", probe: { visibility: "visible", webdriver: "false" } },
   { driver: "patchright", probe: { focus: "true", visibility: "visible", webdriver: "false" } },
-] as const satisfies readonly { driver: DriverName; probe: Readonly<Record<string, string>> }[];
+] as const satisfies readonly {
+  driver: BrowserDriverName;
+  probe: Readonly<Record<string, string>>;
+}[];
 
 const RUNS = DRIVERS_UNDER_TEST.flatMap((driver) => MODES.map((mode) => ({ ...driver, mode })));
 
@@ -282,13 +285,13 @@ const DRIVER_RUNS = RUNS.map(({ driver, mode }) => ({ driver, mode }));
 let server: FixtureServer;
 
 const load = async (
-  driver: DriverName,
+  driver: BrowserDriverName,
   mode: Mode,
   route: string,
   timeoutMs = 20_000,
   signal?: AbortSignal,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(DRIVERS[driver], 1);
+  const browsers = createBrowsers(BROWSER_DRIVERS[driver], 1);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {

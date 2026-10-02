@@ -6,11 +6,11 @@ import { parseArgs } from "node:util";
 
 import { startDeadline } from "../src/deadline.ts";
 import { createBrowsers } from "../src/sources/browser/browsers.ts";
+import { BROWSER_DRIVERS, isBrowserDriverName } from "../src/sources/browser/drivers.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import type { BrowserDriver } from "../src/sources/browser/port.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
 import { conformancePages } from "../src/testing/conformance-pages.ts";
-import { DRIVERS, isDriverName } from "../src/testing/drivers.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
 
 const SCRAPE_TIMEOUT_MS = 30_000;
@@ -25,7 +25,7 @@ type Sample = Record<Measure, number>;
 
 const { values } = parseArgs({
   options: {
-    drivers: { default: Object.keys(DRIVERS).join(","), type: "string" },
+    drivers: { default: Object.keys(BROWSER_DRIVERS).join(","), type: "string" },
     mode: { default: "headless", type: "string" },
     out: { type: "string" },
     route: { default: "/static", type: "string" },
@@ -57,13 +57,13 @@ const runs = parseRuns(values.runs);
 
 const requestedDrivers = values.drivers.split(",");
 
-const unknownDrivers = requestedDrivers.filter((name) => !isDriverName(name));
+const unknownDrivers = requestedDrivers.filter((name) => !isBrowserDriverName(name));
 
 if (unknownDrivers.length > 0) {
   throw new Error(`Unknown drivers: ${unknownDrivers.join(", ")}`);
 }
 
-const driverNames = requestedDrivers.filter(isDriverName);
+const driverNames = requestedDrivers.filter(isBrowserDriverName);
 
 const isStageTiming = (message: unknown): message is { stage: string; durationMs: number } =>
   typeof message === "object" &&
@@ -153,7 +153,7 @@ for (let run = 0; run < runs; run += 1) {
 
   for (const name of order) {
     // oxlint-disable-next-line eslint/no-await-in-loop
-    samples.get(name)?.push(await scrapeOnce(DRIVERS[name]));
+    samples.get(name)?.push(await scrapeOnce(BROWSER_DRIVERS[name]));
   }
 }
 

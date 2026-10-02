@@ -46,7 +46,7 @@ Configure a client default with `new XrioClient({ mode: "http" })` or override i
 
 ### Browser modes
 
-`headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright), navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once.
+`headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through the client's browser driver ([Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) unless `browserDriver` says otherwise), navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once.
 
 Current limits, lifted in later releases:
 
@@ -58,6 +58,12 @@ Current limits, lifted in later releases:
 
 ```ts
 await using xrio = new XrioClient({ mode: "headless", browserPath, maxBrowsers: 4 });
+```
+
+`browserDriver` chooses what drives Chrome. `"patchright"`, the default, drives it through Patchright. `"cdp"` drives it through Xrio's own client over Chrome's DevTools pipe, which sends only a fixed list of DevTools commands. It is set once per client, with any default mode, and applies to every `headed` and `headless` scrape the client runs, including per-scrape overrides on a client whose default is `mode: "http"`. Any other name makes the constructor throw `INVALID_OPTIONS`.
+
+```ts
+await using xrio = new XrioClient({ mode: "headless", browserPath, browserDriver: "cdp" });
 ```
 
 `await xrio.close()`, or leaving an `await using` block, lets accepted scrapes, running or queued, finish under their own deadlines, and resolves once every browser has been torn down. If a Chrome outlives its teardown budget, a `teardown-incomplete` event says so and its profile is left for the startup sweep. A scrape started after `close()` rejects with `CLIENT_CLOSED`. Teardown always runs, even after a timeout: Chrome gets 2 seconds to close, then its process group is killed and its profile is deleted. Xrio installs no process signal handlers. If Node dies without closing, Chrome exits when its end of the debugging pipe closes, and the next process to launch a browser deletes profiles left behind for more than an hour.
@@ -117,21 +123,21 @@ try {
 }
 ```
 
-| Code                       | Error class | When                                                                                                                                                                              |
-| -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, `maxBrowsers`, a proxy in a browser mode, or a URL that is relative, not HTTP(S), or carries credentials.       |
-| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details, a body preview, and the block report.                                                                             |
-| `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                         |
-| `NETWORK_ERROR`            | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504). Browser modes add `details.netError`, Chrome's `net::ERR_*` name. |
-| `TLS_CERTIFICATE_INVALID`  | `XrioError` | The certificate was rejected.                                                                                                                                                     |
-| `TOO_MANY_REDIRECTS`       | `XrioError` | More than 20 redirects.                                                                                                                                                           |
-| `RESPONSE_TOO_LARGE`       | `XrioError` | The decompressed body is over 32 MiB.                                                                                                                                             |
-| `PROXY_AUTH_FAILED`        | `XrioError` | The proxy answered 407, or a SOCKS5 proxy rejected the credentials.                                                                                                               |
-| `PROXY_UNREACHABLE`        | `XrioError` | Xrio could not connect to the proxy, or it did not speak the expected protocol.                                                                                                   |
-| `PROXY_CONNECT_FAILED`     | `XrioError` | The proxy refused the tunnel with another non-2xx status. `details.status` holds it.                                                                                              |
-| `BROWSER_LAUNCH_FAILED`    | `XrioError` | Chrome did not start or is older than 150. `details.stderr` holds the end of its output.                                                                                          |
-| `BROWSER_CRASHED`          | `XrioError` | The browser or the page's renderer died mid-scrape.                                                                                                                               |
-| `CLIENT_CLOSED`            | `XrioError` | `scrape()` was called after `close()`.                                                                                                                                            |
+| Code                       | Error class | When                                                                                                                                                                                        |
+| -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, browser driver, timeout, proxy, `maxBrowsers`, a proxy in a browser mode, or a URL that is relative, not HTTP(S), or carries credentials. |
+| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details, a body preview, and the block report.                                                                                       |
+| `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                                   |
+| `NETWORK_ERROR`            | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504). Browser modes add `details.netError`, Chrome's `net::ERR_*` name.           |
+| `TLS_CERTIFICATE_INVALID`  | `XrioError` | The certificate was rejected.                                                                                                                                                               |
+| `TOO_MANY_REDIRECTS`       | `XrioError` | More than 20 redirects.                                                                                                                                                                     |
+| `RESPONSE_TOO_LARGE`       | `XrioError` | The decompressed body is over 32 MiB.                                                                                                                                                       |
+| `PROXY_AUTH_FAILED`        | `XrioError` | The proxy answered 407, or a SOCKS5 proxy rejected the credentials.                                                                                                                         |
+| `PROXY_UNREACHABLE`        | `XrioError` | Xrio could not connect to the proxy, or it did not speak the expected protocol.                                                                                                             |
+| `PROXY_CONNECT_FAILED`     | `XrioError` | The proxy refused the tunnel with another non-2xx status. `details.status` holds it.                                                                                                        |
+| `BROWSER_LAUNCH_FAILED`    | `XrioError` | Chrome did not start or is older than 150. `details.stderr` holds the end of its output.                                                                                                    |
+| `BROWSER_CRASHED`          | `XrioError` | The browser or the page's renderer died mid-scrape.                                                                                                                                         |
+| `CLIENT_CLOSED`            | `XrioError` | `scrape()` was called after `close()`.                                                                                                                                                      |
 
 The client's own error is kept as `cause`. There are no retries. Messages never include URL or proxy credentials.
 

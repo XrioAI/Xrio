@@ -5,6 +5,7 @@ import type {
   BlockEvidence,
   BlockReport,
   BlockVerdict,
+  BrowserDriverName,
   ChallengeOutcome,
   ChallengeReport,
   ChallengeRound,
@@ -105,6 +106,30 @@ describe("XrioClient types", () => {
     expectTypeOf<
       XrioError<"UNSUPPORTED_CONTENT_TYPE">["details"]["block"]
     >().toEqualTypeOf<BlockReport>();
+  });
+
+  it("chooses the browser driver per client, whatever its default mode", () => {
+    const url = "https://example.com";
+
+    expectTypeOf<BrowserDriverName>().toEqualTypeOf<"cdp" | "patchright">();
+    expectTypeOf<ClientOptions["browserDriver"]>().toEqualTypeOf<BrowserDriverName | undefined>();
+    expectTypeOf(
+      new XrioClient({ browserDriver: "cdp", browserPath: "/browser", mode: "headless" }),
+    ).toEqualTypeOf<XrioClient>();
+    expectTypeOf(
+      new XrioClient({ browserDriver: "patchright", browserPath: "/browser", mode: "headed" }),
+    ).toEqualTypeOf<XrioClient>();
+    expectTypeOf(
+      new XrioClient({ browserDriver: "cdp", browserPath: "/browser" }),
+    ).toEqualTypeOf<XrioClient>();
+    expectTypeOf(
+      new XrioClient({ browserDriver: "cdp", mode: "http" }),
+    ).toEqualTypeOf<XrioClient>();
+
+    // @ts-expect-error Drivers are a closed set.
+    void new XrioClient({ browserDriver: "puppeteer", browserPath: "/browser" });
+    // @ts-expect-error The driver belongs to the client, not to a scrape.
+    void new XrioClient({ mode: "http" }).scrape({ browserDriver: "cdp", format: "html", url });
   });
 
   it("limits concurrent browsers and closes like a disposable resource", () => {

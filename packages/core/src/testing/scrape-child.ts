@@ -1,19 +1,18 @@
 import { subscribe } from "node:diagnostics_channel";
 
-import { startDeadline } from "../deadline.ts";
-import { createBrowsers } from "../sources/browser/browsers.ts";
-import { DRIVERS, isDriverName } from "./drivers.ts";
+import { XrioClient } from "../client.ts";
+import { isBrowserDriverName } from "../sources/browser/drivers.ts";
 import { isLaunchEvent } from "./launch-events.ts";
 
 const CHILD_TIMEOUT_MS = 60_000;
 
-const [mode, browserPath, url, driver = "patchright"] = process.argv.slice(2);
+const [mode, browserPath, url, browserDriver = "patchright"] = process.argv.slice(2);
 
 if (
   (mode !== "headless" && mode !== "headed") ||
   browserPath === undefined ||
   url === undefined ||
-  !isDriverName(driver)
+  !isBrowserDriverName(browserDriver)
 ) {
   throw new Error("Usage: scrape-child.ts <headless|headed> <browserPath> <url> [cdp|patchright]");
 }
@@ -24,20 +23,8 @@ subscribe("xrio:event", (message) => {
   }
 });
 
-const browsers = createBrowsers(DRIVERS[driver], 1);
+await using client = new XrioClient({ browserDriver, browserPath, mode });
 
-try {
-  using deadline = startDeadline(CHILD_TIMEOUT_MS);
+const result = await client.scrape({ format: "html", timeoutMs: CHILD_TIMEOUT_MS, url });
 
-  const document = await browsers.load({
-    browserPath,
-    deadline,
-    mode,
-    proxy: undefined,
-    url: new URL(url),
-  });
-
-  process.stdout.write(`${JSON.stringify({ status: document.status })}\n`);
-} finally {
-  await browsers.close();
-}
+process.stdout.write(`${JSON.stringify({ status: result.status })}\n`);

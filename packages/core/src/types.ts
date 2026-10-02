@@ -1,5 +1,6 @@
 import type { BlockReport } from "./blocks/classify.ts";
 import type { Deadline } from "./deadline.ts";
+import type { BrowserDriverName } from "./sources/browser/drivers.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
 
@@ -17,7 +18,11 @@ export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: 
 
 type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
 
-export type ClientOptions = ModeOptions & { proxy?: string; maxBrowsers?: number };
+export type ClientOptions = ModeOptions & {
+  proxy?: string;
+  maxBrowsers?: number;
+  browserDriver?: BrowserDriverName;
+};
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
@@ -77,6 +82,7 @@ export interface ProxyEndpoint {
 
 export interface ClientDefaults {
   mode: ResolvedMode;
+  browserDriver: BrowserDriverName;
   proxy: ProxyEndpoint | undefined;
   maxBrowsers: number | undefined;
 }

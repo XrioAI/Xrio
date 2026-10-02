@@ -1,4 +1,6 @@
 import { invalidOptions, redactUrl } from "./errors.ts";
+import { BROWSER_DRIVERS, isBrowserDriverName } from "./sources/browser/drivers.ts";
+import type { BrowserDriverName } from "./sources/browser/drivers.ts";
 import type {
   ClientDefaults,
   ClientOptions,
@@ -12,6 +14,8 @@ import type {
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
+
+const DEFAULT_BROWSER_DRIVER: BrowserDriverName = "patchright";
 
 const proxyProtocols = new Map<string, ProxyEndpoint["protocol"]>([
   ["http:", "http"],
@@ -120,12 +124,27 @@ const resolveMaxBrowsers = (maxBrowsers: number | undefined): number | undefined
   return maxBrowsers;
 };
 
+const resolveBrowserDriver = (browserDriver: string | undefined): BrowserDriverName => {
+  if (browserDriver === undefined) {
+    return DEFAULT_BROWSER_DRIVER;
+  }
+
+  if (!isBrowserDriverName(browserDriver)) {
+    const names = Object.keys(BROWSER_DRIVERS).map((name) => `"${name}"`);
+
+    throw invalidOptions(`browserDriver must be ${names.join(" or ")}.`);
+  }
+
+  return browserDriver;
+};
+
 export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
   }
 
   return {
+    browserDriver: resolveBrowserDriver(options.browserDriver),
     maxBrowsers: resolveMaxBrowsers(options.maxBrowsers),
     mode: resolveMode(options),
     proxy: options.proxy === undefined ? undefined : parseProxy(options.proxy),
