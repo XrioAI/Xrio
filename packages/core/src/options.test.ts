@@ -10,12 +10,11 @@ describe("scrape options", () => {
     const overridden = resolveScrapeOptions({ ...options, mode: "http" }, mode);
 
     expect(inherited).toMatchObject({
-      browserPath: "/client-browser",
-      mode: "headed",
+      source: { browserPath: "/client-browser", mode: "headed" },
       timeoutMs: 60_000,
     });
-    expect(overridden.mode).toBe("http");
-    expect(overridden).not.toHaveProperty("browserPath");
+    expect(overridden.source.mode).toBe("http");
+    expect(overridden.source).not.toHaveProperty("browserPath");
 
     // @ts-expect-error JavaScript callers can bypass the required override path.
     expect(() => resolveScrapeOptions({ ...options, mode: "headless" }, mode)).toThrow(

@@ -67,12 +67,9 @@ const readHtmlDocument = async (response: Response): Promise<SourceDocument> => 
 
 export const loadHttpDocument = async ({
   url,
-  timeoutMs,
-  signal,
+  deadline,
 }: DocumentRequest): Promise<SourceDocument> => {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const response = await fetch(url, { signal: requestSignal });
+  const response = await fetch(url, { signal: deadline.signal });
 
   return await readHtmlDocument(response);
 };

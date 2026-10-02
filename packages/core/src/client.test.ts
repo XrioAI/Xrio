@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { inspect } from "node:util";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
-import { isXrioError, XrioClient } from "./client.ts";
+import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
 
@@ -366,31 +366,10 @@ describe(XrioClient, () => {
     },
   );
 
-  it("defaults to 60 seconds and allows a per-call timeout", async () => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
-    const client = new XrioClient();
-
-    try {
-      await client.scrape({ format: "html", url: `${origin}/fragment` });
-      expect(timeout).toHaveBeenCalledWith(60_000);
-      await expect(
-        client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/slow` }),
-      ).rejects.toThrow(/abort|timeout/iu);
-      expect(timeout).toHaveBeenLastCalledWith(100);
-    } finally {
-      timeout.mockRestore();
-    }
-  });
-
-  it("propagates native network and timeout errors", async () => {
-    const client = new XrioClient();
-
+  it("propagates native network errors", async () => {
     await expect(
-      client.scrape({ format: "html", url: `${origin}/disconnect` }),
+      new XrioClient().scrape({ format: "html", url: `${origin}/disconnect` }),
     ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKET" }, name: "TypeError" });
-    await expect(
-      client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/waiting` }),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
   });
 
   it("allows callers to abort before fetching or during a request", async () => {
@@ -435,6 +414,20 @@ describe("XrioClient errors", () => {
   afterAll(async () => {
     await server[Symbol.asyncDispose]();
   });
+
+  it.each(["/waiting", "/slow"])(
+    "rejects with TIMEOUT when the deadline passes while loading %s",
+    async (path) => {
+      const rejection = new XrioClient().scrape({
+        format: "html",
+        timeoutMs: 100,
+        url: `${origin}${path}`,
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(XrioError);
+      await expect(rejection).rejects.toMatchObject({ code: "TIMEOUT", name: "XrioError" });
+    },
+  );
 
   it("rejects with errors that isXrioError recognizes by code", async () => {
     const client = new XrioClient();
