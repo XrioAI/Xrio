@@ -50,6 +50,7 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
 export interface SourceDocument extends ResponseDetails {
   html: string;
   block: BlockReport;
+  requestUrls: readonly string[];
 }
 
 export type RenderedDocument = Pick<SourceDocument, "html" | "url">;

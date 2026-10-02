@@ -2,8 +2,9 @@ import type { BlockReport } from "./blocks/classify.ts";
 import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
+  BROWSER_CRASHED: undefined;
   MODE_NOT_IMPLEMENTED: undefined;
-  NETWORK_ERROR: undefined;
+  NETWORK_ERROR: { netError: string } | undefined;
   PROXY_AUTH_FAILED: undefined;
   PROXY_CONNECT_FAILED: { status: number };
   PROXY_UNREACHABLE: undefined;
@@ -46,6 +47,7 @@ type ErrorByCode = { [Code in XrioErrorCode]: XrioError<Code> } & {
 };
 
 const errorClasses = {
+  BROWSER_CRASHED: XrioError,
   INVALID_OPTIONS: TypeError,
   MODE_NOT_IMPLEMENTED: XrioError,
   NETWORK_ERROR: XrioError,
