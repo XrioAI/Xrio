@@ -40,6 +40,10 @@ export interface DriverBrowser {
 
 export const CLOSE_BUDGET_MS = 2000;
 
+export const CLEANUP_BUDGET_MS = 2000;
+
+export const TEARDOWN_BUDGET_MS = 10_000;
+
 export type CleanupSink = (cleanup: Promise<void>) => void;
 
 export interface BrowserDriver {

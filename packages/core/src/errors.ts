@@ -3,6 +3,8 @@ import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
   BROWSER_CRASHED: undefined;
+  BROWSER_LAUNCH_FAILED: { stderr: string };
+  CLIENT_CLOSED: undefined;
   MODE_NOT_IMPLEMENTED: undefined;
   NETWORK_ERROR: { netError: string } | undefined;
   PROXY_AUTH_FAILED: undefined;
@@ -48,6 +50,8 @@ type ErrorByCode = { [Code in XrioErrorCode]: XrioError<Code> } & {
 
 const errorClasses = {
   BROWSER_CRASHED: XrioError,
+  BROWSER_LAUNCH_FAILED: XrioError,
+  CLIENT_CLOSED: XrioError,
   INVALID_OPTIONS: TypeError,
   MODE_NOT_IMPLEMENTED: XrioError,
   NETWORK_ERROR: XrioError,
@@ -92,3 +96,6 @@ export const redactUrl = (url: URL | string): string => {
 
   return redacted.href;
 };
+
+export const clientClosed = (): XrioError =>
+  new XrioError("CLIENT_CLOSED", "The client is closed.", { details: undefined });
