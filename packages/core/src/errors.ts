@@ -3,6 +3,9 @@ import type { ResponseDetails } from "./types.ts";
 interface XrioErrorDetails {
   MODE_NOT_IMPLEMENTED: undefined;
   NETWORK_ERROR: undefined;
+  PROXY_AUTH_FAILED: undefined;
+  PROXY_CONNECT_FAILED: { status: number };
+  PROXY_UNREACHABLE: undefined;
   RESPONSE_TOO_LARGE: undefined;
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
@@ -45,6 +48,9 @@ const errorClasses = {
   INVALID_OPTIONS: TypeError,
   MODE_NOT_IMPLEMENTED: XrioError,
   NETWORK_ERROR: XrioError,
+  PROXY_AUTH_FAILED: XrioError,
+  PROXY_CONNECT_FAILED: XrioError,
+  PROXY_UNREACHABLE: XrioError,
   RESPONSE_TOO_LARGE: XrioError,
   TIMEOUT: XrioError,
   TLS_CERTIFICATE_INVALID: XrioError,

@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@mdream/js": "1.7.2",
+    "socks": "2.8.10",
     "wreq-js": "3.2.0"
   },
   "devDependencies": {
