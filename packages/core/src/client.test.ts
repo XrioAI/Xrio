@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
-import { XrioClient } from "./client.ts";
+import { isXrioError, XrioClient } from "./client.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
 
@@ -258,7 +258,7 @@ describe(XrioClient, () => {
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
       code: "MODE_NOT_IMPLEMENTED",
       message: "The headed mode is not implemented.",
-      name: "Error",
+      name: "XrioError",
     });
     await expect(client.scrape({ format: "html", mode: "http", url })).resolves.toMatchObject({
       data: "<p>Body only</p>",
@@ -275,7 +275,7 @@ describe(XrioClient, () => {
     ).rejects.toMatchObject({
       code: "MODE_NOT_IMPLEMENTED",
       message: "The headless mode is not implemented.",
-      name: "Error",
+      name: "XrioError",
     });
   });
 
@@ -315,11 +315,9 @@ describe(XrioClient, () => {
       await expect(
         new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
       ).rejects.toMatchObject({
-        body,
         code: "UNSUPPORTED_CONTENT_TYPE",
-        name: "Error",
-        status,
-        url: `${origin}${path}`,
+        details: { body, status, url: `${origin}${path}` },
+        name: "XrioError",
       });
     },
   );
@@ -328,10 +326,9 @@ describe(XrioClient, () => {
     const rejection = new XrioClient().scrape({ format: "html", url: `${origin}/json` });
 
     await expect(rejection).rejects.toMatchObject({
-      cookies,
-      headers: { "content-type": "application/json" },
+      details: { cookies, headers: { "content-type": "application/json" } },
     });
-    await expect(rejection).rejects.not.toHaveProperty(["headers", "set-cookie"]);
+    await expect(rejection).rejects.not.toHaveProperty(["details", "headers", "set-cookie"]);
   });
 
   it("validates URLs before fetching", async () => {
@@ -344,7 +341,7 @@ describe(XrioClient, () => {
       name: "TypeError",
     });
     await expect(client.scrape({ format: "html", url: "relative/path" })).rejects.toMatchObject({
-      code: "ERR_INVALID_URL",
+      code: "INVALID_OPTIONS",
       name: "TypeError",
     });
   });
@@ -412,5 +409,30 @@ describe(XrioClient, () => {
     ).resolves.toMatchObject({
       data: "<p>Body only</p>",
     });
+  });
+});
+
+describe("XrioClient errors", () => {
+  let server: FixtureServer;
+  let origin: string;
+
+  beforeAll(async () => {
+    server = await startFixtureServer(routes);
+    ({ origin } = server);
+  });
+
+  afterAll(async () => {
+    await server[Symbol.asyncDispose]();
+  });
+
+  it("rejects with errors that isXrioError recognizes by code", async () => {
+    const client = new XrioClient();
+
+    await expect(client.scrape({ format: "html", url: `${origin}/plain` })).rejects.toSatisfy(
+      (error) => isXrioError(error, "UNSUPPORTED_CONTENT_TYPE"),
+    );
+    await expect(client.scrape({ format: "html", url: "ftp://xrio.invalid" })).rejects.toSatisfy(
+      (error) => isXrioError(error, "INVALID_OPTIONS"),
+    );
   });
 });

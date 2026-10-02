@@ -12,6 +12,10 @@ import type {
   SourceDocument,
 } from "./types.ts";
 
+export { isXrioError, XrioError } from "./errors.ts";
+
+export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
+
 export type {
   ModeOptions,
   ScrapeFormat,

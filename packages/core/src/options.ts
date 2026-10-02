@@ -1,3 +1,4 @@
+import { invalidOptions } from "./errors.ts";
 import type {
   DocumentRequest,
   ModeOptions,
@@ -10,8 +11,19 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
-const invalidOptions = (message: string) =>
-  Object.assign(new TypeError(message), { code: "INVALID_OPTIONS" as const });
+const parseTargetUrl = (value: string): URL => {
+  const url = URL.parse(value);
+
+  if (url === null) {
+    throw invalidOptions("url must be an absolute URL.");
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw invalidOptions("url must use HTTP or HTTPS.");
+  }
+
+  return url;
+};
 
 export const resolveClientOptions = ({ mode = "http", browserPath }: ModeOptions): ResolvedMode => {
   switch (mode) {
@@ -48,12 +60,7 @@ export const resolveScrapeOptions = (
     throw invalidOptions(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
   }
 
-  const url = new URL(options.url);
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw invalidOptions("url must use HTTP or HTTPS.");
-  }
-
+  const url = parseTargetUrl(options.url);
   const mode = options.mode === undefined ? clientMode : resolveClientOptions(options);
 
   return { ...mode, format, signal, timeoutMs, url };

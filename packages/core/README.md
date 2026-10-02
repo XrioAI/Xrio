@@ -54,23 +54,41 @@ const result = await pending;
 result.data;
 ```
 
-HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, `headers`, and `cookies`. Its `body` holds at most the first 65,536 bytes of the response body, decoded as UTF-8, so plain-text and JSON block pages stay inspectable; it is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
+HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded as UTF-8, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
 
-Errors created by this package have stable codes:
+Errors created by this package carry a stable `code` from one closed set, and keep the original error as `cause` when there is one. `INVALID_OPTIONS` is a `TypeError`; every other code is an `XrioError` with typed `details`. `isXrioError(value, code?)` checks the code, so it covers both and narrows `details`:
 
-| Code                       | Error class | Meaning                                                       |
-| -------------------------- | ----------- | ------------------------------------------------------------- |
-| `INVALID_OPTIONS`          | `TypeError` | Invalid format, mode, browser path, timeout, or URL protocol. |
-| `UNSUPPORTED_CONTENT_TYPE` | `Error`     | The response cannot be processed as an HTML document.         |
-| `MODE_NOT_IMPLEMENTED`     | `Error`     | Headed or headless mode is not implemented.                   |
+```ts
+import { isXrioError } from "@xrio/core";
 
-Native errors propagate unchanged, including URL parsing (`ERR_INVALID_URL`), network, timeout, and cancellation failures. There is no blanket catch or error wrapping, and there are no retries. Consumers can inspect `error.code` on package errors after narrowing the caught value; native errors retain their own identifiers and causes.
+try {
+  await xrio.scrape({ url: "https://example.com/data.json", format: "html" });
+} catch (error) {
+  if (isXrioError(error, "UNSUPPORTED_CONTENT_TYPE")) {
+    error.details.status;
+    error.details.body;
+  }
+}
+```
 
-Migration: HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
+| Code                       | Error class | When                                                                                                 |
+| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
+| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, or a URL that is relative or not HTTP(S). |
+| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details and a body preview.                   |
+| `MODE_NOT_IMPLEMENTED`     | `XrioError` | Headed or headless mode is not implemented.                                                          |
+
+Native errors propagate unchanged, including network, timeout, and cancellation failures. There are no retries.
+
+Migration:
+
+- HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
+- `UNSUPPORTED_CONTENT_TYPE` and `MODE_NOT_IMPLEMENTED` are now `XrioError`s. Response fields moved from the error itself to `error.details`.
+- Invalid URLs reject with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`.
 
 The client resolves options, selects a document source by mode, and selects a content operation by format. The source and format mappings are independent. To implement a mode, add its source handler and update the mode mapping; HTTP loading and the scrape workflow do not need to change.
 
 - `options.ts` owns native input validation, defaults, and per-call mode resolution.
+- `errors.ts` owns the error codes, `XrioError`, and `isXrioError`.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.
