@@ -3,7 +3,7 @@
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "pnpm install --frozen-lockfile && pnpm --filter @xrio/landing build",
-    "watchPatterns": ["/apps/landing/**", "/packages/**", "/pnpm-lock.yaml", "/pnpm-workspace.yaml", "/apps/landing/railway.json"]
+    "watchPatterns": ["/apps/landing/**", "/packages/**", "/pnpm-lock.yaml", "/pnpm-workspace.yaml", "/railway.json"]
   },
   "deploy": {
     "startCommand": "pnpm --filter @xrio/landing start",
