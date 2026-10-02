@@ -131,4 +131,23 @@ describe("proxy option", () => {
     ).toBe("override.test");
     expect(resolveScrapeOptions(page, resolveClientOptions({})).source.proxy).toBeUndefined();
   });
+
+  it("refuses a proxy in browser modes until the browser relay exists", () => {
+    const browser = resolveClientOptions({ browserPath: "/browser", mode: "headless" });
+
+    expect(() =>
+      resolveScrapeOptions({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
+    ).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS", name: "TypeError" }));
+    expect(
+      inspectedFailure(() =>
+        resolveScrapeOptions({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
+      ),
+    ).not.toContain("secret");
+    expect(() =>
+      resolveScrapeOptions(
+        { ...page, mode: "http" },
+        resolveClientOptions({ browserPath: "/browser", mode: "headed", proxy: "socks5://p.test" }),
+      ),
+    ).not.toThrow();
+  });
 });

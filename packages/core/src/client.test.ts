@@ -4,6 +4,7 @@ import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { isXrioError, XrioClient, XrioError } from "./client.ts";
+import { fakeChromePath } from "./testing/fake-chrome-path.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
 
@@ -39,6 +40,8 @@ const cookies = [
 ];
 
 const previewBytes = 65_536;
+
+const CAPTURE_BEFORE_TEARDOWN_MS = 1500;
 
 let onRequest: (() => void) | undefined;
 
@@ -253,13 +256,12 @@ describe(XrioClient, () => {
     expect(page.cookies).toStrictEqual([]);
   });
 
-  it("keeps mode overrides local to one call and rejects browser modes", async () => {
-    const client = new XrioClient({ browserPath: "/browser", mode: "headed" });
+  it("keeps mode overrides local to one call", async () => {
+    const client = new XrioClient({ browserPath: "/nonexistent/chrome", mode: "headed" });
     const url = `${origin}/fragment`;
 
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
-      code: "MODE_NOT_IMPLEMENTED",
-      message: "The headed mode is not implemented.",
+      code: "BROWSER_LAUNCH_FAILED",
       name: "XrioError",
     });
     await expect(client.scrape({ format: "html", mode: "http", url })).resolves.toMatchObject({
@@ -269,15 +271,32 @@ describe(XrioClient, () => {
       url,
     });
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
-      code: "MODE_NOT_IMPLEMENTED",
-      message: "The headed mode is not implemented.",
+      code: "BROWSER_LAUNCH_FAILED",
     });
-    await expect(
-      new XrioClient().scrape({ browserPath: "/browser", format: "json", mode: "headless", url }),
-    ).rejects.toMatchObject({
-      code: "MODE_NOT_IMPLEMENTED",
-      message: "The headless mode is not implemented.",
+  });
+
+  it("rejects scrapes once the client is closed", async () => {
+    const client = new XrioClient();
+
+    await client.close();
+
+    await expect(client.scrape({ format: "html", url: origin })).rejects.toMatchObject({
+      code: "CLIENT_CLOSED",
+      message: "The client is closed.",
       name: "XrioError",
+    });
+  });
+
+  it("closes when disposed", async () => {
+    let disposed: XrioClient;
+
+    {
+      await using client = new XrioClient();
+      disposed = client;
+    }
+
+    await expect(disposed.scrape({ format: "html", url: origin })).rejects.toMatchObject({
+      code: "CLIENT_CLOSED",
     });
   });
 
@@ -443,5 +462,22 @@ describe("XrioClient errors", () => {
     await expect(client.scrape({ format: "html", url: "ftp://xrio.invalid" })).rejects.toSatisfy(
       (error) => isXrioError(error, "INVALID_OPTIONS"),
     );
+  });
+});
+
+describe("XrioClient browser lifecycle", () => {
+  it("returns a capture that finished in time even when teardown runs past the deadline", async () => {
+    await using client = new XrioClient({
+      browserPath: await fakeChromePath("ignore-close"),
+      mode: "headless",
+    });
+
+    await expect(
+      client.scrape({
+        format: "html",
+        timeoutMs: CAPTURE_BEFORE_TEARDOWN_MS,
+        url: "https://fake.test/page",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
   });
 });

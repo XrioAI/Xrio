@@ -7,7 +7,7 @@ export type ModeOptions =
   | { mode?: "http"; browserPath?: never }
   | { mode: "headless" | "headed"; browserPath: string };
 
-export type ClientOptions = ModeOptions & { proxy?: string };
+export type ClientOptions = ModeOptions & { proxy?: string; maxBrowsers?: number };
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOptions & {
   url: string;
@@ -68,6 +68,7 @@ export interface ProxyEndpoint {
 export interface ClientDefaults {
   mode: ResolvedMode;
   proxy: ProxyEndpoint | undefined;
+  maxBrowsers: number | undefined;
 }
 
 type SourceRequest = ResolvedMode & {

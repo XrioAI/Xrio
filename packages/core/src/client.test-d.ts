@@ -103,6 +103,16 @@ describe("XrioClient types", () => {
     >().toEqualTypeOf<BlockReport>();
   });
 
+  it("limits concurrent browsers and closes like a disposable resource", () => {
+    expectTypeOf<ClientOptions["maxBrowsers"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<XrioClient["close"]>().toEqualTypeOf<() => Promise<void>>();
+    expectTypeOf<XrioClient>().toExtend<AsyncDisposable>();
+    expectTypeOf<XrioError<"CLIENT_CLOSED">["details"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<XrioError<"BROWSER_LAUNCH_FAILED">["details"]>().toEqualTypeOf<{
+      stderr: string;
+    }>();
+  });
+
   it("narrows errors and their details by code", () => {
     expectTypeOf<Exclude<ErrorCode, XrioErrorCode>>().toEqualTypeOf<"INVALID_OPTIONS">();
 
@@ -125,7 +135,6 @@ describe("XrioClient types", () => {
       }
     }
 
-    expectTypeOf<XrioError<"MODE_NOT_IMPLEMENTED">["details"]>().toEqualTypeOf<undefined>();
     expectTypeOf<XrioError<"TIMEOUT">["details"]>().toEqualTypeOf<undefined>();
     expectTypeOf<XrioError<"PROXY_CONNECT_FAILED">["details"]>().toEqualTypeOf<{
       status: number;
@@ -133,7 +142,7 @@ describe("XrioClient types", () => {
     // @ts-expect-error Unsupported-content errors require their response details.
     void new XrioError("UNSUPPORTED_CONTENT_TYPE", "Missing details");
     // @ts-expect-error A code type argument needs the code it names.
-    void isXrioError<"MODE_NOT_IMPLEMENTED">(error);
+    void isXrioError<"TIMEOUT">(error);
     // @ts-expect-error Details must belong to the code, even with a widened code type.
     void new XrioError<XrioErrorCode>("PROXY_CONNECT_FAILED", "Missing status", {
       details: undefined,
