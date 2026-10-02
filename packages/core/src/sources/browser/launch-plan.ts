@@ -153,7 +153,7 @@ const profileFiles = (directories: LaunchDirectories): ProfileFile[] => [
     path: path.join(directories.profile, "Default", "Preferences"),
   },
   {
-    contents: JSON.stringify({ dns_over_https: { mode: "off" } }),
+    contents: JSON.stringify({ auth: { schemes: "" }, dns_over_https: { mode: "off" } }),
     path: path.join(directories.profile, "Local State"),
   },
 ];

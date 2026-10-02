@@ -160,7 +160,10 @@ describe(planLaunch, () => {
         },
         path: `${scratchDir}/profile/Default/Preferences`,
       },
-      { contents: { dns_over_https: { mode: "off" } }, path: `${scratchDir}/profile/Local State` },
+      {
+        contents: { auth: { schemes: "" }, dns_over_https: { mode: "off" } },
+        path: `${scratchDir}/profile/Local State`,
+      },
     ]);
   });
 
