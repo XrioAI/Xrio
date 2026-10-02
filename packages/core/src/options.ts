@@ -1,4 +1,4 @@
-import { invalidOptions } from "./errors.ts";
+import { invalidOptions, redactUrl } from "./errors.ts";
 import type {
   DocumentRequest,
   ModeOptions,
@@ -20,6 +20,10 @@ const parseTargetUrl = (value: string): URL => {
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw invalidOptions("url must use HTTP or HTTPS.");
+  }
+
+  if (url.username !== "" || url.password !== "") {
+    throw invalidOptions(`url must not include credentials: ${redactUrl(url)}`);
   }
 
   return url;

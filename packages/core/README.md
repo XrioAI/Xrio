@@ -71,13 +71,13 @@ try {
 }
 ```
 
-| Code                       | Error class | When                                                                                                 |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
-| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, or a URL that is relative or not HTTP(S). |
-| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details and a body preview.                   |
-| `MODE_NOT_IMPLEMENTED`     | `XrioError` | Headed or headless mode is not implemented.                                                          |
+| Code                       | Error class | When                                                                                                                       |
+| -------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, or a URL that is relative, not HTTP(S), or carries credentials. |
+| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details and a body preview.                                         |
+| `MODE_NOT_IMPLEMENTED`     | `XrioError` | Headed or headless mode is not implemented.                                                                                |
 
-Native errors propagate unchanged, including network, timeout, and cancellation failures. There are no retries.
+Native errors propagate unchanged, including network, timeout, and cancellation failures. There are no retries. Messages never include URL credentials.
 
 Migration:
 
@@ -88,7 +88,7 @@ Migration:
 The client resolves options, selects a document source by mode, and selects a content operation by format. The source and format mappings are independent. To implement a mode, add its source handler and update the mode mapping; HTTP loading and the scrape workflow do not need to change.
 
 - `options.ts` owns native input validation, defaults, and per-call mode resolution.
-- `errors.ts` owns the error codes, `XrioError`, and `isXrioError`.
+- `errors.ts` owns the error codes, `XrioError`, `isXrioError`, and URL redaction for messages.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.

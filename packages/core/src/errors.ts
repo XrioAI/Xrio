@@ -64,3 +64,12 @@ export const invalidOptions = (message: string, cause?: unknown): InvalidOptions
   Object.assign(new TypeError(message, cause === undefined ? undefined : { cause }), {
     code: "INVALID_OPTIONS" as const,
   });
+
+export const redactUrl = (url: URL | string): string => {
+  const redacted = new URL(url);
+
+  redacted.username = "";
+  redacted.password = "";
+
+  return redacted.href;
+};
