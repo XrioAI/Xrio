@@ -213,6 +213,9 @@ importers:
       '@mdream/js':
         specifier: 1.7.2
         version: 1.7.2
+      entities:
+        specifier: 8.1.0
+        version: 8.1.0
       socks:
         specifier: 2.8.10
         version: 2.8.10
@@ -1648,6 +1651,10 @@ packages:
   empathic@2.1.0:
     resolution: {integrity: sha512-AnfC1ATldl49/cvZdLPDjBfrRNwbDO05aibiOtzQu3qtlbJtomNLhF30HEtn/7iBz50dlMECqATo3fG0LrdEgw==}
     engines: {node: '>=14'}
+
+  entities@8.1.0:
+    resolution: {integrity: sha512-kxL7msIffSuh9aaFAMD7rxAIuTRMAHMeBtgHW2yUdWw732ZNh4MehkF2gdjvtdmikkaIP9bFDDJOPlsvm7avrA==}
+    engines: {node: '>=20.19.0'}
 
   environment@1.1.0:
     resolution: {integrity: sha512-xUtoPkMggbz0MPyPiIWr1Kp4aeWJjDZ6SMvURhimjdZgsRuDplF5/s9hcgGhyXMhs+6vpnuoiZ2kFiu3FMnS8Q==}
@@ -3146,6 +3153,8 @@ snapshots:
   dom-accessibility-api@0.5.16: {}
 
   empathic@2.1.0: {}
+
+  entities@8.1.0: {}
 
   environment@1.1.0: {}
 

@@ -1,3 +1,4 @@
+import type { BlockReport } from "./blocks/classify.ts";
 import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
@@ -10,7 +11,7 @@ interface XrioErrorDetails {
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
   TOO_MANY_REDIRECTS: undefined;
-  UNSUPPORTED_CONTENT_TYPE: ResponseDetails & { body: string };
+  UNSUPPORTED_CONTENT_TYPE: ResponseDetails & { body: string; block: BlockReport };
 }
 
 export type XrioErrorCode = keyof XrioErrorDetails;
