@@ -21,7 +21,7 @@ result.cookies;
 result.url;
 ```
 
-`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format }`:
+`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format, block }`:
 
 - `data`: an HTML or Markdown string, or `StructuredContent` for `json`.
 - `url`: the final response URL after redirects.
@@ -29,6 +29,7 @@ result.url;
 - `headers`: a plain object with lowercase names and string values, typed `string | undefined` because a header the response did not send is absent. `set-cookie` is never included; use `cookies`.
 - `cookies`: each `Set-Cookie` header value of the final response, in order and unparsed. Empty when the response set none.
 - `format`: the requested format. Checking this field narrows the type of `data` in TypeScript.
+- `block`: the block report described below. Detection never throws, and a challenge served as a 200 still reports a block.
 
 For `json`, `data` retains the existing `StructuredContent` fields:
 
@@ -61,6 +62,23 @@ result.data;
 When the caller aborts, the scrape rejects with `signal.reason`, as native APIs do.
 
 HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded with the same charset rules as HTML, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
+
+### Block report
+
+`block` is `{ verdict, vendor, evidence, passedChallenges, challenge }`. The rules are data (`blocks/rules.ts`), and no vendor is named in code.
+
+- `verdict`: `ok`, `suspect`, `blocked`, `queued` (a Queue-it waiting room, which is not a block and should not be retried harder), or `unknown` (classification itself failed).
+- `vendor`: the vendor whose evidence decided the verdict, or `null`.
+- `evidence`: every rule that fired, ordered by tier, each `{ rule, tier, family, vendor, detail }`. `detail` is at most 160 characters. It never includes cookie values, query-string values (only the names of parameters that have one), or the value of a header that matters only by its presence.
+- `passedChallenges`: rules that prove a challenge was issued but did not decide, because the captured document is not shaped like an interstitial. The challenge was passed, or the page was served around it.
+- `challenge`: `null` for now. Browser modes will report their challenge wait here, with its `outcome` and one entry per round.
+
+Evidence has tiers. E0 decides alone. E1 decides alone. Its markup rules fire only on a document small enough to be an interstitial (at most 50,000 characters of HTML and 5,000 of text, counted as code points with entities decoded), and the vendor sensors that also load on working pages need fewer than 100 text characters as well; an E1 challenge cookie needs only an HTML response. Every pass over the markup, the request URLs and the cookies runs in time linear in its input, and markup rules that apply at any size read only the first 1 MiB of the document, so a hostile page cannot stall classification. E2 is weak, and decides `blocked` only when two signals come from different families; one family is `suspect`. Status codes are E2 at most, so a 403 alone is never `blocked`. E3 suppressors cancel E1 and E2 for non-HTML, JSON and XML bodies. These page-shape thresholds come from [crawl4ai](https://github.com/unclecode/crawl4ai) (Apache-2.0).
+
+In http mode the classifier sees only the redirect chain as request URLs, so two limits apply:
+
+- a single-page-app shell (a small document with little text and a lot of script) can read as `suspect`;
+- a challenge issued by a page's scripts, or seen only in its subresource requests, is invisible without a browser.
 
 Errors created by this package carry a stable `code` from one closed set, and keep the original error as `cause` when there is one. `INVALID_OPTIONS` is a `TypeError`; every other code is an `XrioError` with typed `details`. `isXrioError(value, code?)` checks the code, so it covers both and narrows `details`:
 
@@ -97,6 +115,7 @@ Migration:
 
 - HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
 - `UNSUPPORTED_CONTENT_TYPE` and `MODE_NOT_IMPLEMENTED` are now `XrioError`s. Response fields moved from the error itself to `error.details`.
+- Results carry a new `block` report.
 - Timeouts reject with `TIMEOUT` instead of a native `TimeoutError`, invalid URLs with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`, and network failures with the codes above instead of native `fetch` errors.
 - http mode no longer uses native `fetch`, so requests look like Chrome on the wire and ambient proxy variables no longer apply.
 
@@ -107,6 +126,7 @@ The client resolves options, selects a document source by mode, and selects a co
 - `deadline.ts` owns the per-scrape deadline and the one `AbortSignal` every stage observes.
 - `sources/http.ts` is the only production module that imports `wreq-js` (`sources/http.test.ts` also imports `resolveProfile` to check that the pinned profile is the newest the binding offers); `sources/decode.ts` owns charset decoding.
 - `proxy/relay.ts` owns proxy dialing, refusals, and failure attribution.
+- `blocks/rules.ts` is the ruleset as typed data; `blocks/classify.ts` turns a response into a block report.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.

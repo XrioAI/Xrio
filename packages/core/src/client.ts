@@ -14,6 +14,15 @@ import type {
   SourceDocument,
 } from "./types.ts";
 
+export type {
+  BlockEvidence,
+  BlockReport,
+  BlockVerdict,
+  ChallengeOutcome,
+  ChallengeReport,
+  ChallengeRound,
+} from "./blocks/classify.ts";
+
 export { isXrioError, XrioError } from "./errors.ts";
 
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
@@ -74,6 +83,7 @@ export class XrioClient {
 
     return {
       ...content,
+      block: document.block,
       cookies: document.cookies,
       headers: document.headers,
       status: document.status,

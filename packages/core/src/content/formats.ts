@@ -1,7 +1,7 @@
 import { htmlToMarkdown } from "@mdream/js";
 import { extractionPlugin } from "@mdream/js/plugins";
 
-import type { SourceDocument, StructuredContent } from "../types.ts";
+import type { RenderedDocument, StructuredContent } from "../types.ts";
 import {
   bodyContent,
   htmlPlugins,
@@ -11,9 +11,12 @@ import {
   resolveUrl,
 } from "./document.ts";
 
-export const getHtml = ({ html }: SourceDocument): string => html;
+export const getHtml = ({ html }: RenderedDocument): string => html;
 
-export const renderMarkdown = (document: SourceDocument, baseUrl = readBaseUrl(document)): string =>
+export const renderMarkdown = (
+  document: RenderedDocument,
+  baseUrl = readBaseUrl(document),
+): string =>
   htmlToMarkdown(document.html, {
     hooks: [
       bodyContent,
@@ -34,7 +37,7 @@ export const renderMarkdown = (document: SourceDocument, baseUrl = readBaseUrl(d
     plugins: htmlPlugins,
   });
 
-export const extractContent = (document: SourceDocument): StructuredContent => {
+export const extractContent = (document: RenderedDocument): StructuredContent => {
   const { html, url } = document;
 
   const metadata: StructuredContent["metadata"] = {

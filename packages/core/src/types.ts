@@ -1,3 +1,4 @@
+import type { BlockReport } from "./blocks/classify.ts";
 import type { Deadline } from "./deadline.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
@@ -42,12 +43,16 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
   [Selected in Format]: ResponseDetails & {
     data: Selected extends "json" ? StructuredContent : string;
     format: Selected;
+    block: BlockReport;
   };
 }[Format];
 
 export interface SourceDocument extends ResponseDetails {
   html: string;
+  block: BlockReport;
 }
+
+export type RenderedDocument = Pick<SourceDocument, "html" | "url">;
 
 export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
 
