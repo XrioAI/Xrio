@@ -1,3 +1,4 @@
+import { invalidOptions, redactUrl, XrioError } from "../errors.ts";
 import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
 
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
@@ -54,11 +55,11 @@ const readHtmlDocument = async (response: Response): Promise<SourceDocument> => 
     const received = response.body === null ? "no response body" : contentType || "no content type";
     const body = await readBodyPreview(response.body);
 
-    throw Object.assign(new Error(`Expected HTML from ${response.url}; received ${received}.`), {
-      ...details,
-      body,
-      code: "UNSUPPORTED_CONTENT_TYPE",
-    });
+    throw new XrioError(
+      "UNSUPPORTED_CONTENT_TYPE",
+      `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
+      { details: { ...details, body } },
+    );
   }
 
   return { ...details, html: await response.text() };
@@ -66,12 +67,14 @@ const readHtmlDocument = async (response: Response): Promise<SourceDocument> => 
 
 export const loadHttpDocument = async ({
   url,
-  timeoutMs,
-  signal,
+  proxy,
+  deadline,
 }: DocumentRequest): Promise<SourceDocument> => {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const response = await fetch(url, { signal: requestSignal });
+  if (proxy !== undefined) {
+    throw invalidOptions("proxy is not supported in http mode yet.");
+  }
+
+  const response = await fetch(url, { signal: deadline.signal });
 
   return await readHtmlDocument(response);
 };

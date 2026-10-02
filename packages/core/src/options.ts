@@ -1,19 +1,31 @@
+import { invalidOptions, redactUrl } from "./errors.ts";
 import type {
-  DocumentRequest,
+  ClientDefaults,
+  ClientOptions,
   ModeOptions,
+  ProxyEndpoint,
   ResolvedMode,
-  ScrapeFormat,
   ScrapeOptions,
+  ScrapeRequest,
 } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
-const invalidOptions = (message: string) =>
-  Object.assign(new TypeError(message), { code: "INVALID_OPTIONS" as const });
+const proxyProtocols = new Map<string, ProxyEndpoint["protocol"]>([
+  ["http:", "http"],
+  ["https:", "https"],
+  ["socks5:", "socks5"],
+  ["socks5h:", "socks5"],
+]);
 
-export const resolveClientOptions = ({ mode = "http", browserPath }: ModeOptions): ResolvedMode => {
+const defaultProxyPorts = { http: 80, https: 443, socks5: 1080 } as const satisfies Record<
+  ProxyEndpoint["protocol"],
+  number
+>;
+
+const resolveMode = ({ mode = "http", browserPath }: ModeOptions): ResolvedMode => {
   switch (mode) {
     case "http": {
       return { mode };
@@ -34,10 +46,81 @@ export const resolveClientOptions = ({ mode = "http", browserPath }: ModeOptions
   }
 };
 
+const decodeCredential = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    throw invalidOptions("proxy credentials contain malformed percent-encoding.", error);
+  }
+};
+
+const normalizedHostname = (url: URL): string | undefined =>
+  url.protocol === "http:" || url.protocol === "https:"
+    ? url.hostname
+    : URL.parse(`http://${url.host}`)?.hostname;
+
+const parseProxy = (value: string): ProxyEndpoint => {
+  const url = URL.parse(value);
+
+  if (url === null) {
+    throw invalidOptions("proxy must be an absolute URL.");
+  }
+
+  const protocol = proxyProtocols.get(url.protocol);
+
+  if (protocol === undefined) {
+    throw invalidOptions("proxy must use http, https, socks5, or socks5h.");
+  }
+
+  const hostname = normalizedHostname(url);
+
+  const hasExtraParts =
+    (url.pathname !== "" && url.pathname !== "/") || url.search !== "" || url.hash !== "";
+
+  if (hostname === undefined || hasExtraParts) {
+    throw invalidOptions("proxy must be scheme://[user:password@]host[:port].");
+  }
+
+  const hasCredentials = url.username !== "" || url.password !== "";
+
+  return {
+    credentials: hasCredentials
+      ? { password: decodeCredential(url.password), username: decodeCredential(url.username) }
+      : undefined,
+    hostname,
+    port: url.port === "" ? defaultProxyPorts[protocol] : Number(url.port),
+    protocol,
+    redactedUrl: redactUrl(url),
+  };
+};
+
+const parseTargetUrl = (value: string): URL => {
+  const url = URL.parse(value);
+
+  if (url === null) {
+    throw invalidOptions("url must be an absolute URL.");
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw invalidOptions("url must use HTTP or HTTPS.");
+  }
+
+  if (url.username !== "" || url.password !== "") {
+    throw invalidOptions(`url must not include credentials: ${redactUrl(url)}`);
+  }
+
+  return url;
+};
+
+export const resolveClientOptions = (options: ClientOptions): ClientDefaults => ({
+  mode: resolveMode(options),
+  proxy: options.proxy === undefined ? undefined : parseProxy(options.proxy),
+});
+
 export const resolveScrapeOptions = (
   options: ScrapeOptions,
-  clientMode: ResolvedMode,
-): DocumentRequest & { format: ScrapeFormat } => {
+  defaults: ClientDefaults,
+): ScrapeRequest => {
   const { format, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
 
   if (format !== "html" && format !== "markdown" && format !== "json") {
@@ -48,13 +131,9 @@ export const resolveScrapeOptions = (
     throw invalidOptions(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
   }
 
-  const url = new URL(options.url);
+  const url = parseTargetUrl(options.url);
+  const mode = options.mode === undefined ? defaults.mode : resolveMode(options);
+  const proxy = options.proxy === undefined ? defaults.proxy : parseProxy(options.proxy);
 
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw invalidOptions("url must use HTTP or HTTPS.");
-  }
-
-  const mode = options.mode === undefined ? clientMode : resolveClientOptions(options);
-
-  return { ...mode, format, signal, timeoutMs, url };
+  return { format, signal, source: { ...mode, proxy, url }, timeoutMs };
 };

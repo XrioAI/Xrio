@@ -1,11 +1,14 @@
-export const loadHeadedDocument = (): never => {
-  throw Object.assign(new Error("The headed mode is not implemented."), {
-    code: "MODE_NOT_IMPLEMENTED",
+import { XrioError } from "../errors.ts";
+
+const notImplemented = (mode: string): XrioError<"MODE_NOT_IMPLEMENTED"> =>
+  new XrioError("MODE_NOT_IMPLEMENTED", `The ${mode} mode is not implemented.`, {
+    details: undefined,
   });
+
+export const loadHeadedDocument = (): never => {
+  throw notImplemented("headed");
 };
 
 export const loadHeadlessDocument = (): never => {
-  throw Object.assign(new Error("The headless mode is not implemented."), {
-    code: "MODE_NOT_IMPLEMENTED",
-  });
+  throw notImplemented("headless");
 };

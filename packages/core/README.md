@@ -39,7 +39,9 @@ HTML preserves the decoded response body. Markdown and text cover the whole body
 
 The default mode is `http`, which uses native `fetch`. Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client. Browser modes (`headless` and `headed`) require `browserPath` and currently reject with a not-implemented error. An explicit browser-mode override must supply its own path.
 
-`timeoutMs` applies to fetching and reading the response body, defaults to 60,000, and must be a positive integer no greater than 2,147,483,647. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
+`proxy` takes an `http`, `https`, `socks5`, or `socks5h` URL, as a client default or per scrape. It is parsed once, credentials are percent-decoded exactly once, and they never appear in messages. Native `fetch` cannot use a proxy, so until http mode moves to a client that can, a scrape with a proxy rejects with `INVALID_OPTIONS` instead of connecting directly.
+
+`timeoutMs` is one deadline for the whole scrape, covering connecting, redirects, reading the body, and building the result. It defaults to 60,000 and must be a positive integer no greater than 2,147,483,647. When it passes, the scrape rejects with an `XrioError` whose `code` is `TIMEOUT`. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
 
 ```ts
 const controller = new AbortController();
@@ -54,23 +56,46 @@ const result = await pending;
 result.data;
 ```
 
-HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), throw an `Error` with `code: "UNSUPPORTED_CONTENT_TYPE"` and the response's `url`, `status`, `headers`, and `cookies`. Its `body` holds at most the first 65,536 bytes of the response body, decoded as UTF-8, so plain-text and JSON block pages stay inspectable; it is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
+When the caller aborts, the scrape rejects with `signal.reason`, as native APIs do.
 
-Errors created by this package have stable codes:
+HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded as UTF-8, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
 
-| Code                       | Error class | Meaning                                                       |
-| -------------------------- | ----------- | ------------------------------------------------------------- |
-| `INVALID_OPTIONS`          | `TypeError` | Invalid format, mode, browser path, timeout, or URL protocol. |
-| `UNSUPPORTED_CONTENT_TYPE` | `Error`     | The response cannot be processed as an HTML document.         |
-| `MODE_NOT_IMPLEMENTED`     | `Error`     | Headed or headless mode is not implemented.                   |
+Errors created by this package carry a stable `code` from one closed set, and keep the original error as `cause` when there is one. `INVALID_OPTIONS` is a `TypeError`; every other code is an `XrioError` with typed `details`. `isXrioError(value, code?)` checks the code, so it covers both and narrows `details`:
 
-Native errors propagate unchanged, including URL parsing (`ERR_INVALID_URL`), network, timeout, and cancellation failures. There is no blanket catch or error wrapping, and there are no retries. Consumers can inspect `error.code` on package errors after narrowing the caught value; native errors retain their own identifiers and causes.
+```ts
+import { isXrioError } from "@xrio/core";
 
-Migration: HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
+try {
+  await xrio.scrape({ url: "https://example.com/data.json", format: "html" });
+} catch (error) {
+  if (isXrioError(error, "UNSUPPORTED_CONTENT_TYPE")) {
+    error.details.status;
+    error.details.body;
+  }
+}
+```
+
+| Code                       | Error class | When                                                                                                                                                                        |
+| -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, a proxy in http mode (not supported yet), or a URL that is relative, not HTTP(S), or carries credentials. |
+| `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details and a body preview.                                                                                          |
+| `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                   |
+| `MODE_NOT_IMPLEMENTED`     | `XrioError` | Headed or headless mode is not implemented.                                                                                                                                 |
+
+Network failures propagate as native errors. There are no retries. Messages never include URL or proxy credentials.
+
+Migration:
+
+- HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
+- `UNSUPPORTED_CONTENT_TYPE` and `MODE_NOT_IMPLEMENTED` are now `XrioError`s. Response fields moved from the error itself to `error.details`.
+- Invalid URLs reject with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`.
+- Timeouts reject with `TIMEOUT` instead of a native `TimeoutError`.
 
 The client resolves options, selects a document source by mode, and selects a content operation by format. The source and format mappings are independent. To implement a mode, add its source handler and update the mode mapping; HTTP loading and the scrape workflow do not need to change.
 
-- `options.ts` owns native input validation, defaults, and per-call mode resolution.
+- `options.ts` owns native input validation, defaults, per-call mode resolution, and proxy URL parsing.
+- `errors.ts` owns the error codes, `XrioError`, `isXrioError`, and URL redaction for messages.
+- `deadline.ts` owns the per-scrape deadline and the one `AbortSignal` every stage observes.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.

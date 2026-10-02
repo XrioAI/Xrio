@@ -1,7 +1,17 @@
 import { describe, expectTypeOf, it } from "vite-plus/test";
 
-import { XrioClient } from "./client.ts";
-import type { ScrapeFormat, ScrapeResult, StructuredContent } from "./client.ts";
+import { isXrioError, XrioClient, XrioError } from "./client.ts";
+import type {
+  ClientOptions,
+  ErrorCode,
+  InvalidOptionsError,
+  ScrapeFormat,
+  ScrapeResult,
+  StructuredContent,
+  XrioErrorCode,
+} from "./client.ts";
+
+declare const error: unknown;
 
 describe("XrioClient types", () => {
   it("the public API requires explicit formats and complete browser-mode overrides", () => {
@@ -54,5 +64,54 @@ describe("XrioClient types", () => {
   it("exposes each response header as an optional string and cookies separately", () => {
     expectTypeOf<ScrapeResult["headers"]["content-type"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ScrapeResult["cookies"]>().toEqualTypeOf<string[]>();
+  });
+
+  it("accepts a proxy as a client default and as a per-scrape override", () => {
+    const client = new XrioClient({ proxy: "socks5h://proxy.test:1080" });
+
+    expectTypeOf<ClientOptions["proxy"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf(
+      client.scrape({
+        format: "html",
+        proxy: "http://proxy.test:8000",
+        url: "https://example.com",
+      }),
+    ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
+  });
+
+  it("narrows errors and their details by code", () => {
+    expectTypeOf<Exclude<ErrorCode, XrioErrorCode>>().toEqualTypeOf<"INVALID_OPTIONS">();
+
+    if (isXrioError(error, "UNSUPPORTED_CONTENT_TYPE")) {
+      expectTypeOf(error).toEqualTypeOf<XrioError<"UNSUPPORTED_CONTENT_TYPE">>();
+      expectTypeOf(error.details.body).toEqualTypeOf<string>();
+      expectTypeOf(error.details.status).toEqualTypeOf<number>();
+    }
+
+    if (isXrioError(error, "INVALID_OPTIONS")) {
+      expectTypeOf(error).toEqualTypeOf<InvalidOptionsError>();
+      expectTypeOf(error).toExtend<TypeError>();
+    }
+
+    if (isXrioError(error)) {
+      expectTypeOf(error.code).toEqualTypeOf<ErrorCode>();
+
+      if (error.code === "UNSUPPORTED_CONTENT_TYPE") {
+        expectTypeOf(error.details.cookies).toEqualTypeOf<string[]>();
+      }
+    }
+
+    expectTypeOf<XrioError<"MODE_NOT_IMPLEMENTED">["details"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<XrioError<"TIMEOUT">["details"]>().toEqualTypeOf<undefined>();
+    // @ts-expect-error Unsupported-content errors require their response details.
+    void new XrioError("UNSUPPORTED_CONTENT_TYPE", "Missing details");
+    // @ts-expect-error A code type argument needs the code it names.
+    void isXrioError<"MODE_NOT_IMPLEMENTED">(error);
+    // @ts-expect-error Details must belong to the code, even with a widened code type.
+    void new XrioError<XrioErrorCode>("UNSUPPORTED_CONTENT_TYPE", "Missing body", {
+      details: undefined,
+    });
+    // @ts-expect-error Codes are a closed set.
+    void isXrioError(error, "ERR_INVALID_URL");
   });
 });
