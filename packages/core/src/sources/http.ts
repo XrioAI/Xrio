@@ -1,68 +1,106 @@
+import { createSession } from "wreq-js";
+import type { CreateSessionOptions, Response as ClientResponse } from "wreq-js";
+
+import type { Deadline } from "../deadline.ts";
 import { invalidOptions, redactUrl, XrioError } from "../errors.ts";
-import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
+import { startRelay } from "../proxy/relay.ts";
+import type { DocumentRequest, SourceDocument } from "../types.ts";
+import { responseDetailsFrom } from "./response.ts";
+
+const chromeProfile = {
+  browser: "chrome_149",
+  emulation: {
+    http2Options: {
+      enablePush: false,
+      headerTableSize: 65_536,
+      headersPseudoOrder: ["Method", "Authority", "Scheme", "Path"],
+      headersStreamDependency: { dependencyId: 0, exclusive: true, weight: 255 },
+      initialConnectionWindowSize: 15_728_640,
+      initialWindowSize: 6_291_456,
+      maxHeaderListSize: 262_144,
+      settingsOrder: ["HeaderTableSize", "EnablePush", "InitialWindowSize", "MaxHeaderListSize"],
+    },
+  },
+  os: "linux",
+} satisfies CreateSessionOptions;
 
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
 
-const readResponseDetails = (response: Response): ResponseDetails => {
-  const headers: ResponseDetails["headers"] = {};
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
-  for (const [name, value] of response.headers) {
-    if (name !== "set-cookie") {
-      headers[name] = value;
-    }
-  }
+const utf8 = new TextDecoder();
 
-  return {
-    cookies: response.headers.getSetCookie(),
-    headers,
-    status: response.status,
-    url: response.url,
-  };
-};
+const readBody = async (
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+  deadline: Deadline,
+): Promise<{ bytes: Uint8Array; truncated: boolean }> => {
+  deadline.throwIfExpired();
 
-const readBodyPreview = async (body: ReadableStream<Uint8Array> | null): Promise<string> => {
   if (body === null) {
-    return "";
+    return { bytes: new Uint8Array(), truncated: false };
   }
 
-  const decoder = new TextDecoder();
-  let preview = "";
-  let remainingBytes = UNSUPPORTED_BODY_PREVIEW_BYTES;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
 
-  for await (const chunk of body) {
-    const kept = chunk.subarray(0, remainingBytes);
+  const cancelOnAbort = () => {
+    void Promise.allSettled([reader.cancel()]);
+  };
 
-    preview += decoder.decode(kept, { stream: true });
-    remainingBytes -= kept.byteLength;
+  deadline.signal.addEventListener("abort", cancelOnAbort, { once: true });
 
-    if (remainingBytes === 0) {
-      break;
+  try {
+    for (;;) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- body chunks arrive in order and are counted as they stream.
+      const { done, value } = await reader.read();
+      deadline.signal.throwIfAborted();
+
+      if (done) {
+        return { bytes: Buffer.concat(chunks), truncated: false };
+      }
+
+      const kept = value.subarray(0, maxBytes - length);
+      chunks.push(kept);
+      length += kept.byteLength;
+
+      if (kept.byteLength < value.byteLength) {
+        break;
+      }
     }
+
+    await reader.cancel();
+
+    return { bytes: Buffer.concat(chunks), truncated: true };
+  } finally {
+    deadline.signal.removeEventListener("abort", cancelOnAbort);
   }
-
-  preview += decoder.decode();
-
-  return preview;
 };
 
-const readHtmlDocument = async (response: Response): Promise<SourceDocument> => {
-  const details = readResponseDetails(response);
-  const contentType = response.headers.get("content-type") ?? "";
+const readDocument = async (
+  response: ClientResponse,
+  deadline: Deadline,
+): Promise<SourceDocument> => {
+  const details = responseDetailsFrom(response.url, response.status, response.headers);
+  const contentType = details.headers["content-type"] ?? "";
   const [mediaType] = contentType.split(";");
+  const body = NULL_BODY_STATUSES.has(response.status) ? null : response.body;
 
-  // ponytail: HTML input only; add plain-text and JSON parsing when needed.
-  if (mediaType.trim().toLowerCase() !== "text/html" || response.body === null) {
-    const received = response.body === null ? "no response body" : contentType || "no content type";
-    const body = await readBodyPreview(response.body);
+  if (mediaType.trim().toLowerCase() !== "text/html" || body === null) {
+    const received = body === null ? "no response body" : contentType || "no content type";
+    const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline);
 
     throw new XrioError(
       "UNSUPPORTED_CONTENT_TYPE",
       `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
-      { details: { ...details, body } },
+      { details: { ...details, body: utf8.decode(preview.bytes) } },
     );
   }
 
-  return { ...details, html: await response.text() };
+  const { bytes } = await readBody(body, Number.POSITIVE_INFINITY, deadline);
+
+  return { ...details, html: utf8.decode(bytes) };
 };
 
 export const loadHttpDocument = async ({
@@ -74,7 +112,11 @@ export const loadHttpDocument = async ({
     throw invalidOptions("proxy is not supported in http mode yet.");
   }
 
-  const response = await fetch(url, { signal: deadline.signal });
+  await using relay = await startRelay(deadline);
+  await using session = await createSession({ ...chromeProfile, proxy: relay.url, timeout: 0 });
 
-  return await readHtmlDocument(response);
+  deadline.throwIfExpired();
+  const response = await session.fetch(url.href, { signal: deadline.signal });
+
+  return await readDocument(response, deadline);
 };

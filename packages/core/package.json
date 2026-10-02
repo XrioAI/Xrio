@@ -18,7 +18,8 @@
     "typecheck": "vp exec tsc --noEmit"
   },
   "dependencies": {
-    "@mdream/js": "1.7.2"
+    "@mdream/js": "1.7.2",
+    "wreq-js": "3.2.0"
   },
   "devDependencies": {
     "@xrio/typescript-config": "workspace:*"

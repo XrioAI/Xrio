@@ -37,9 +37,11 @@ For `json`, `data` retains the existing `StructuredContent` fields:
 
 HTML preserves the decoded response body. Markdown and text cover the whole body, including navigation, sidebars, footers, and `noscript` content. JSON uses the same Markdown conversion as `format: "markdown"`. Links and images retain duplicates and source order, including elements inside templates. Their URLs resolve against the final response URL and the first `<base href>` when present. Conversion uses `@mdream/js`.
 
-The default mode is `http`, which uses native `fetch`. Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client. Browser modes (`headless` and `headed`) require `browserPath` and currently reject with a not-implemented error. An explicit browser-mode override must supply its own path.
+The default mode is `http`. Over HTTPS it sends the request a Chrome navigation would send: the TLS ClientHello, HTTP/2 SETTINGS, WINDOW_UPDATE and priority frames, and the header set and order come from a pinned Chrome profile in [`wreq-js`](https://github.com/sqdshguy/wreq-js), on Linux. The profile is Chrome 149, the newest the binding offers; Chrome 150 and later add ML-DSA signature algorithms, signature-algorithm GREASE and a trust-anchors extension that it cannot send yet, so the profile claims Chrome 149 throughout rather than mixing versions. Requests go through a local relay that connects directly, and the ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` variables are ignored.
 
-`proxy` takes an `http`, `https`, `socks5`, or `socks5h` URL, as a client default or per scrape. It is parsed once, credentials are percent-decoded exactly once, and they never appear in messages. Native `fetch` cannot use a proxy, so until http mode moves to a client that can, a scrape with a proxy rejects with `INVALID_OPTIONS` instead of connecting directly.
+Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client. Browser modes (`headless` and `headed`) require `browserPath` and currently reject with a not-implemented error. An explicit browser-mode override must supply its own path.
+
+`proxy` takes an `http`, `https`, `socks5`, or `socks5h` URL, as a client default or per scrape. It is parsed once, credentials are percent-decoded exactly once, and they never appear in messages. http mode cannot dial a proxy yet, so a scrape with a proxy rejects with `INVALID_OPTIONS` instead of connecting directly.
 
 `timeoutMs` is one deadline for the whole scrape, covering connecting, redirects, reading the body, and building the result. It defaults to 60,000 and must be a positive integer no greater than 2,147,483,647. When it passes, the scrape rejects with an `XrioError` whose `code` is `TIMEOUT`. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
 
@@ -82,7 +84,7 @@ try {
 | `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                   |
 | `MODE_NOT_IMPLEMENTED`     | `XrioError` | Headed or headless mode is not implemented.                                                                                                                                 |
 
-Network failures propagate as native errors. There are no retries. Messages never include URL or proxy credentials.
+Network failures propagate as the HTTP client's own errors. There are no retries. Messages never include URL or proxy credentials.
 
 Migration:
 
@@ -90,12 +92,15 @@ Migration:
 - `UNSUPPORTED_CONTENT_TYPE` and `MODE_NOT_IMPLEMENTED` are now `XrioError`s. Response fields moved from the error itself to `error.details`.
 - Invalid URLs reject with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`.
 - Timeouts reject with `TIMEOUT` instead of a native `TimeoutError`.
+- http mode no longer uses native `fetch`, so requests look like Chrome on the wire and ambient proxy variables no longer apply.
 
 The client resolves options, selects a document source by mode, and selects a content operation by format. The source and format mappings are independent. To implement a mode, add its source handler and update the mode mapping; HTTP loading and the scrape workflow do not need to change.
 
 - `options.ts` owns native input validation, defaults, per-call mode resolution, and proxy URL parsing.
 - `errors.ts` owns the error codes, `XrioError`, `isXrioError`, and URL redaction for messages.
 - `deadline.ts` owns the per-scrape deadline and the one `AbortSignal` every stage observes.
+- `sources/http.ts` is the only production module that imports `wreq-js` (`sources/http.test.ts` also imports `resolveProfile` to check that the pinned profile is the newest the binding offers).
+- `proxy/relay.ts` owns the loopback relay every http-mode request goes through.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.

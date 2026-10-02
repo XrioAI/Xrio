@@ -366,10 +366,10 @@ describe(XrioClient, () => {
     },
   );
 
-  it("propagates native network errors", async () => {
+  it("propagates the client's network errors", async () => {
     await expect(
       new XrioClient().scrape({ format: "html", url: `${origin}/disconnect` }),
-    ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKET" }, name: "TypeError" });
+    ).rejects.toMatchObject({ name: "RequestError" });
   });
 
   it("allows callers to abort before fetching or during a request", async () => {
