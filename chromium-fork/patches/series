@@ -47,3 +47,4 @@ components-permissions-permission_request_manager.cc.patch
 ui-base-x-x11_display_util.cc.patch
 ui-ozone-platform-headless-headless_screen.cc.patch
 ui-native_theme-native_theme.cc.patch
+build-config-compiler-BUILD.gn.patch

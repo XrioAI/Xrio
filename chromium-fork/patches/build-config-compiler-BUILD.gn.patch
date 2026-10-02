@@ -1,0 +1,31 @@
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+index 652107318f2f04016055cf84eecdd003e63afd87..90a9ed8fcc71c412001deb5285542c9b11a09963 100644
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -131,6 +131,8 @@ declare_args() {
+   # The cache can lead to non-determinism: https://crbug.com/1486045
+   thin_lto_enable_cache = true
+ 
++  thin_lto_jobs = "all"
++
+   # Initialize all local variables with a pattern. This flag will fill
+   # uninitialized floating-point types (and 32-bit pointers) with 0xFF and the
+   # rest with 0xAA. This makes behavior of uninitialized memory bugs consistent,
+@@ -820,7 +822,7 @@ config("compiler") {
+ 
+     if (is_win) {
+       ldflags += [
+-        "/opt:lldltojobs=all",
++        "/opt:lldltojobs=$thin_lto_jobs",
+         "-mllvm:-import-instr-limit=$import_instr_limit",
+         "-mllvm:-disable-auto-upgrade-debug-info",
+       ]
+@@ -835,7 +837,7 @@ config("compiler") {
+       # and let it use all cores.
+       # TODO(thakis): Check if '=0' (that is, number of cores, instead
+       # of "all" which means number of hardware threads) is faster.
+-      ldflags += [ "-Wl,--thinlto-jobs=all" ]
++      ldflags += [ "-Wl,--thinlto-jobs=$thin_lto_jobs" ]
+ 
+       if (is_chromeos) {
+         # ARM was originally set lower than x86 to keep the size

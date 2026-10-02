@@ -53,3 +53,4 @@ Applied to Chromium in `series` order by `scripts/apply.sh`, against the tag in 
 | `ui-base-x-x11_display_util.cc.patch` | Seeded taskbar-sized work area on X11. |
 | `ui-ozone-platform-headless-headless_screen.cc.patch` | Same work-area panel for headless screens. |
 | `ui-native_theme-native_theme.cc.patch` | Overrides `prefers-color-scheme`. |
+| `build-config-compiler-BUILD.gn.patch` | Adds the `thin_lto_jobs` gn arg (default `all`) so a build can cap the ThinLTO link threads; `build.sh` sets it from `JOBS`. |

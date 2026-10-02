@@ -54,6 +54,7 @@ args="$args symbol_level=0 blink_symbol_level=0 v8_symbol_level=0"
 args="$args proprietary_codecs=true ffmpeg_branding=\"Chrome\" enable_widevine=true"
 args="$args disable_fieldtrial_testing_config=true"
 [ "$os" != linux ] || args="$args bundle_widevine_cdm=true"
+[ -z "${JOBS:-}" ] || args="$args thin_lto_jobs=\"$JOBS\""
 
 tests="base_unittests services_unittests components_unittests"
 
