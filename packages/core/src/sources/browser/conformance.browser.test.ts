@@ -402,6 +402,16 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
     expect(markerOf(document.html)).toBe("basic-auth");
   });
 
+  it("returns a 403 with an empty body as data", async () => {
+    const document = await load(driver, mode, "/empty-403");
+
+    expect(document).toMatchObject({
+      cookies: ["empty-403=1; Path=/"],
+      headers: { "x-page": "empty-403" },
+      status: 403,
+    });
+  });
+
   it("reads pages under a strict CSP, in legacy charsets and as XHTML", async () => {
     const strict = await load(driver, mode, "/strict-csp");
     const legacy = await load(driver, mode, "/legacy-charset");

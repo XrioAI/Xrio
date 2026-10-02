@@ -24,6 +24,8 @@ const isHtml = (value: unknown): value is string => typeof value === "string";
 
 const MAX_REQUEST_URLS = 4000;
 
+const COMMITTED_ERROR_PAGE = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
+
 const MAX_REQUEST_URL_CHARS = 2048;
 
 interface RawHeaderEvent {
@@ -205,6 +207,10 @@ const navigateTo = async (browser: DriverBrowser, url: URL, deadline: Deadline):
     await browser.navigate(url.href, deadline);
   } catch (error) {
     if (isDriverFailure(error, "navigation-failed")) {
+      if (error.reason.netError === COMMITTED_ERROR_PAGE) {
+        return;
+      }
+
       throw navigationError(url, error, error.reason.netError);
     }
 

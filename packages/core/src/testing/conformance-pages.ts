@@ -294,6 +294,13 @@ const routes = new Map<
     },
   ],
   [
+    "/empty-403",
+    (response) => {
+      response.writeHead(403, { "set-cookie": "empty-403=1; Path=/", "x-page": "empty-403" });
+      response.end();
+    },
+  ],
+  [
     "/strict-csp",
     (response) => {
       response.setHeader("content-security-policy", "default-src 'none'; script-src 'none'");
