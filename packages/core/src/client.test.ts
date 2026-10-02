@@ -1,9 +1,10 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { XrioClient } from "./client.ts";
+import { startFixtureServer } from "./testing/fixture-server.ts";
+import type { FixtureServer } from "./testing/fixture-server.ts";
 
 const html = `<!doctype html>
 <html lang="en">
@@ -38,7 +39,12 @@ const cookies = [
 
 const previewBytes = 65_536;
 
-const server = createServer((request, response) => {
+let onRequest: (() => void) | undefined;
+
+const routes = (request: IncomingMessage, response: ServerResponse) => {
+  onRequest?.();
+  onRequest = undefined;
+
   const url = new URL(request.url ?? "/", "http://localhost");
   const status = Number(url.searchParams.get("status") ?? 200);
 
@@ -129,29 +135,19 @@ const server = createServer((request, response) => {
         .end(html);
     }
   }
-});
+};
 
 describe(XrioClient, () => {
+  let server: FixtureServer;
   let origin: string;
 
   beforeAll(async () => {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Node returns either a TCP address, a pipe path, or null.
-    if (address === null || typeof address === "string") {
-      throw new Error("Test server did not receive a TCP port.");
-    }
-
-    origin = `http://127.0.0.1:${address.port}`;
+    server = await startFixtureServer(routes);
+    ({ origin } = server);
   });
 
   afterAll(async () => {
-    const closed = once(server, "close");
-    server.close();
-    server.closeAllConnections();
-    await closed;
+    await server[Symbol.asyncDispose]();
   });
 
   it.each(["html", "markdown", "json"] as const)(
@@ -392,9 +388,9 @@ describe(XrioClient, () => {
   it("allows callers to abort before fetching or during a request", async () => {
     const client = new XrioClient();
     const controller = new AbortController();
-    server.once("request", () => {
+    onRequest = () => {
       controller.abort();
-    });
+    };
 
     const pending = client.scrape({
       format: "html",
