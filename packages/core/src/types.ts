@@ -1,3 +1,5 @@
+import type { Deadline } from "./deadline.ts";
+
 export type ScrapeFormat = "html" | "markdown" | "json";
 
 export type ModeOptions =
@@ -46,8 +48,13 @@ export interface SourceDocument extends ResponseDetails {
 
 export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
 
-export type DocumentRequest = ResolvedMode & {
-  url: URL;
+type SourceRequest = ResolvedMode & { url: URL };
+
+export type DocumentRequest = SourceRequest & { deadline: Deadline };
+
+export interface ScrapeRequest {
+  format: ScrapeFormat;
+  signal: AbortSignal | undefined;
+  source: SourceRequest;
   timeoutMs: number;
-  signal?: AbortSignal;
-};
+}

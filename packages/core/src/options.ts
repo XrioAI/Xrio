@@ -1,11 +1,5 @@
 import { invalidOptions, redactUrl } from "./errors.ts";
-import type {
-  DocumentRequest,
-  ModeOptions,
-  ResolvedMode,
-  ScrapeFormat,
-  ScrapeOptions,
-} from "./types.ts";
+import type { ModeOptions, ResolvedMode, ScrapeOptions, ScrapeRequest } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -53,7 +47,7 @@ export const resolveClientOptions = ({ mode = "http", browserPath }: ModeOptions
 export const resolveScrapeOptions = (
   options: ScrapeOptions,
   clientMode: ResolvedMode,
-): DocumentRequest & { format: ScrapeFormat } => {
+): ScrapeRequest => {
   const { format, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
 
   if (format !== "html" && format !== "markdown" && format !== "json") {
@@ -67,5 +61,5 @@ export const resolveScrapeOptions = (
   const url = parseTargetUrl(options.url);
   const mode = options.mode === undefined ? clientMode : resolveClientOptions(options);
 
-  return { ...mode, format, signal, timeoutMs, url };
+  return { format, signal, source: { ...mode, url }, timeoutMs };
 };

@@ -88,6 +88,7 @@ describe("XrioClient types", () => {
     }
 
     expectTypeOf<XrioError<"MODE_NOT_IMPLEMENTED">["details"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<XrioError<"TIMEOUT">["details"]>().toEqualTypeOf<undefined>();
     // @ts-expect-error Unsupported-content errors require their response details.
     void new XrioError("UNSUPPORTED_CONTENT_TYPE", "Missing details");
     // @ts-expect-error A code type argument needs the code it names.
