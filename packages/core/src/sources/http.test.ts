@@ -13,6 +13,8 @@ import {
 } from "../testing/fixture-server.ts";
 import type { FixtureServer } from "../testing/fixture-server.ts";
 
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
 const USER_AGENT_MAJOR = /Chrome\/(?<major>\d+)\.0\.0\.0/u;
 
 const html = (body: string) => `<!doctype html><html><head></head><body>${body}</body></html>`;
@@ -63,11 +65,26 @@ const charsetPages = new Map(
   }),
 );
 
+const writeLargeBody = (response: ServerResponse) => {
+  const chunk = Buffer.alloc(1024 * 1024, "a");
+  response.writeHead(200, { "content-type": "text/html" });
+
+  for (let written = 0; written < MAX_BODY_BYTES; written += chunk.byteLength) {
+    response.write(chunk);
+  }
+
+  response.end("b");
+};
+
 const routes = (request: IncomingMessage, response: ServerResponse) => {
   const url = new URL(request.url ?? "/", "http://fixture.test");
   const charsetPage = charsetPages.get(url.pathname);
 
-  if (charsetPage === undefined) {
+  if (charsetPage !== undefined) {
+    response.writeHead(200, { "content-type": charsetPage.contentType }).end(charsetPage.bytes);
+  } else if (url.pathname === "/large") {
+    writeLargeBody(response);
+  } else {
     response
       .writeHead(200, { "content-type": "text/html" })
       .end(
@@ -75,8 +92,6 @@ const routes = (request: IncomingMessage, response: ServerResponse) => {
           `<p id="cookie">${request.headers.cookie ?? ""}</p><p id="ua">${request.headers["user-agent"] ?? ""}</p>`,
         ),
       );
-  } else {
-    response.writeHead(200, { "content-type": charsetPage.contentType }).end(charsetPage.bytes);
   }
 };
 
@@ -103,6 +118,12 @@ describe("http mode", () => {
     const result = await client.scrape({ format: "html", url: `${origin}${path}` });
 
     expect(result.data).toContain(expected);
+  });
+
+  it("rejects a decoded body over 32 MiB", async () => {
+    await expect(client.scrape({ format: "html", url: `${origin}/large` })).rejects.toMatchObject({
+      code: "RESPONSE_TOO_LARGE",
+    });
   });
 
   it("presents Linux Chrome with the newest Chrome profile the client offers", async () => {
