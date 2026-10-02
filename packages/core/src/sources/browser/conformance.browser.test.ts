@@ -266,9 +266,19 @@ const waitUntil = async (condition: () => Promise<boolean>, budgetMs: number): P
   return await condition();
 };
 
-const MODES = ["headless", "headed"] as const;
+const ALL_MODES = ["headless", "headed"] as const;
 
-type Mode = (typeof MODES)[number];
+type Mode = (typeof ALL_MODES)[number];
+
+const REQUESTED_MODES = process.env.XRIO_TEST_MODES?.split(",");
+
+const MODES = ALL_MODES.filter((mode) => REQUESTED_MODES?.includes(mode) ?? true);
+
+if (MODES.length === 0) {
+  throw new Error(
+    `XRIO_TEST_MODES must name headless, headed or both, not "${process.env.XRIO_TEST_MODES}".`,
+  );
+}
 
 const DRIVERS_UNDER_TEST = [
   { driver: "cdp", probe: { visibility: "visible", webdriver: "false" } },
