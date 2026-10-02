@@ -23,3 +23,20 @@ export const withinSignal = async <Result>(
     signal.removeEventListener("abort", abort);
   }
 };
+
+export const settleWithin = async (
+  operation: Promise<unknown>,
+  budgetMs: number,
+): Promise<void> => {
+  const timer = new AbortController();
+
+  const expiry = setTimeout(() => {
+    timer.abort(new Error("Cleanup exceeded its budget."));
+  }, budgetMs);
+
+  try {
+    await Promise.allSettled([withinSignal(async () => await operation, timer.signal)]);
+  } finally {
+    clearTimeout(expiry);
+  }
+};
