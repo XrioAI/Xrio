@@ -32,6 +32,13 @@ case "$target" in
 esac
 need git python3 gn autoninja
 
+case "${JOBS:-1}" in 0 | *[!0-9]*) die "JOBS must be a positive number" ;; esac
+if [ -z "${JOBS:-}" ] && [ "$(uname -s)" = Darwin ]; then
+  JOBS=$(( $(sysctl -n hw.memsize) / 8589934592 ))
+  [ "$JOBS" -ge 2 ] || JOBS=2
+  echo "jobs: $JOBS compile jobs on this Mac (one per 8 GB of RAM); set JOBS to change it"
+fi
+
 [ -d "$SRC/.git" ] || die "no Chromium checkout at $SRC"
 [ "$os" != win ] || [ -f "$SRC/build/win_toolchain.json" ] \
   || die "no Windows toolchain in $SRC: add 'win' to target_os in .gclient, export DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL and GYP_MSVS_HASH_<hash> (src/docs/win_cross.md), then run scripts/sync.sh"
@@ -97,17 +104,17 @@ name="xrio-chrome-$CHROMIUM_VERSION-v$FORK_VERSION-$target"
 mkdir -p "$root/dist"
 case "$os" in
   linux)
-    autoninja -C "$out" chrome $tests
+    autoninja ${JOBS:+-j "$JOBS"} -C "$out" chrome $tests
     run_tests
     check_knob_template "$out/chrome"
     package_linux ;;
   win)
-    autoninja -C "$out" mini_installer
+    autoninja ${JOBS:+-j "$JOBS"} -C "$out" mini_installer
     echo "unit tests not run: Windows binaries cannot run on this host"
     cp "$out/mini_installer.exe" "$root/dist/$name.exe"
     echo "packaged $root/dist/$name.exe" ;;
   mac)
-    autoninja -C "$out" chrome $tests
+    autoninja ${JOBS:+-j "$JOBS"} -C "$out" chrome $tests
     run_tests
     check_knob_template "$out/Chromium.app/Contents/MacOS/Chromium"
     rm -f "$root/dist/$name.zip"
