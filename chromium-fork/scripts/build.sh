@@ -52,7 +52,7 @@ fi
 args="target_os=\"$os\" target_cpu=\"$cpu\" is_debug=false is_official_build=true"
 args="$args symbol_level=0 blink_symbol_level=0 v8_symbol_level=0"
 args="$args proprietary_codecs=true ffmpeg_branding=\"Chrome\" enable_widevine=true"
-args="$args disable_fieldtrial_testing_config=true"
+args="$args disable_fieldtrial_testing_config=true use_siso=false"
 [ "$os" != linux ] || args="$args bundle_widevine_cdm=true"
 [ -z "${JOBS:-}" ] || args="$args thin_lto_jobs=\"$JOBS\""
 
