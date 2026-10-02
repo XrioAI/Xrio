@@ -26,11 +26,17 @@ const chromeProfile = {
   os: "linux",
 } satisfies CreateSessionOptions;
 
+const MAX_REDIRECTS = 20;
+
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+const LEADING_EMPTY_VALUES = /^(?:\s*,)+/u;
 
 const FAILURE_AFTER_REQUEST_URI = /for uri \(\S*\): (?<failure>.*)$/su;
 
@@ -166,7 +172,7 @@ const fetchOnce = async (
   let response: ClientResponse;
 
   try {
-    response = await session.fetch(url.href, { signal: deadline.signal });
+    response = await session.fetch(url.href, { redirect: "manual", signal: deadline.signal });
   } catch (error) {
     throw error instanceof RequestError ? translateRequestError(error, url, relay) : error;
   }
@@ -181,6 +187,63 @@ const fetchOnce = async (
   return response;
 };
 
+const resolveRedirect = (location: string, base: string): URL => {
+  const url = URL.parse(location, base);
+
+  if (url === null || (url.protocol !== "http:" && url.protocol !== "https:")) {
+    throw new XrioError(
+      "NETWORK_ERROR",
+      `${redactUrl(base)} redirected to an unsupported location.`,
+      {
+        details: undefined,
+      },
+    );
+  }
+
+  return url;
+};
+
+const redirectTarget = (response: ClientResponse): string | undefined => {
+  const location = response.headers.get("location")?.replace(LEADING_EMPTY_VALUES, "").trim();
+
+  return location === undefined || location === "" ? undefined : location;
+};
+
+const fetchFollowingRedirects = async (
+  session: Session,
+  url: URL,
+  deadline: Deadline,
+  relay: Relay,
+  redirects = 0,
+): Promise<ClientResponse> => {
+  const response = await fetchOnce(session, url, deadline, relay);
+  const location = redirectTarget(response);
+
+  if (!REDIRECT_STATUSES.has(response.status) || location === undefined) {
+    return response;
+  }
+
+  await response.body?.cancel();
+
+  if (redirects === MAX_REDIRECTS) {
+    throw new XrioError(
+      "TOO_MANY_REDIRECTS",
+      `${redactUrl(url)} redirected more than ${MAX_REDIRECTS} times.`,
+      {
+        details: undefined,
+      },
+    );
+  }
+
+  return await fetchFollowingRedirects(
+    session,
+    resolveRedirect(location, response.url),
+    deadline,
+    relay,
+    redirects + 1,
+  );
+};
+
 export const loadHttpDocument = async ({
   url,
   proxy,
@@ -193,5 +256,5 @@ export const loadHttpDocument = async ({
   await using relay = await startRelay(deadline);
   await using session = await createSession({ ...chromeProfile, proxy: relay.url, timeout: 0 });
 
-  return await readDocument(await fetchOnce(session, url, deadline, relay), deadline);
+  return await readDocument(await fetchFollowingRedirects(session, url, deadline, relay), deadline);
 };
