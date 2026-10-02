@@ -99,6 +99,7 @@ class Tab {
       send(main, "Page.setLifecycleEventsEnabled", { enabled: true }, lifetime),
     ]);
     void settle(this.#ready);
+    void settle(send(main, "Page.bringToFront", {}, lifetime));
   }
 
   readonly onEvent = (listener: DriverListener): (() => void) => {

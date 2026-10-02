@@ -43,6 +43,7 @@ const ALLOWED_COMMANDS = {
   "Browser.getVersion": ["browser"],
   "Browser.setDownloadBehavior": ["browser"],
   "Network.enable": EVERY_TARGET,
+  "Page.bringToFront": ["main"],
   "Page.createIsolatedWorld": ["main"],
   "Page.enable": ["main"],
   "Page.handleJavaScriptDialog": ["main"],
@@ -93,6 +94,7 @@ type ParamsIn<Kind extends Scope> = Narrowed<{
   "Browser.getVersion": NoParams;
   "Browser.setDownloadBehavior": { readonly behavior: "deny" };
   "Network.enable": { readonly maxResourceBufferSize: 0; readonly maxTotalBufferSize: 0 };
+  "Page.bringToFront": NoParams;
   "Page.createIsolatedWorld": { readonly frameId: string; readonly worldName: "" };
   "Page.enable": NoParams;
   "Page.handleJavaScriptDialog": { readonly accept: false };
