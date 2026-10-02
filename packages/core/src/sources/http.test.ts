@@ -136,6 +136,10 @@ const routes = (request: IncomingMessage, response: ServerResponse) => {
     response
       .writeHead(403, { "cf-mitigated": "challenge", "content-type": "text/html" })
       .end(html("<p>Just a moment...</p>"));
+  } else if (url.pathname === "/challenge.json") {
+    response
+      .writeHead(403, { "cf-mitigated": "challenge", "content-type": "application/json" })
+      .end('{"error":"challenge"}');
   } else {
     response
       .writeHead(200, { "content-type": "text/html" })
@@ -199,7 +203,7 @@ describe("http mode", () => {
     });
   });
 
-  it("reports a block on every result", async () => {
+  it("reports a block on results and on unsupported-content errors", async () => {
     const page = await client.scrape({ format: "html", url: `${origin}/challenge` });
     const delivered = await client.scrape({ format: "html", url: `${origin}/hop/1` });
 
@@ -210,6 +214,12 @@ describe("http mode", () => {
       passedChallenges: [],
       vendor: null,
       verdict: "ok",
+    });
+    await expect(
+      client.scrape({ format: "html", url: `${origin}/challenge.json` }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { block: { vendor: "cloudflare", verdict: "blocked" } },
     });
   });
 

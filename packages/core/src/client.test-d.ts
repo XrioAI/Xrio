@@ -85,7 +85,7 @@ describe("XrioClient types", () => {
     ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
   });
 
-  it("reports a block on every result", () => {
+  it("reports a block on every result and on unsupported-content errors", () => {
     expectTypeOf<ScrapeResult["block"]>().toEqualTypeOf<BlockReport>();
     expectTypeOf<BlockReport["verdict"]>().toEqualTypeOf<BlockVerdict>();
     expectTypeOf<BlockVerdict>().toEqualTypeOf<
@@ -98,6 +98,9 @@ describe("XrioClient types", () => {
     expectTypeOf<ChallengeOutcome>().toEqualTypeOf<
       "passed" | "passed_in_place" | "rounds_exhausted" | "budget_exhausted" | "deadline"
     >();
+    expectTypeOf<
+      XrioError<"UNSUPPORTED_CONTENT_TYPE">["details"]["block"]
+    >().toEqualTypeOf<BlockReport>();
   });
 
   it("narrows errors and their details by code", () => {
