@@ -1,0 +1,182 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { planLaunch } from "./launch-plan.ts";
+
+const scratchDir = "/tmp/xrio-501/bAbC123";
+
+const baseline = [
+  "--disable-field-trial-config",
+  "--disable-background-networking",
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-breakpad",
+  "--no-default-browser-check",
+  "--disable-dev-shm-usage",
+  "--disable-edgeupdater",
+  "--enable-features=CDPScreenshotNewSurface",
+  "--disable-hang-monitor",
+  "--disable-prompt-on-repost",
+  "--disable-renderer-backgrounding",
+  "--force-color-profile=srgb",
+  "--no-first-run",
+  "--password-store=basic",
+  "--use-mock-keychain",
+  "--no-service-autorun",
+  "--export-tagged-pdf",
+  "--disable-search-engine-choice-screen",
+  "--edge-skip-compat-layer-relaunch",
+  "--disable-infobars",
+  "--disable-search-engine-choice-screen",
+  "--disable-sync",
+  "--disable-blink-features=AutomationControlled",
+];
+
+const xrioSwitches = [
+  "--disable-features=AutofillServerCommunication,AimServerEligibilityEnabled,AimServerRequestOnStartupEnabled",
+  "--disable-component-update",
+  "--disable-domain-reliability",
+  "--lang=en-US",
+  "--accept-lang=en-US,en",
+];
+
+const tail = [`--user-data-dir=${scratchDir}/profile`, "--remote-debugging-pipe", "about:blank"];
+
+describe(planLaunch, () => {
+  it("plans the headless Linux argv", () => {
+    const plan = planLaunch({
+      browserPath: "/opt/chrome/chrome",
+      display: ":99",
+      headless: true,
+      platform: "linux",
+      scratchDir,
+      timezone: undefined,
+      xauthority: "/tmp/xvfb-run.Xauthority",
+    });
+
+    expect(plan.args).toStrictEqual([
+      ...baseline,
+      "--headless",
+      "--mute-audio",
+      "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
+      ...xrioSwitches,
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--window-size=1600,900",
+      "--screen-info={0,0 1920x1080 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=0 workAreaBottom=40}",
+      `--crash-dumps-dir=${scratchDir}/crashes`,
+      ...tail,
+    ]);
+    expect(plan.env).not.toHaveProperty("DISPLAY");
+    expect(plan.env).not.toHaveProperty("XAUTHORITY");
+  });
+
+  it("plans the headed macOS argv without headless switches or a GL override", () => {
+    const plan = planLaunch({
+      browserPath: "/Applications/Chrome.app/Contents/MacOS/Chrome",
+      display: undefined,
+      headless: false,
+      platform: "darwin",
+      scratchDir,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    expect(plan.args).toStrictEqual([
+      ...baseline,
+      ...xrioSwitches,
+      "--window-size=1600,900",
+      `--crash-dumps-dir=${scratchDir}/crashes`,
+      ...tail,
+    ]);
+  });
+
+  it("keeps one copy of each feature switch and never weakens the sandbox or automation flags", () => {
+    const { args } = planLaunch({
+      browserPath: "chrome",
+      display: ":0",
+      headless: true,
+      platform: "linux",
+      scratchDir,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    expect(args.filter((arg) => arg.startsWith("--enable-features="))).toHaveLength(1);
+    expect(args.filter((arg) => arg.startsWith("--disable-features="))).toHaveLength(1);
+    expect(
+      args.filter((arg) =>
+        ["--enable-automation", "--no-sandbox", "--hide-scrollbars"].includes(arg),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("builds the child environment explicitly", () => {
+    expect(
+      planLaunch({
+        browserPath: "chrome",
+        display: ":7",
+        headless: false,
+        platform: "linux",
+        scratchDir,
+        timezone: "America/Chicago",
+        xauthority: "/tmp/xvfb-run.Xauthority",
+      }).env,
+    ).toStrictEqual({
+      DISPLAY: ":7",
+      HOME: `${scratchDir}/home`,
+      LANG: "C.UTF-8",
+      LANGUAGE: "en_US",
+      TMPDIR: `${scratchDir}/tmp`,
+      TZ: "America/Chicago",
+      XAUTHORITY: "/tmp/xvfb-run.Xauthority",
+      XDG_CACHE_HOME: `${scratchDir}/home/.cache`,
+      XDG_CONFIG_HOME: `${scratchDir}/home/.config`,
+      XDG_DATA_HOME: `${scratchDir}/home/.local/share`,
+    });
+  });
+
+  it("writes the prediction, language and DNS-over-HTTPS preferences", () => {
+    const { files } = planLaunch({
+      browserPath: "chrome",
+      display: undefined,
+      headless: true,
+      platform: "linux",
+      scratchDir,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    expect(
+      files.map(({ contents, path }) => {
+        const parsed: unknown = JSON.parse(contents);
+
+        return { contents: parsed, path };
+      }),
+    ).toStrictEqual([
+      {
+        contents: {
+          intl: { accept_languages: "en-US,en" },
+          net: { network_prediction_options: 2 },
+        },
+        path: `${scratchDir}/profile/Default/Preferences`,
+      },
+      { contents: { dns_over_https: { mode: "off" } }, path: `${scratchDir}/profile/Local State` },
+    ]);
+  });
+
+  it("keeps Chrome's singleton socket path within the 108-byte limit", () => {
+    const { env } = planLaunch({
+      browserPath: "chrome",
+      display: undefined,
+      headless: true,
+      platform: "linux",
+      scratchDir,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    const socket = `${env.TMPDIR}/.org.chromium.Chromium.XXXXXX/SingletonSocket`;
+
+    expect(Buffer.byteLength(socket)).toBeLessThan(108);
+  });
+});

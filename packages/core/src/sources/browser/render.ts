@@ -1,0 +1,313 @@
+import { classifyResponse } from "../../blocks/classify.ts";
+import type { Deadline } from "../../deadline.ts";
+import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
+import { redactUrl, XrioError } from "../../errors.ts";
+import type { ResponseDetails, SourceDocument } from "../../types.ts";
+import { responseDetailsFrom } from "../response.ts";
+import { DriverError } from "./port.ts";
+import type {
+  DocumentHop,
+  DriverBrowser,
+  DriverErrorReason,
+  DriverEvent,
+  RawHeaders,
+} from "./port.ts";
+
+const CAPTURE_EXPRESSION = `(() => {
+  const root = document.documentElement;
+  const doctype = document.doctype ? new XMLSerializer().serializeToString(document.doctype) : "";
+
+  return root ? doctype + root.outerHTML : "";
+})()`;
+
+const isHtml = (value: unknown): value is string => typeof value === "string";
+
+const MAX_REQUEST_URLS = 4000;
+
+const MAX_REQUEST_URL_CHARS = 2048;
+
+interface RawHeaderEvent {
+  status: number;
+  headers: RawHeaders;
+}
+
+const browserCrashed = (cause?: unknown): XrioError =>
+  new XrioError("BROWSER_CRASHED", "The browser or its renderer died mid-scrape.", {
+    cause,
+    details: undefined,
+  });
+
+const isDriverFailure = <Kind extends DriverErrorReason["kind"]>(
+  error: unknown,
+  kind: Kind,
+): error is DriverError & { reason: Extract<DriverErrorReason, { kind: Kind }> } =>
+  error instanceof DriverError && error.reason.kind === kind;
+
+class PageTracker {
+  readonly requestUrls: string[] = [];
+  droppedRequestUrls = 0;
+  #document: DocumentHop | undefined;
+  #committedLoader: string | undefined;
+  readonly #responses = new Map<string, DocumentHop>();
+  #failure: XrioError | undefined;
+  readonly #rawHeaders = new Map<string, RawHeaderEvent[]>();
+  readonly #loaded = new Set<string>();
+  readonly #waiters = new Set<() => void>();
+  readonly #stop: () => void;
+
+  constructor(browser: DriverBrowser) {
+    this.#stop = browser.onEvent((event) => {
+      this.#record(event);
+
+      for (const wake of this.#waiters) {
+        wake();
+      }
+    });
+  }
+
+  stop(): void {
+    this.#stop();
+  }
+
+  async unlessBrowserDies<Result>(operation: Promise<Result>): Promise<Result> {
+    const { promise, reject } = Promise.withResolvers<never>();
+
+    const check = () => {
+      if (this.#failure !== undefined) {
+        reject(this.#failure);
+      }
+    };
+
+    this.#waiters.add(check);
+    check();
+
+    try {
+      return await Promise.race([operation, promise]);
+    } finally {
+      this.#waiters.delete(check);
+    }
+  }
+
+  async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
+    deadline.throwIfExpired();
+    const { promise, resolve, reject } = Promise.withResolvers<DocumentHop>();
+
+    const check = () => {
+      if (this.#failure !== undefined) {
+        reject(this.#failure);
+      } else if (this.#document !== undefined && this.#loaded.has(this.#document.loaderId)) {
+        resolve(this.#document);
+      }
+    };
+
+    const abort = () => {
+      reject(deadline.signal.reason);
+    };
+
+    this.#waiters.add(check);
+    deadline.signal.addEventListener("abort", abort, { once: true });
+    check();
+
+    try {
+      return await promise;
+    } finally {
+      this.#waiters.delete(check);
+      deadline.signal.removeEventListener("abort", abort);
+    }
+  }
+
+  isCurrent(document: DocumentHop): boolean {
+    return this.#committedLoader === document.loaderId;
+  }
+
+  responseOf(document: DocumentHop): ResponseDetails {
+    const raw = this.#rawHeaders
+      .get(document.requestId)
+      ?.findLast(({ status }) => status === document.status);
+
+    if (raw === undefined) {
+      publishInternalEvent({
+        detail: `No raw headers arrived for request ${document.requestId}; Set-Cookie is unavailable.`,
+        event: "raw-header-fallback",
+      });
+    }
+
+    return responseDetailsFrom(document.url, document.status, raw?.headers ?? document.headers);
+  }
+
+  #record(event: DriverEvent): void {
+    switch (event.type) {
+      case "commit": {
+        this.#committedLoader = event.loaderId;
+        this.#document = this.#responses.get(event.loaderId) ?? this.#document;
+        break;
+      }
+
+      case "dom-content-loaded": {
+        this.#loaded.add(event.loaderId);
+        break;
+      }
+
+      case "document-response": {
+        if (!event.hop.isRedirect) {
+          this.#responses.set(event.hop.loaderId, event.hop);
+        }
+
+        if (!event.hop.isRedirect && event.hop.loaderId === this.#committedLoader) {
+          this.#document = event.hop;
+        }
+
+        break;
+      }
+
+      case "raw-headers": {
+        const queued = this.#rawHeaders.get(event.requestId) ?? [];
+
+        queued.push({ headers: event.headers, status: event.status });
+        this.#rawHeaders.set(event.requestId, queued);
+        break;
+      }
+
+      case "request": {
+        this.#recordRequest(event.url);
+        break;
+      }
+
+      case "crash":
+      case "disconnect": {
+        this.#failure ??= browserCrashed();
+        break;
+      }
+
+      default: {
+        break;
+      }
+    }
+  }
+
+  #recordRequest(url: string): void {
+    if (this.requestUrls.length < MAX_REQUEST_URLS) {
+      this.requestUrls.push(url.slice(0, MAX_REQUEST_URL_CHARS));
+    } else {
+      this.droppedRequestUrls += 1;
+    }
+  }
+}
+
+const navigationError = (url: URL, failure: DriverError, netError: string): XrioError =>
+  new XrioError("NETWORK_ERROR", `Loading ${redactUrl(url)} failed with ${netError}.`, {
+    cause: failure,
+    details: { netError },
+  });
+
+const navigateTo = async (browser: DriverBrowser, url: URL, deadline: Deadline): Promise<void> => {
+  try {
+    await browser.navigate(url.href, deadline);
+  } catch (error) {
+    if (isDriverFailure(error, "navigation-failed")) {
+      throw navigationError(url, error, error.reason.netError);
+    }
+
+    throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
+  }
+};
+
+const reportDropped = (tracker: PageTracker): void => {
+  if (tracker.droppedRequestUrls > 0) {
+    publishInternalEvent({
+      detail: `The request log kept ${MAX_REQUEST_URLS} URLs and dropped ${tracker.droppedRequestUrls}.`,
+      event: "request-log-dropped",
+    });
+  }
+};
+
+interface CapturedDocument {
+  html: string;
+  document: DocumentHop;
+}
+
+const captureIfCurrent = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  deadline: Deadline,
+): Promise<CapturedDocument | undefined> => {
+  const document = await tracker.documentLoaded(deadline);
+
+  try {
+    const html = await tracker.unlessBrowserDies(
+      browser.evaluateIsolated(CAPTURE_EXPRESSION, isHtml, deadline),
+    );
+
+    return tracker.isCurrent(document) ? { document, html } : undefined;
+  } catch (error) {
+    if (isDriverFailure(error, "document-replaced")) {
+      return undefined;
+    }
+
+    throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
+  }
+};
+
+const captureCurrentDocument = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  deadline: Deadline,
+): Promise<CapturedDocument> => {
+  const first = await captureIfCurrent(browser, tracker, deadline);
+
+  if (first !== undefined) {
+    return first;
+  }
+
+  publishInternalEvent({
+    detail: "The main-frame document changed during capture; capturing its replacement.",
+    event: "document-rebind",
+  });
+
+  const rebound = await captureIfCurrent(browser, tracker, deadline);
+
+  if (rebound === undefined) {
+    throw new XrioError("NETWORK_ERROR", "The page kept replacing its document during capture.", {
+      details: undefined,
+    });
+  }
+
+  return rebound;
+};
+
+export const renderDocument = async (
+  browser: DriverBrowser,
+  url: URL,
+  deadline: Deadline,
+): Promise<SourceDocument> => {
+  const tracker = new PageTracker(browser);
+
+  try {
+    await timeStage("navigation", async () => {
+      await navigateTo(browser, url, deadline);
+      await tracker.documentLoaded(deadline);
+    });
+
+    const { document, html } = await timeStage(
+      "capture",
+      async () => await captureCurrentDocument(browser, tracker, deadline),
+    );
+
+    const details = tracker.responseOf(document);
+
+    reportDropped(tracker);
+
+    return {
+      ...details,
+      block: classifyResponse({
+        html,
+        requestUrls: tracker.requestUrls,
+        response: details,
+      }),
+      html,
+      requestUrls: tracker.requestUrls,
+    };
+  } finally {
+    tracker.stop();
+  }
+};

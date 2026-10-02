@@ -157,7 +157,12 @@ const readDocument = async (
 
   const html = decodeBody(bytes, contentType);
 
-  return { ...details, block: classifyResponse({ html, requestUrls, response: details }), html };
+  return {
+    ...details,
+    block: classifyResponse({ html, requestUrls, response: details }),
+    html,
+    requestUrls,
+  };
 };
 
 const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {

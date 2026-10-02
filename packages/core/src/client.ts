@@ -1,13 +1,15 @@
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
 import { startDeadline } from "./deadline.ts";
+import { clientClosed } from "./errors.ts";
 import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
-import { loadHeadedDocument, loadHeadlessDocument } from "./sources/browser.ts";
+import { createBrowsers } from "./sources/browser/browsers.ts";
+import type { Browsers } from "./sources/browser/browsers.ts";
+import { patchrightDriver } from "./sources/browser/patchright/driver.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type {
   ClientDefaults,
   ClientOptions,
   DocumentRequest,
-  ResolvedMode,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
@@ -36,21 +38,6 @@ export type {
   StructuredContent,
 } from "./types.ts";
 
-const sources = {
-  headed: loadHeadedDocument,
-  headless: loadHeadlessDocument,
-  http: loadHttpDocument,
-} satisfies Record<ResolvedMode["mode"], (request: DocumentRequest) => Promise<SourceDocument>>;
-
-const loadDocument = async (request: DocumentRequest): Promise<SourceDocument> => {
-  try {
-    return await sources[request.mode](request);
-  } catch (error) {
-    request.deadline.throwIfExpired();
-    throw error;
-  }
-};
-
 const formats = {
   html: (document) => ({ data: getHtml(document), format: "html" }),
   json: (document) => ({ data: extractContent(document), format: "json" }),
@@ -63,19 +50,27 @@ const formats = {
 
 export class XrioClient {
   readonly #defaults: ClientDefaults;
+  readonly #browsers: Browsers;
+  readonly #inFlight = new Set<Promise<unknown>>();
+  #closed = false;
 
-  constructor(options: ClientOptions = {}) {
+  constructor(options: ClientOptions) {
     this.#defaults = resolveClientOptions(options);
+    this.#browsers = createBrowsers(patchrightDriver, this.#defaults.maxBrowsers);
   }
 
   scrape<Format extends ScrapeFormat>(
     options: ScrapeOptions<Format>,
   ): Promise<ScrapeResult<Format>>;
   async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
+    if (this.#closed) {
+      throw clientClosed();
+    }
+
     const { format, signal, source, timeoutMs } = resolveScrapeOptions(options, this.#defaults);
     using deadline = startDeadline(timeoutMs, signal);
 
-    const document = await loadDocument({ ...source, deadline });
+    const document = await this.#loadDocument({ ...source, deadline });
 
     deadline.throwIfExpired();
     const content = formats[format](document);
@@ -89,5 +84,30 @@ export class XrioClient {
       status: document.status,
       url: document.url,
     };
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true;
+    await Promise.allSettled([this.#browsers.close(), ...this.#inFlight]);
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+
+  async #loadDocument(request: DocumentRequest): Promise<SourceDocument> {
+    const loading =
+      request.mode === "http" ? loadHttpDocument(request) : this.#browsers.load(request);
+
+    this.#inFlight.add(loading);
+
+    try {
+      return await loading;
+    } catch (error) {
+      request.deadline.throwIfExpired();
+      throw error;
+    } finally {
+      this.#inFlight.delete(loading);
+    }
   }
 }

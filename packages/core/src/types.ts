@@ -3,13 +3,23 @@ import type { Deadline } from "./deadline.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
 
-export type ModeOptions =
-  | { mode?: "http"; browserPath?: never }
-  | { mode: "headless" | "headed"; browserPath: string };
+interface HttpMode {
+  mode: "http";
+  browserPath?: never;
+}
 
-export type ClientOptions = ModeOptions & { proxy?: string };
+interface BrowserMode {
+  mode: "headless" | "headed";
+  browserPath: string;
+}
 
-export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOptions & {
+export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
+
+type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
+
+export type ClientOptions = ModeOptions & { proxy?: string; maxBrowsers?: number };
+
+export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
   format: Format;
   proxy?: string;
@@ -50,11 +60,12 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
 export interface SourceDocument extends ResponseDetails {
   html: string;
   block: BlockReport;
+  requestUrls: readonly string[];
 }
 
 export type RenderedDocument = Pick<SourceDocument, "html" | "url">;
 
-export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
+export type ResolvedMode = HttpMode | BrowserMode;
 
 export interface ProxyEndpoint {
   protocol: "http" | "https" | "socks5";
@@ -67,6 +78,7 @@ export interface ProxyEndpoint {
 export interface ClientDefaults {
   mode: ResolvedMode;
   proxy: ProxyEndpoint | undefined;
+  maxBrowsers: number | undefined;
 }
 
 type SourceRequest = ResolvedMode & {
