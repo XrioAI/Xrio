@@ -1,4 +1,4 @@
-import { redactUrl, XrioError } from "../errors.ts";
+import { invalidOptions, redactUrl, XrioError } from "../errors.ts";
 import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
 
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
@@ -67,8 +67,13 @@ const readHtmlDocument = async (response: Response): Promise<SourceDocument> => 
 
 export const loadHttpDocument = async ({
   url,
+  proxy,
   deadline,
 }: DocumentRequest): Promise<SourceDocument> => {
+  if (proxy !== undefined) {
+    throw invalidOptions("proxy is not supported in http mode yet.");
+  }
+
   const response = await fetch(url, { signal: deadline.signal });
 
   return await readHtmlDocument(response);
