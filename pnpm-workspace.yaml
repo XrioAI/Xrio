@@ -11,6 +11,7 @@ allowBuilds:
   webgpu: false
 patchedDependencies:
   oxlint-plugin-complexity@3.0.1: patches/oxlint-plugin-complexity@3.0.1.patch
+  patchright-core@1.61.1: patches/patchright-core@1.61.1.patch
   ultracite@7.12.2: patches/ultracite@7.12.2.patch
 minimumReleaseAgeExclude:
   - oxlint-plugin-complexity@3.0.1
