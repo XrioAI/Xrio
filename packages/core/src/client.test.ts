@@ -366,12 +366,6 @@ describe(XrioClient, () => {
     },
   );
 
-  it("propagates the client's network errors", async () => {
-    await expect(
-      new XrioClient().scrape({ format: "html", url: `${origin}/disconnect` }),
-    ).rejects.toMatchObject({ name: "RequestError" });
-  });
-
   it("allows callers to abort before fetching or during a request", async () => {
     const client = new XrioClient();
     const controller = new AbortController();
@@ -428,6 +422,16 @@ describe("XrioClient errors", () => {
       await expect(rejection).rejects.toMatchObject({ code: "TIMEOUT", name: "XrioError" });
     },
   );
+
+  it("maps a dropped connection to NETWORK_ERROR and keeps the client error as the cause", async () => {
+    await expect(
+      new XrioClient().scrape({ format: "html", url: `${origin}/disconnect` }),
+    ).rejects.toMatchObject({
+      cause: { name: "RequestError" },
+      code: "NETWORK_ERROR",
+      name: "XrioError",
+    });
+  });
 
   it("refuses a proxy in http mode until it can be used, without echoing its credentials", async () => {
     const rejection = new XrioClient({ proxy: "http://user:secret@proxy.test:8000" }).scrape({

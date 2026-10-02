@@ -82,17 +82,18 @@ try {
 | `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, a proxy in http mode (not supported yet), or a URL that is relative, not HTTP(S), or carries credentials. |
 | `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details and a body preview.                                                                                          |
 | `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                   |
+| `NETWORK_ERROR`            | `XrioError` | DNS failure, refused or reset connection, or protocol error.                                                                                                                |
+| `TLS_CERTIFICATE_INVALID`  | `XrioError` | The certificate was rejected.                                                                                                                                               |
 | `RESPONSE_TOO_LARGE`       | `XrioError` | The decompressed body is over 32 MiB.                                                                                                                                       |
 | `MODE_NOT_IMPLEMENTED`     | `XrioError` | Headed or headless mode is not implemented.                                                                                                                                 |
 
-Network failures propagate as the HTTP client's own errors. There are no retries. Messages never include URL or proxy credentials.
+The client's own error is kept as `cause`. There are no retries. Messages never include URL or proxy credentials.
 
 Migration:
 
 - HTML/Markdown callers now read `result.data`; JSON callers read `result.data.metadata` and `result.data.content`.
 - `UNSUPPORTED_CONTENT_TYPE` and `MODE_NOT_IMPLEMENTED` are now `XrioError`s. Response fields moved from the error itself to `error.details`.
-- Invalid URLs reject with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`.
-- Timeouts reject with `TIMEOUT` instead of a native `TimeoutError`.
+- Timeouts reject with `TIMEOUT` instead of a native `TimeoutError`, invalid URLs with `INVALID_OPTIONS` instead of `ERR_INVALID_URL`, and network failures with the codes above instead of native `fetch` errors.
 - http mode no longer uses native `fetch`, so requests look like Chrome on the wire and ambient proxy variables no longer apply.
 
 The client resolves options, selects a document source by mode, and selects a content operation by format. The source and format mappings are independent. To implement a mode, add its source handler and update the mode mapping; HTTP loading and the scrape workflow do not need to change.
