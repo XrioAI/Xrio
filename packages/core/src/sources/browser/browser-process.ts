@@ -1,14 +1,16 @@
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import type { Dirent } from "node:fs";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable, Writable } from "node:stream";
 import { text } from "node:stream/consumers";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { directoriesIn } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
-import { withinSignal } from "./lifetime.ts";
+import { settleWithin, withinSignal } from "./lifetime.ts";
 
 const OWNER_FILE = "xrio-owner.json";
 
@@ -19,6 +21,10 @@ const EXIT_WAIT_MS = 5000;
 const EXIT_POLL_MS = 25;
 
 export const PROCESS_SCAN_BUDGET_MS = 1000;
+
+const STDERR_TAIL_BYTES = 8192;
+
+const STDERR_DRAIN_MS = 500;
 
 const OWNER_PERMISSION_UNIT = 0o100;
 
@@ -154,6 +160,87 @@ const trySignal = (target: number): boolean => {
 export const killProcessGroup = (pid: number): void => {
   trySignal(-pid);
   trySignal(pid);
+};
+
+export interface SpawnedBrowser {
+  readonly pid: number;
+  readonly pipe: { readonly toBrowser: Writable; readonly fromBrowser: Readable };
+  readonly stop: (budgetMs: number) => Promise<void>;
+  readonly stderrTail: () => Promise<string>;
+}
+
+const drainTail = (stderr: Readable): (() => Promise<string>) => {
+  const closed = Promise.withResolvers<"closed">();
+  let tail = Buffer.alloc(0);
+
+  stderr.on("data", (chunk: Buffer) => {
+    tail = Buffer.concat([tail, chunk]).subarray(-STDERR_TAIL_BYTES);
+  });
+
+  for (const ended of ["close", "error"]) {
+    stderr.once(ended, () => {
+      closed.resolve("closed");
+    });
+  }
+
+  return async () => {
+    await settleWithin(closed.promise, STDERR_DRAIN_MS);
+
+    return tail.toString("utf-8");
+  };
+};
+
+const pipesOf = (child: ChildProcess) => {
+  const { 2: stderr, 3: toBrowser, 4: fromBrowser } = child.stdio;
+
+  return stderr !== null && toBrowser instanceof Writable && fromBrowser instanceof Readable
+    ? { fromBrowser, stderr, toBrowser }
+    : undefined;
+};
+
+export const spawnBrowser = async (plan: LaunchPlan): Promise<SpawnedBrowser> => {
+  const child = spawn(plan.executable, plan.args, {
+    detached: true,
+    env: plan.env,
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+  });
+
+  await once(child, "spawn");
+  const { pid } = child;
+  const pipes = pipesOf(child);
+
+  if (pid === undefined) {
+    throw new Error("Chrome started without a process id.");
+  }
+
+  if (pipes === undefined) {
+    killProcessGroup(pid);
+    throw new Error("Chrome started without its DevTools pipe.");
+  }
+
+  const exited = Promise.withResolvers<"exited">();
+
+  child.once("exit", () => {
+    exited.resolve("exited");
+  });
+
+  const isRunning = () => child.exitCode === null && child.signalCode === null;
+
+  const stop = async (budgetMs: number) => {
+    await settleWithin(exited.promise, budgetMs);
+
+    if (isRunning()) {
+      killProcessGroup(pid);
+      await settleWithin(exited.promise, budgetMs);
+    }
+  };
+
+  return {
+    pid,
+    pipe: { fromBrowser: pipes.fromBrowser, toBrowser: pipes.toBrowser },
+    stderrTail: drainTail(pipes.stderr),
+    stop,
+  };
 };
 
 const linuxProcessState = async (
