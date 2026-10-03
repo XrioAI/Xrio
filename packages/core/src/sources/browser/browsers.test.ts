@@ -148,6 +148,14 @@ describe("browser lifecycle on the fake browser", () => {
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
+  it("reports a navigation error with Chrome's net error", async () => {
+    await expect(load("navigate-error")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      details: { netError: "net::ERR_NAME_NOT_RESOLVED" },
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
   it("kills a browser that ignores Browser.close", async () => {
     await expect(load("ignore-close")).resolves.toMatchObject({ status: 200 });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);

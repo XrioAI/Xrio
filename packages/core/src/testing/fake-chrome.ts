@@ -18,6 +18,7 @@ const SCENARIOS = [
   "startup-blank-commit",
   "evaluate-throws",
   "hang-on-navigate",
+  "navigate-error",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -52,6 +53,8 @@ const INITIAL_LIFECYCLE = [
   "networkAlmostIdle",
   "networkIdle",
 ];
+
+const NAVIGATION_ERROR = "net::ERR_NAME_NOT_RESOLVED";
 
 const PAGE_HTML = "<!DOCTYPE html><html><head></head><body><p>fake page</p></body></html>";
 
@@ -450,6 +453,11 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
 
     case "Page.navigate": {
       if (scenario === "hang-on-navigate") {
+        break;
+      }
+
+      if (scenario === "navigate-error") {
+        await write([reply({ errorText: NAVIGATION_ERROR, frameId: TARGET_ID, loaderId: "L1" })]);
         break;
       }
 
