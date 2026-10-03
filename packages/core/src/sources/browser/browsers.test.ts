@@ -11,9 +11,11 @@ import { isXrioError } from "../../errors.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
+import { stageTimeline } from "../../testing/stage-timeline.ts";
 import { scratchRoot } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { cdpDriver } from "./cdp/driver.ts";
+import type { RetireSteps } from "./chrome-scope.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import type { BrowserDriver } from "./port.ts";
 
@@ -302,6 +304,139 @@ describe(createBrowsers, () => {
     await expect(browsers.load({ ...normal, deadline: queued })).rejects.toMatchObject({
       code: "CLIENT_CLOSED",
     });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+});
+
+const settledValue = async (promise: Promise<unknown>) => {
+  try {
+    return { value: await promise };
+  } catch (error) {
+    return { error };
+  }
+};
+
+interface VisitCase {
+  scenario: string;
+  timeoutMs?: number;
+  abortAfterMs?: number;
+}
+
+const visitOn = async (
+  { abortAfterMs, scenario, timeoutMs = 10_000 }: VisitCase,
+  steps: Partial<RetireSteps> = {},
+) => {
+  const browsers = createBrowsers(cdpDriver, 1, steps);
+  const owner = new AbortController();
+  const browserPath = await fakeChromePath(scenario);
+  using deadline: Deadline & Disposable = startDeadline(timeoutMs);
+
+  const visit = browsers.start({
+    browserPath,
+    deadline: deadline.boundTo(owner.signal),
+    mode: "headless",
+    proxy: undefined,
+    url: new URL("https://fake.test/page"),
+  });
+
+  if (abortAfterMs !== undefined) {
+    setTimeout(() => {
+      owner.abort(new Error("Ownership lost"));
+    }, abortAfterMs);
+  }
+
+  const document = await settledValue(visit.document);
+  const closed = await visit.closed;
+  const leftAtClose = await leftovers();
+
+  await browsers.close();
+
+  return { closed, document, leftAtClose };
+};
+
+const settledCleanly = { closed: { exited: true }, leftAtClose: nothingLeft };
+
+describe("browser visits on the fake browser", () => {
+  it("resolves the document, then closes once Chrome and its profile are gone", async () => {
+    await expect(visitOn({ scenario: "normal" })).resolves.toMatchObject({
+      ...settledCleanly,
+      document: { value: { status: 200, url: "https://fake.test/page" } },
+    });
+  });
+
+  it.each([
+    { error: { code: "BROWSER_LAUNCH_FAILED" }, scenario: "no-start" },
+    { error: { code: "BROWSER_CRASHED" }, scenario: "crash-on-navigate" },
+    {
+      error: { code: "NETWORK_ERROR", details: { netError: "net::ERR_NAME_NOT_RESOLVED" } },
+      scenario: "navigate-error",
+    },
+    {
+      abortAfterMs: ABORT_DURING_LAUNCH_MS,
+      error: { message: "Ownership lost" },
+      scenario: "slow-start",
+    },
+    { error: { code: "TIMEOUT" }, scenario: "slow-start", timeoutMs: LAUNCH_DEADLINE_MS },
+  ])(
+    "rejects the document with $error after $scenario, then closes once nothing is left",
+    async ({ error, ...visitCase }) => {
+      await expect(visitOn(visitCase)).resolves.toMatchObject({
+        ...settledCleanly,
+        document: { error },
+      });
+    },
+  );
+
+  it("removes the visit's scratch directory when planning throws", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+
+    const visit = browsers.start({
+      get browserPath(): string {
+        throw new Error("Planning failed.");
+      },
+      deadline,
+      mode: "headless",
+      proxy: undefined,
+      url: new URL("https://fake.test/page"),
+    });
+
+    const document = await settledValue(visit.document);
+    const closed = await visit.closed;
+    const leftAtClose = await leftovers();
+
+    await browsers.close();
+    expect({ closed, document, leftAtClose }).toMatchObject({
+      closed: { exited: true },
+      document: { error: { message: "Planning failed." } },
+      leftAtClose: nothingLeft,
+    });
+  });
+
+  it("closes with exited false and a reason when teardown cannot confirm that Chrome exited", async () => {
+    const outcome = await visitOn(
+      { scenario: "normal" },
+      {
+        retireProcessGroup: async (pgid) => {
+          killProcessGroup(pgid);
+          await waitForGroupExit(pgid, AbortSignal.timeout(5000));
+
+          return false;
+        },
+      },
+    );
+
+    const [directory = ""] = outcome.leftAtClose.directories;
+    const scratch = path.join(scratchRoot(), directory);
+
+    await rm(scratch, { force: true, recursive: true });
+
+    expect(outcome.document).toMatchObject({ value: { status: 200 } });
+    expect(outcome.closed).toStrictEqual({
+      exited: false,
+      reason: `Chrome outlived its teardown; ${scratch} is left for the sweep.`,
+    });
+    expect(outcome.leftAtClose).toStrictEqual({ directories: [directory], processes: [] });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 });
@@ -664,6 +799,123 @@ describe("process ownership reported by the driver", () => {
       await removeLeftoverScratch();
     }
 
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+});
+
+describe("visits started directly with start", () => {
+  it("returns the visit while its launch is still held", async () => {
+    const launchEntered = Promise.withResolvers<"entered">();
+    const launchReleased = Promise.withResolvers<"released">();
+
+    const heldDriver: BrowserDriver = {
+      launch: async (plan, deadline, owned, deferCleanup) => {
+        launchEntered.resolve("entered");
+        await launchReleased.promise;
+
+        return await cdpDriver.launch(plan, deadline, owned, deferCleanup);
+      },
+    };
+
+    const browsers = createBrowsers(heldDriver, 1);
+    using deadline = startDeadline(10_000);
+    const visit = browsers.start(await normalRequest(deadline));
+
+    await launchEntered.promise;
+
+    const whileHeld = await Promise.race([
+      settledValue(visit.document),
+      Promise.resolve("pending"),
+    ]);
+
+    launchReleased.resolve("released");
+
+    expect(whileHeld).toBe("pending");
+    await expect(visit.document).resolves.toMatchObject({ status: 200 });
+    await expect(visit.closed).resolves.toStrictEqual({ exited: true });
+    await browsers.close();
+  });
+
+  it("lets a caller await closed before it handles a rejected document", async () => {
+    let unhandled = 0;
+
+    const recordUnhandled = () => {
+      unhandled += 1;
+    };
+
+    process.on("unhandledRejection", recordUnhandled);
+
+    try {
+      const browsers = createBrowsers(cdpDriver, 1);
+      using deadline = startDeadline(10_000);
+
+      const visit = browsers.start({
+        ...(await normalRequest(deadline)),
+        browserPath: await fakeChromePath("no-start"),
+      });
+
+      await expect(visit.closed).resolves.toStrictEqual({ exited: true });
+      await nextTurn();
+      await expect(visit.document).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
+      await browsers.close();
+    } finally {
+      process.off("unhandledRejection", recordUnhandled);
+    }
+
+    expect(unhandled).toBe(0);
+  });
+
+  it("makes close wait for the visit to close", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+    const visit = browsers.start(await normalRequest(deadline));
+    const order: string[] = [];
+
+    await Promise.all([
+      settledValue(visit.document),
+      (async () => {
+        await visit.closed;
+        order.push("visit closed");
+      })(),
+      (async () => {
+        await browsers.close();
+        order.push("browsers closed");
+      })(),
+    ]);
+
+    expect(order).toStrictEqual(["visit closed", "browsers closed"]);
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("refuses a visit after close with CLIENT_CLOSED and launches nothing", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+    using stages = stageTimeline(new Set(["queue", "launch"]));
+
+    await browsers.close();
+
+    const visit = stages.recording(async () => browsers.start(await normalRequest(deadline)));
+    const { closed, document } = await visit;
+
+    await expect(document).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+    await expect(closed).resolves.toStrictEqual({ exited: true });
+    expect(stages.timeline).toStrictEqual([]);
+  });
+
+  it("queues a load behind a started visit on maxBrowsers 1", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(20_000);
+    using stages = stageTimeline(new Set(["launch", "teardown"]));
+    const request = await normalRequest(deadline);
+
+    await stages.recording(async () => {
+      const visit = browsers.start(request);
+
+      await Promise.all([visit.document, visit.closed, browsers.load(request)]);
+    });
+    await browsers.close();
+
+    expect(stages.timeline).toStrictEqual(["launch", "teardown", "launch", "teardown"]);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 });

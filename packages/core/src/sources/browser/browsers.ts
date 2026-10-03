@@ -14,7 +14,7 @@ import {
   sweepAbandonedScratch,
 } from "./browser-process.ts";
 import { ChromeScope } from "./chrome-scope.ts";
-import type { RetireSteps } from "./chrome-scope.ts";
+import type { Closed, RetireSteps } from "./chrome-scope.ts";
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import { DriverError } from "./port.ts";
@@ -29,7 +29,15 @@ const MIN_CHROME_MAJOR = 150;
 
 type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
 
+type VisitTarget = Omit<BrowserRequest, "deadline">;
+
+interface BrowserVisit {
+  readonly document: Promise<SourceDocument>;
+  readonly closed: Promise<Closed>;
+}
+
 export interface Browsers {
+  readonly start: (request: BrowserRequest) => BrowserVisit;
   readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
   readonly close: () => Promise<void>;
 }
@@ -83,7 +91,7 @@ const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   }
 };
 
-const planFor = (request: BrowserRequest, scratch: ScratchDir): LaunchPlan =>
+const planFor = (request: VisitTarget, scratch: ScratchDir): LaunchPlan =>
   planLaunch({
     browserPath: request.browserPath,
     display: process.env.DISPLAY,
@@ -129,47 +137,25 @@ const startBrowser = async (
 
 const renderInScope = async (
   driver: BrowserDriver,
-  request: BrowserRequest,
+  request: VisitTarget,
+  deadline: Deadline,
   scope: ChromeScope,
-  result: PromiseWithResolvers<SourceDocument>,
-): Promise<void> => {
+  document: PromiseWithResolvers<SourceDocument>,
+): Promise<Closed> => {
   try {
-    const plan = planFor(request, scope.scratch);
-    const browser = await startBrowser(driver, scope, plan, request.deadline);
+    const browser = await startBrowser(driver, scope, planFor(request, scope.scratch), deadline);
     assertSupported(browser.product);
-    result.resolve(await renderDocument(browser, request.url, request.deadline));
+    document.resolve(await renderDocument(browser, request.url, deadline));
   } catch (error) {
-    result.reject(error);
-  } finally {
-    await scope.retire();
+    document.reject(error);
   }
+
+  return await scope.retire();
 };
 
-const runInBrowser = async (
-  driver: BrowserDriver,
-  request: BrowserRequest,
-  result: PromiseWithResolvers<SourceDocument>,
-  steps: Partial<RetireSteps>,
-): Promise<void> => {
-  try {
-    const scope = new ChromeScope(await createOwnedScratch(request.deadline), steps);
-
-    await renderInScope(driver, request, scope, result);
-  } catch (error) {
-    result.reject(error);
-  }
-};
-
-export const createBrowsers = (
-  driver: BrowserDriver,
-  maxBrowsers = defaultMaxBrowsers(),
-  steps: Partial<RetireSteps> = {},
-): Browsers => {
+const createAdmission = (maxBrowsers: number) => {
   const queue = new Set<() => void>();
-  const accepted = new Set<Promise<SourceDocument>>();
-  const idleWaiters = new Set<() => void>();
   let active = 0;
-  let closed = false;
 
   const acquire = async (deadline: Deadline): Promise<void> => {
     deadline.throwIfExpired();
@@ -212,74 +198,79 @@ export const createBrowsers = (
     }
 
     active -= 1;
-
-    if (active === 0) {
-      for (const wake of idleWaiters) {
-        wake();
-      }
-
-      idleWaiters.clear();
-    }
   };
 
-  const occupySlot = async (
+  return { acquire, release };
+};
+
+export const createBrowsers = (
+  driver: BrowserDriver,
+  maxBrowsers = defaultMaxBrowsers(),
+  steps: Partial<RetireSteps> = {},
+): Browsers => {
+  const admission = createAdmission(maxBrowsers);
+  const visits = new Set<Promise<Closed>>();
+  let closed = false;
+
+  const visitWhenAdmitted = async (
     request: BrowserRequest,
-    result: PromiseWithResolvers<SourceDocument>,
-  ): Promise<void> => {
-    try {
-      await runInBrowser(driver, request, result, steps);
-    } finally {
-      release();
-    }
-  };
-
-  const runWhenAdmitted = async (request: BrowserRequest): Promise<SourceDocument> => {
-    await timeStage("queue", async () => {
-      await acquire(request.deadline);
-    });
-
-    const result = Promise.withResolvers<SourceDocument>();
-
-    void occupySlot(request, result);
-
-    return await result.promise;
-  };
-
-  const browsersExited = async (): Promise<void> => {
-    if (active === 0) {
-      return;
-    }
-
-    const { promise, resolve } = Promise.withResolvers<"idle">();
-
-    idleWaiters.add(() => {
-      resolve("idle");
-    });
-    await promise;
-  };
-
-  const load = async (request: BrowserRequest): Promise<SourceDocument> => {
+    document: PromiseWithResolvers<SourceDocument>,
+  ): Promise<Closed> => {
     if (closed) {
       throw clientClosed();
     }
 
-    const work = runWhenAdmitted(request);
-
-    accepted.add(work);
+    await timeStage("queue", async () => {
+      await admission.acquire(request.deadline);
+    });
 
     try {
-      return await work;
+      const { deadline } = request;
+      const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
+
+      return await renderInScope(driver, request, deadline, scope, document);
     } finally {
-      accepted.delete(work);
+      admission.release();
     }
   };
 
+  const visit = async (
+    request: BrowserRequest,
+    document: PromiseWithResolvers<SourceDocument>,
+  ): Promise<Closed> => {
+    try {
+      return await visitWhenAdmitted(request, document);
+    } catch (error) {
+      document.reject(error);
+
+      return { exited: true };
+    }
+  };
+
+  const trackUntilClosed = async (closing: Promise<Closed>): Promise<void> => {
+    visits.add(closing);
+    await closing;
+    visits.delete(closing);
+  };
+
+  const start = (request: BrowserRequest): BrowserVisit => {
+    const document = Promise.withResolvers<SourceDocument>();
+    const closing = visit(request, document);
+
+    void trackUntilClosed(closing);
+    void Promise.allSettled([document.promise]);
+
+    return { closed: closing, document: document.promise };
+  };
+
+  const load = async (request: BrowserRequest): Promise<SourceDocument> =>
+    await start(request).document;
+
   const close = async () => {
     closed = true;
-    await Promise.allSettled(accepted);
-    await browsersExited();
+    await Promise.allSettled(visits);
     await swept;
   };
 
-  return { close, load };
+  return { close, load, start };
 };
