@@ -5,7 +5,7 @@
       "entry": ["src/components/sections/design-panel.tsx!", "src/components/sections/pricing.tsx!"]
     },
     "packages/core": {
-      "entry": ["src/client.ts!", "scripts/*.ts!", "examples/*.ts"],
+      "entry": ["src/client.ts!", "src/proxy/route.ts!", "scripts/*.ts!", "examples/*.ts"],
       "project": ["src/**/*.ts!", "scripts/*.ts!", "examples/*.ts", "!src/testing/**!"]
     }
   }
