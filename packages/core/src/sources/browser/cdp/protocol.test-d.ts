@@ -13,6 +13,8 @@ declare const iframe: TargetSession<"iframe">;
 
 declare const worker: TargetSession<"worker">;
 
+declare const serviceWorker: TargetSession<"service_worker">;
+
 declare const world: IsolatedContextId;
 
 declare const signal: AbortSignal;
@@ -48,6 +50,7 @@ describe("the CDP commands our driver may send", () => {
     );
     expectTypeOf(send(BROWSER, "Target.setAutoAttach", PAGES_ONLY, signal)).resolves.toBeVoid();
     expectTypeOf(send(iframe, "Target.setAutoAttach", EVERY_CHILD, signal)).resolves.toBeVoid();
+    expectTypeOf(send(worker, "Target.setAutoAttach", EVERY_CHILD, signal)).resolves.toBeVoid();
     expectTypeOf(
       send(worker, "Network.enable", { maxResourceBufferSize: 0, maxTotalBufferSize: 0 }, signal),
     ).resolves.toBeVoid();
@@ -84,8 +87,8 @@ describe("the CDP commands our driver may send", () => {
     void send(BROWSER, "Target.setAutoAttach", EVERY_CHILD, signal);
     // @ts-expect-error Children attach everything below them.
     void send(main, "Target.setAutoAttach", PAGES_ONLY, signal);
-    // @ts-expect-error Workers do not auto-attach.
-    void send(worker, "Target.setAutoAttach", EVERY_CHILD, signal);
+    // @ts-expect-error Service workers do not auto-attach.
+    void send(serviceWorker, "Target.setAutoAttach", EVERY_CHILD, signal);
     // @ts-expect-error Network bodies are not buffered.
     void send(worker, "Network.enable", {}, signal);
   });

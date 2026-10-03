@@ -432,9 +432,10 @@ describe(connectOverPipe, () => {
       '{"id":8,"method":"Target.setAutoAttach","params":{"autoAttach":true,"flatten":true,"waitForDebuggerOnStart":true},"sessionId":"S3"}',
       '{"id":9,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S3"}',
       '{"id":10,"method":"Network.enable","params":{"maxResourceBufferSize":0,"maxTotalBufferSize":0},"sessionId":"S4"}',
-      '{"id":11,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S4"}',
-      '{"id":12,"method":"Network.enable","params":{"maxResourceBufferSize":0,"maxTotalBufferSize":0},"sessionId":"S5"}',
-      '{"id":13,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S5"}',
+      '{"id":11,"method":"Target.setAutoAttach","params":{"autoAttach":true,"flatten":true,"waitForDebuggerOnStart":true},"sessionId":"S4"}',
+      '{"id":12,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S4"}',
+      '{"id":13,"method":"Network.enable","params":{"maxResourceBufferSize":0,"maxTotalBufferSize":0},"sessionId":"S5"}',
+      '{"id":14,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S5"}',
     ]);
   });
 

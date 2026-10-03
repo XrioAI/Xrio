@@ -3,7 +3,7 @@ import type { Readable, Writable } from "node:stream";
 
 import { publishInternalEvent } from "../../../diagnostics.ts";
 import { DriverError } from "../port.ts";
-import { CONSUMED_EVENTS, isFrameHost } from "./protocol.ts";
+import { CONSUMED_EVENTS, hostsChildren } from "./protocol.ts";
 import type {
   AnyTargetSession,
   ConsumedMethod,
@@ -328,7 +328,7 @@ class PipeConnection {
 
     void settleQuietly([
       this.send(target, "Network.enable", NO_BODY_BUFFERS, this.#lifetime),
-      ...(isFrameHost(target)
+      ...(hostsChildren(target)
         ? [this.send(target, "Target.setAutoAttach", EVERY_CHILD, this.#lifetime)]
         : []),
       this.send(target, "Runtime.runIfWaitingForDebugger", {}, this.#lifetime),

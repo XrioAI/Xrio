@@ -202,6 +202,38 @@ const routes = new Map<
     },
   ],
   [
+    "/nested-worker",
+    (response) => {
+      requestedPaths.delete("/from-nested");
+      sendPage(
+        response,
+        "nested-worker",
+        '<script>new Worker("/outer-worker.js");</script><script src="/after-nested-worker.js"></script>',
+      );
+    },
+  ],
+  [
+    "/outer-worker.js",
+    (response) => {
+      response.setHeader("content-type", "text/javascript");
+      response.end('new Worker("/inner-worker.js");');
+    },
+  ],
+  [
+    "/inner-worker.js",
+    (response) => {
+      response.setHeader("content-type", "text/javascript");
+      response.end('fetch("/from-nested");');
+    },
+  ],
+  ["/after-nested-worker.js", holdScriptUntilRequested("/from-nested")],
+  [
+    "/from-nested",
+    (response) => {
+      response.end("ok");
+    },
+  ],
+  [
     "/download",
     (response) => {
       response.writeHead(200, {

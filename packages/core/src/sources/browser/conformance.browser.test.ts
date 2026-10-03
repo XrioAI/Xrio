@@ -132,6 +132,7 @@ const ALLOWED_PAIRS = new Set([
   "iframe Target.setAutoAttach",
   "worker Network.enable",
   "worker Runtime.runIfWaitingForDebugger",
+  "worker Target.setAutoAttach",
   "service_worker Network.enable",
   "service_worker Runtime.runIfWaitingForDebugger",
   "shared_worker Network.enable",
@@ -408,6 +409,14 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
     expect(
       [...framed.requestUrls, ...worker.requestUrls].filter((url) => !url.startsWith("http")),
     ).toStrictEqual([]);
+  });
+
+  it("logs requests from workers that nested workers make", async () => {
+    const document = await load(driver, mode, "/nested-worker");
+
+    expect(document.requestUrls).toStrictEqual(
+      expect.arrayContaining([`${server.origin}/outer-worker.js`, `${server.origin}/from-nested`]),
+    );
   });
 
   it("returns a 401 with WWW-Authenticate as data", async () => {

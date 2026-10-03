@@ -28,11 +28,10 @@ type Session = BrowserSession | AnyTargetSession;
 
 export const BROWSER: BrowserSession = { scope: "browser" };
 
-const FRAME_HOSTS = ["main", "popup", "iframe"] as const satisfies readonly TargetScope[];
+const CHILD_HOSTS = ["main", "popup", "iframe", "worker"] as const satisfies readonly TargetScope[];
 
 const EVERY_TARGET = [
-  ...FRAME_HOSTS,
-  "worker",
+  ...CHILD_HOSTS,
   "service_worker",
   "shared_worker",
   "other",
@@ -51,17 +50,17 @@ const ALLOWED_COMMANDS = {
   "Page.setLifecycleEventsEnabled": ["main"],
   "Runtime.evaluate": ["main"],
   "Runtime.runIfWaitingForDebugger": EVERY_TARGET,
-  "Target.setAutoAttach": ["browser", ...FRAME_HOSTS],
+  "Target.setAutoAttach": ["browser", ...CHILD_HOSTS],
 } as const satisfies Partial<Record<keyof ProtocolMapping.Commands, readonly Scope[]>>;
 
 export type Method = keyof typeof ALLOWED_COMMANDS;
 
 type ScopeOf<Name extends Method> = (typeof ALLOWED_COMMANDS)[Name][number];
 
-export type FrameHost = (typeof FRAME_HOSTS)[number];
+type ChildHost = (typeof CHILD_HOSTS)[number];
 
-export const isFrameHost = (session: AnyTargetSession): session is TargetSession<FrameHost> =>
-  FRAME_HOSTS.some((scope) => scope === session.scope);
+export const hostsChildren = (session: AnyTargetSession): session is TargetSession<ChildHost> =>
+  CHILD_HOSTS.some((scope) => scope === session.scope);
 
 type ProtocolParams<Name extends Method> = ProtocolMapping.Commands[Name]["paramsType"] extends []
   ? NoParams
