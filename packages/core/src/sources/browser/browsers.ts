@@ -5,6 +5,9 @@ import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
+import { readHostZone } from "../../humanizer/host-zone.ts";
+import { planIdentity } from "../../humanizer/humanizer.ts";
+import type { IdentityPlan } from "../../humanizer/humanizer.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
@@ -14,6 +17,7 @@ import {
   scratchRoot,
   sweepAbandonedScratch,
 } from "./browser-process.ts";
+import { hostCapabilities } from "./capabilities.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import type { Closed, RetireSteps } from "./chrome-scope.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -39,9 +43,16 @@ interface BrowserVisit {
 
 interface VisitSteps extends Partial<RetireSteps> {
   readonly sessionFor: typeof sessionFor;
+  readonly hostCapabilities: typeof hostCapabilities;
+  readonly planIdentity: typeof planIdentity;
 }
 
-const defaultSteps: VisitSteps = { sessionFor };
+interface VisitPlan {
+  readonly identity: IdentityPlan;
+  readonly launch: LaunchPlan;
+}
+
+const defaultSteps: VisitSteps = { hostCapabilities, planIdentity, sessionFor };
 
 export interface Browsers {
   readonly start: (request: BrowserRequest) => BrowserVisit;
@@ -98,16 +109,29 @@ const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   }
 };
 
-const planFor = (request: VisitTarget, scratch: ScratchDir): LaunchPlan =>
-  planLaunch({
-    browserPath: request.browserPath,
-    display: process.env.DISPLAY,
-    headless: request.mode === "headless",
-    platform: process.platform,
-    scratchDir: scratch.path,
-    timezone: process.env.TZ,
-    xauthority: process.env.XAUTHORITY,
+const planVisit = (request: VisitTarget, scratch: ScratchDir, steps: VisitSteps): VisitPlan => {
+  const hostZone = readHostZone();
+  const display = process.env.DISPLAY;
+  const xauthority = process.env.XAUTHORITY;
+
+  const identity = steps.planIdentity({
+    capabilities: steps.hostCapabilities(),
+    hostZone,
+    mode: request.mode,
   });
+
+  return {
+    identity,
+    launch: planLaunch({
+      browserPath: request.browserPath,
+      display,
+      headless: request.mode === "headless",
+      identity: identity.inputs,
+      scratchDir: scratch.path,
+      xauthority,
+    }),
+  };
+};
 
 const writeProfile = async (plan: LaunchPlan): Promise<void> => {
   try {
@@ -144,13 +168,15 @@ const startBrowser = async (
 
 const renderInScope = async (
   driver: BrowserDriver,
+  steps: VisitSteps,
   request: VisitTarget,
   deadline: Deadline,
   scope: ChromeScope,
   document: PromiseWithResolvers<SourceDocument>,
 ): Promise<Closed> => {
   try {
-    const browser = await startBrowser(driver, scope, planFor(request, scope.scratch), deadline);
+    const { launch } = planVisit(request, scope.scratch, steps);
+    const browser = await startBrowser(driver, scope, launch, deadline);
     assertSupported(browser.product);
     document.resolve(await renderDocument(browser, request.url, deadline));
   } catch (error) {
@@ -236,7 +262,7 @@ export const createBrowsers = (
       const deadline = request.deadline.boundTo(steps.sessionFor().ownership.signal);
       const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
 
-      return await renderInScope(driver, request, deadline, scope, document);
+      return await renderInScope(driver, steps, request, deadline, scope, document);
     } finally {
       admission.release();
     }

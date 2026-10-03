@@ -7,8 +7,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
+import { planIdentity } from "../../humanizer/humanizer.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
 import { createScratchDir, spawnChrome } from "./browser-process.ts";
+import { hostCapabilities } from "./capabilities.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -67,9 +69,12 @@ const setup = async () => {
     browserPath: process.execPath,
     display: undefined,
     headless: true,
-    platform: process.platform,
+    identity: planIdentity({
+      capabilities: hostCapabilities(),
+      hostZone: undefined,
+      mode: "headless",
+    }).inputs,
     scratchDir: scope.scratch.path,
-    timezone: undefined,
     xauthority: undefined,
   });
 

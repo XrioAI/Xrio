@@ -4,11 +4,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
+import { readHostZone } from "../humanizer/host-zone.ts";
+import { planIdentity } from "../humanizer/humanizer.ts";
 import {
   createScratchDir,
   prepareProfile,
   removeScratchDir,
 } from "../sources/browser/browser-process.ts";
+import { hostCapabilities } from "../sources/browser/capabilities.ts";
 import { killProcessGroup, waitForGroupExit } from "../sources/browser/group-lifetime.ts";
 import { planLaunch } from "../sources/browser/launch-plan.ts";
 import { settleWithin } from "../sources/browser/lifetime.ts";
@@ -82,9 +85,12 @@ const withDriver = async (
     browserPath: chromePath(),
     display: process.env.DISPLAY,
     headless: true,
-    platform: process.platform,
+    identity: planIdentity({
+      capabilities: hostCapabilities(),
+      hostZone: readHostZone(),
+      mode: "headless",
+    }).inputs,
     scratchDir: scratch.path,
-    timezone: process.env.TZ,
     xauthority: process.env.XAUTHORITY,
   });
 

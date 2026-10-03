@@ -11,6 +11,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
+import { readHostZone } from "../../humanizer/host-zone.ts";
+import { planIdentity } from "../../humanizer/humanizer.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
 import { busyPageStarted, conformancePages } from "../../testing/conformance-pages.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
@@ -26,6 +28,7 @@ import {
   sweepAbandonedScratch,
 } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
+import { hostCapabilities } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -305,9 +308,12 @@ const withBrowser = async <Result>(
     browserPath: chromePath(),
     display: process.env.DISPLAY,
     headless: mode === "headless",
-    platform: process.platform,
+    identity: planIdentity({
+      capabilities: hostCapabilities(),
+      hostZone: readHostZone(),
+      mode,
+    }).inputs,
     scratchDir: scratch.path,
-    timezone: process.env.TZ,
     xauthority: process.env.XAUTHORITY,
   });
 
@@ -562,9 +568,12 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
       browserPath: chromePath(),
       display: process.env.DISPLAY,
       headless: mode === "headless",
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: hostCapabilities(),
+        hostZone: readHostZone(),
+        mode,
+      }).inputs,
       scratchDir: path.dirname(profile ?? ""),
-      timezone: process.env.TZ,
       xauthority: process.env.XAUTHORITY,
     });
 

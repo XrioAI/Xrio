@@ -5,7 +5,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { startDeadline } from "../src/deadline.ts";
+import { readHostZone } from "../src/humanizer/host-zone.ts";
+import { planIdentity } from "../src/humanizer/humanizer.ts";
 import { createBrowsers } from "../src/sources/browser/browsers.ts";
+import { hostCapabilities } from "../src/sources/browser/capabilities.ts";
 import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
@@ -133,9 +136,12 @@ const { args } = planLaunch({
   browserPath: chromePath(),
   display: process.env.DISPLAY,
   headless: mode === "headless",
-  platform: process.platform,
+  identity: planIdentity({
+    capabilities: hostCapabilities(),
+    hostZone: readHostZone(),
+    mode,
+  }).inputs,
   scratchDir: "<scratch>",
-  timezone: process.env.TZ,
   xauthority: process.env.XAUTHORITY,
 });
 

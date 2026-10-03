@@ -6,11 +6,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../../deadline.ts";
 import type { Clock } from "../../../deadline.ts";
 import { isXrioError } from "../../../errors.ts";
+import { planIdentity } from "../../../humanizer/humanizer.ts";
 import { fakeChromePath } from "../../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../../testing/leftovers.ts";
 import { manualClock } from "../../../testing/manual-clock.ts";
 import { createScratchDir, removeScratchDir } from "../browser-process.ts";
 import { createBrowsers } from "../browsers.ts";
+import { hostCapabilities } from "../capabilities.ts";
 import { planLaunch } from "../launch-plan.ts";
 import { CLOSE_BUDGET_MS } from "../port.ts";
 import { renderDocument } from "../render.ts";
@@ -114,9 +116,12 @@ describe("the CDP driver's documents", () => {
       browserPath: await fakeChromePath("evaluate-throws"),
       display: undefined,
       headless: true,
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: hostCapabilities(),
+        hostZone: undefined,
+        mode: "headless",
+      }).inputs,
       scratchDir: scratch.path,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -148,9 +153,12 @@ describe("the CDP driver's documents", () => {
       browserPath: await fakeChromePath("startup-blank-commit"),
       display: undefined,
       headless: true,
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: hostCapabilities(),
+        hostZone: undefined,
+        mode: "headless",
+      }).inputs,
       scratchDir: scratch.path,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -198,9 +206,12 @@ describe("the CDP driver's documents", () => {
       browserPath: await fakeChromePath("normal"),
       display: undefined,
       headless: true,
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: hostCapabilities(),
+        hostZone: undefined,
+        mode: "headless",
+      }).inputs,
       scratchDir: scratch.path,
-      timezone: undefined,
       xauthority: undefined,
     });
 

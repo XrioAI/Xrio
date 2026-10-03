@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { planIdentity } from "../../humanizer/humanizer.ts";
+import type { BrowserInputs } from "../../humanizer/inputs.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
 
 const scratchDir = "/tmp/xrio-501/bAbC123";
+
+interface IdentityChoice {
+  readonly headless: boolean;
+  readonly platform: NodeJS.Platform;
+  readonly timezone: string | undefined;
+}
+
+const identityFor = ({ headless, platform, timezone }: IdentityChoice): BrowserInputs =>
+  planIdentity({
+    capabilities: { platform },
+    hostZone: timezone,
+    mode: headless ? "headless" : "headed",
+  }).inputs;
 
 const baseline = [
   "--disable-field-trial-config",
@@ -49,9 +64,8 @@ describe(planLaunch, () => {
       browserPath: "/opt/chrome/chrome",
       display: ":99",
       headless: true,
-      platform: "linux",
+      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
       scratchDir,
-      timezone: undefined,
       xauthority: "/tmp/xvfb-run.Xauthority",
     });
 
@@ -77,9 +91,8 @@ describe(planLaunch, () => {
       browserPath: "/Applications/Chrome.app/Contents/MacOS/Chrome",
       display: undefined,
       headless: false,
-      platform: "darwin",
+      identity: identityFor({ headless: false, platform: "darwin", timezone: undefined }),
       scratchDir,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -97,9 +110,8 @@ describe(planLaunch, () => {
       browserPath: "chrome",
       display: ":0",
       headless: true,
-      platform: "linux",
+      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
       scratchDir,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -118,9 +130,8 @@ describe(planLaunch, () => {
         browserPath: "chrome",
         display: ":7",
         headless: false,
-        platform: "linux",
+        identity: identityFor({ headless: false, platform: "linux", timezone: "America/Chicago" }),
         scratchDir,
-        timezone: "America/Chicago",
         xauthority: "/tmp/xvfb-run.Xauthority",
       }).env,
     ).toStrictEqual({
@@ -142,9 +153,8 @@ describe(planLaunch, () => {
       browserPath: "chrome",
       display: undefined,
       headless: true,
-      platform: "linux",
+      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
       scratchDir,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -174,9 +184,8 @@ describe(planLaunch, () => {
       browserPath: "chrome",
       display: undefined,
       headless: true,
-      platform: "linux",
+      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
       scratchDir,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -194,10 +203,7 @@ interface GoldenPlan {
 
 const golden: Readonly<Record<string, GoldenPlan>> = goldenPlans;
 
-interface GoldenCase {
-  readonly headless: boolean;
-  readonly platform: NodeJS.Platform;
-  readonly timezone: string | undefined;
+interface GoldenCase extends IdentityChoice {
   readonly display: string | undefined;
   readonly xauthority: string | undefined;
 }
@@ -237,9 +243,8 @@ const requestOf = ({
   browserPath: "/opt/chrome/chrome",
   display,
   headless,
-  platform,
+  identity: identityFor({ headless, platform, timezone }),
   scratchDir,
-  timezone,
   xauthority,
 });
 
@@ -260,4 +265,15 @@ describe("the launch plan golden", () => {
       expect(Object.keys(plan.env)).toStrictEqual(Object.keys(golden[label].env));
     },
   );
+});
+
+describe("the identity planLaunch accepts", () => {
+  it("must come from mergeBrowserInputs, so a spread copy is refused", () => {
+    const [goldenCase] = goldenCases;
+    const request = requestOf(goldenCase);
+
+    expect(() =>
+      planLaunch({ ...request, identity: { ...request.identity, switches: ["--disable-gpu"] } }),
+    ).toThrow("The launch identity must come from mergeBrowserInputs.");
+  });
 });

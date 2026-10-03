@@ -3,14 +3,15 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
+import { planIdentity } from "../../humanizer/humanizer.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
-import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
+import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
 import { stageTimeline } from "../../testing/stage-timeline.ts";
 import { scratchRoot } from "./browser-process.ts";
@@ -18,9 +19,12 @@ import { createBrowsers } from "./browsers.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import type { RetireSteps } from "./chrome-scope.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
+import type { LaunchPlan } from "./launch-plan.ts";
 import type { BrowserDriver } from "./port.ts";
 
 const ABORT_DURING_LAUNCH_MS = 200;
+
+const BASELINE_USE_SWITCH = "--use-mock-keychain";
 
 const LAUNCH_DEADLINE_MS = 500;
 
@@ -442,8 +446,10 @@ describe("browser visits on the fake browser", () => {
   });
 });
 
-const loadTwice = async (planSession: typeof sessionFor, firstScenario: string) => {
-  const browsers = createBrowsers(cdpDriver, 1, { sessionFor: planSession });
+type PlanningOverrides = NonNullable<Parameters<typeof createBrowsers>[2]>;
+
+const loadTwice = async (steps: PlanningOverrides, firstScenario: string) => {
+  const browsers = createBrowsers(cdpDriver, 1, steps);
   using deadline = startDeadline(10_000);
 
   const request = {
@@ -480,8 +486,28 @@ describe("planning between admission and start", () => {
       return sessionFor();
     };
 
-    await expect(loadTwice(failFirstPlan, "normal")).resolves.toMatchObject({
+    await expect(loadTwice({ sessionFor: failFirstPlan }, "normal")).resolves.toMatchObject({
       first: { error: { message: "The session step failed." } },
+      left: nothingLeft,
+      second: { value: { status: 200 } },
+    });
+  });
+
+  it("releases admission when the identity step throws before start", async () => {
+    let plans = 0;
+
+    const failFirstIdentity: typeof planIdentity = (context) => {
+      plans += 1;
+
+      if (plans === 1) {
+        throw new Error("The identity step failed.");
+      }
+
+      return planIdentity(context);
+    };
+
+    await expect(loadTwice({ planIdentity: failFirstIdentity }, "normal")).resolves.toMatchObject({
+      first: { error: { message: "The identity step failed." } },
       left: nothingLeft,
       second: { value: { status: 200 } },
     });
@@ -501,7 +527,9 @@ describe("planning between admission and start", () => {
         : sessionFor();
     };
 
-    await expect(loadTwice(loseFirstOwnership, "slow-start")).resolves.toMatchObject({
+    await expect(
+      loadTwice({ sessionFor: loseFirstOwnership }, "slow-start"),
+    ).resolves.toMatchObject({
       first: { error: { name: "TimeoutError" } },
       left: nothingLeft,
       second: { value: { status: 200 } },
@@ -986,4 +1014,91 @@ describe("visits started directly with start", () => {
     expect(stages.timeline).toStrictEqual(["launch", "teardown", "launch", "teardown"]);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
+});
+
+const launchPlanOf = async (
+  steps: PlanningOverrides,
+  mode: "headless" | "headed" = "headless",
+): Promise<LaunchPlan | undefined> => {
+  const launched: LaunchPlan[] = [];
+
+  const recordingDriver: BrowserDriver = {
+    launch: async (plan, deadline, owned, deferCleanup) => {
+      launched.push(plan);
+
+      return await cdpDriver.launch(plan, deadline, owned, deferCleanup);
+    },
+  };
+
+  const browsers = createBrowsers(recordingDriver, 1, steps);
+  using deadline = startDeadline(10_000);
+
+  await browsers.load({ ...(await normalRequest(deadline)), mode });
+  await browsers.close();
+
+  return launched[0];
+};
+
+const changeHostAfterSession: typeof sessionFor = () => {
+  void (async () => {
+    await nextTurn();
+    vi.stubEnv("TZ", "Europe/Berlin");
+    vi.stubEnv("DISPLAY", ":2");
+    vi.stubEnv("XAUTHORITY", "/tmp/second.Xauthority");
+  })();
+
+  return sessionFor();
+};
+
+describe("the identity a visit launches Chrome with", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("passes the TZ the host exports through to Chrome", async () => {
+    vi.stubEnv("TZ", "Asia/Kolkata");
+
+    await expect(launchPlanOf({})).resolves.toMatchObject({ env: { TZ: "Asia/Kolkata" } });
+  });
+
+  it("reads the host's zone, display and Xauthority together, after the scratch is created and before planning", async () => {
+    vi.stubEnv("TZ", "Asia/Kolkata");
+    vi.stubEnv("DISPLAY", ":1");
+    vi.stubEnv("XAUTHORITY", "/tmp/first.Xauthority");
+
+    const scratchWhenPlanning: number[] = [];
+
+    const changeHostMidPlan: typeof planIdentity = (context) => {
+      scratchWhenPlanning.push(ownedScratchDirs().length);
+      vi.stubEnv("TZ", "UTC");
+      vi.stubEnv("DISPLAY", ":3");
+      vi.stubEnv("XAUTHORITY", "/tmp/third.Xauthority");
+
+      return planIdentity(context);
+    };
+
+    const plan = await launchPlanOf(
+      { planIdentity: changeHostMidPlan, sessionFor: changeHostAfterSession },
+      "headed",
+    );
+
+    expect({ env: plan?.env, scratchWhenPlanning }).toMatchObject({
+      env: { DISPLAY: ":2", TZ: "Europe/Berlin", XAUTHORITY: "/tmp/second.Xauthority" },
+      scratchWhenPlanning: [1],
+    });
+  });
+
+  it.each([
+    { platform: "linux" as const, switches: ["--use-gl=angle", "--use-angle=swiftshader"] },
+    { platform: "darwin" as const, switches: [] },
+  ])(
+    "selects the GL backend from the host's $platform capabilities",
+    async ({ platform, switches }) => {
+      const plan = await launchPlanOf({ hostCapabilities: () => ({ platform }) });
+
+      expect(
+        plan?.args.filter((value) => value.startsWith("--use-") && value !== BASELINE_USE_SWITCH),
+      ).toStrictEqual(switches);
+    },
+  );
 });

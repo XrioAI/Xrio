@@ -9,8 +9,6 @@
         "src/client.ts!",
         "src/proxy/route.ts!",
         "src/humanizer/contracts.ts!",
-        "src/humanizer/humanizer.ts!",
-        "src/humanizer/inputs.ts!",
         "src/humanizer/owned-inputs.ts!",
         "src/sessions/session.ts!",
         "scripts/*.ts!",
