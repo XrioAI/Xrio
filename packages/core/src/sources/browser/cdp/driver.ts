@@ -120,6 +120,7 @@ class Tab {
   readonly #ready: Promise<unknown>;
   readonly #downloads = new Set<string>();
   #downloadsIdle = Promise.withResolvers<"idle">();
+  #navigated = false;
   #document: CommittedDocument | undefined;
 
   constructor(send: Send, main: TargetSession<"main">, lifetime: AbortSignal) {
@@ -147,6 +148,7 @@ class Tab {
   readonly navigate = async (url: string, deadline: Deadline): Promise<void> => {
     deadline.throwIfExpired();
     await untilAborted(this.#ready, deadline.signal);
+    this.#navigated = true;
 
     const { errorText = "", isDownload = false } = await this.#send(
       this.#main,
@@ -308,6 +310,10 @@ class Tab {
     session: AnyTargetSession,
     event: Parameters<MainFrameEvents["translate"]>[1],
   ): void {
+    if (!this.#navigated) {
+      return;
+    }
+
     for (const driverEvent of this.#frame.translate(session, event)) {
       if (driverEvent.type === "commit") {
         this.#adopt(driverEvent.loaderId);

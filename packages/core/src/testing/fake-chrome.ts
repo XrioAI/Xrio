@@ -16,6 +16,7 @@ const SCENARIOS = [
   "commit-after-capture-error",
   "exit-after-capture-error",
   "pipe-closes-on-navigate",
+  "startup-blank-commit",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -34,6 +35,10 @@ const FRAGMENT_BYTES = 7;
 const SLOW_START_MS = 30_000;
 
 const AFTER_CAPTURE_ERROR_MS = 50;
+
+const STARTUP_BLANK_MS = 100;
+
+const BETWEEN_REPLY_AND_COMMIT_MS = 50;
 
 const TARGET_ID = "T1";
 
@@ -284,6 +289,51 @@ const CAPTURE_ERROR_SCENARIOS = new Set<Scenario>([
   "exit-after-capture-error",
 ]);
 
+const startupBlankCommit = (): Json[] => [
+  ...onEveryPageSession("Page.frameNavigated", {
+    frame: frame("BLANK", "about:blank"),
+    type: "Navigation",
+  }),
+  ...onEveryPageSession("Page.lifecycleEvent", {
+    frameId: TARGET_ID,
+    loaderId: "BLANK",
+    name: "DOMContentLoaded",
+    timestamp: 0,
+  }),
+];
+
+const enablePage = async (enabled: Json): Promise<void> => {
+  if (scenario !== "startup-blank-commit") {
+    await write([enabled]);
+
+    return;
+  }
+
+  await delay(STARTUP_BLANK_MS);
+  await write([enabled, ...startupBlankCommit()]);
+};
+
+const answerNavigate = async (url: string | undefined, committed: Json): Promise<void> => {
+  if (scenario === "pipe-closes-on-navigate") {
+    input.destroy();
+    output.destroy();
+    await delay(SLOW_START_MS);
+
+    return;
+  }
+
+  if (scenario !== "startup-blank-commit") {
+    await write(navigate(url, committed));
+
+    return;
+  }
+
+  currentUrl = url ?? "about:blank";
+  await write([...navigationEvents(currentUrl), committed]);
+  await delay(BETWEEN_REPLY_AND_COMMIT_MS);
+  await write(commitEvents(currentUrl));
+};
+
 const evaluateByValue = async (reply: Json, failed: Json): Promise<void> => {
   if (!CAPTURE_ERROR_SCENARIOS.has(scenario) || navigatedDuringCapture) {
     await write([reply]);
@@ -375,19 +425,15 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
       break;
     }
 
-    case "Page.navigate": {
-      if (scenario === "pipe-closes-on-navigate") {
-        input.destroy();
-        output.destroy();
-        await delay(SLOW_START_MS);
-        break;
-      }
+    case "Page.enable": {
+      await enablePage(reply({}));
+      break;
+    }
 
-      await write(
-        navigate(
-          hasUrl(params) ? params.url : undefined,
-          reply({ frameId: TARGET_ID, loaderId: "L1" }),
-        ),
+    case "Page.navigate": {
+      await answerNavigate(
+        hasUrl(params) ? params.url : undefined,
+        reply({ frameId: TARGET_ID, loaderId: "L1" }),
       );
       break;
     }

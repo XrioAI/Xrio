@@ -86,6 +86,30 @@ describe("the CDP driver's launch", () => {
   });
 });
 
+describe("the CDP driver's documents", () => {
+  it("ignores the startup about:blank commit and returns the navigated page", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+
+    try {
+      const document = await browsers.load({
+        browserPath: await fakeChromePath("startup-blank-commit"),
+        deadline,
+        mode: "headless",
+        proxy: undefined,
+        url: new URL("https://fake.test/page"),
+      });
+
+      expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
+      expect(document.html).toContain("<p>fake page</p>");
+    } finally {
+      await browsers.close();
+    }
+
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+});
+
 describe("the CDP driver's capture", () => {
   it.each([
     { order: "in the same read", scenario: "navigate-during-capture" },
