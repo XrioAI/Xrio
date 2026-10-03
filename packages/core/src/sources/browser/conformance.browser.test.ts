@@ -17,7 +17,7 @@ import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../testing/processes.ts";
-import type { SourceDocument } from "../../types.ts";
+import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import {
   createScratchDir,
   prepareProfile,
@@ -623,4 +623,119 @@ describe.each(MODES)("commands our CDP client sends, %s", (mode) => {
       ]),
     );
   });
+});
+
+interface VisitFailure {
+  name: string;
+  route: string;
+  error: object;
+  browserPath?: string;
+  timeoutMs?: number;
+  interrupt?: "abort" | "kill-renderer";
+}
+
+type BrowserLoad = (
+  request: DocumentRequest & { mode: (typeof MODES)[number]; browserPath: string },
+) => Promise<SourceDocument>;
+
+const visitFailures: VisitFailure[] = [
+  {
+    browserPath: "/nonexistent/chrome",
+    error: { code: "BROWSER_LAUNCH_FAILED" },
+    name: "a launch failure",
+    route: "/static",
+  },
+  {
+    error: { code: "NETWORK_ERROR", details: { netError: "net::ERR_ABORTED" } },
+    name: "a download",
+    route: "/download",
+  },
+  {
+    error: { message: "Ownership lost" },
+    interrupt: "abort",
+    name: "an aborted signal",
+    route: "/busy",
+  },
+  { error: { code: "TIMEOUT" }, name: "a timeout", route: "/busy", timeoutMs: BUSY_TIMEOUT_MS },
+  {
+    error: { code: "BROWSER_CRASHED" },
+    interrupt: "kill-renderer",
+    name: "a renderer killed mid-capture",
+    route: "/busy",
+  },
+];
+
+const interruptVisit = async (
+  failure: VisitFailure,
+  owner: AbortController,
+  stages: ReturnType<typeof recordStages>,
+): Promise<void> => {
+  if (failure.interrupt === "abort") {
+    await busyPageStarted();
+    owner.abort(new Error("Ownership lost"));
+  }
+
+  if (failure.interrupt === "kill-renderer") {
+    await stages.ended("navigation");
+    await killRenderers((await profileOf(lastLaunchedPid() ?? 0)) ?? "unknown profile");
+  }
+};
+
+const failOnce = async (
+  mode: (typeof MODES)[number],
+  failure: VisitFailure,
+  loadWith: BrowserLoad,
+): Promise<void> => {
+  using stages = recordStages();
+  using deadline = startDeadline(failure.timeoutMs ?? 20_000);
+  const owner = new AbortController();
+
+  const loading = loadWith({
+    browserPath: failure.browserPath ?? chromePath(),
+    deadline: deadline.boundTo(owner.signal),
+    mode,
+    proxy: undefined,
+    url: new URL(failure.route, server.origin),
+  });
+
+  await interruptVisit(failure, owner, stages);
+  await expect(loading).rejects.toMatchObject(failure.error);
+};
+
+describe.each(MODES)("browser visits, %s", (mode) => {
+  serveFixturePages();
+
+  it.each(visitFailures)(
+    "visit: $name closes only after Chrome is gone, then admits the next scrape",
+    async (failure) => {
+      const browsers = createBrowsers(cdpDriver, 1);
+      const closings: Promise<unknown>[] = [];
+
+      await failOnce(mode, failure, async (request) => {
+        const visit = browsers.start(request);
+
+        closings.push(visit.closed);
+
+        return await visit.document;
+      });
+
+      await expect(Promise.all(closings)).resolves.toStrictEqual([{ exited: true }]);
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+
+      await failOnce(mode, failure, browsers.load);
+      using deadline = startDeadline(20_000);
+
+      const next = await browsers.load({
+        browserPath: chromePath(),
+        deadline,
+        mode,
+        proxy: undefined,
+        url: new URL("/static", server.origin),
+      });
+
+      await browsers.close();
+      expect(markerOf(next.html)).toBe("static");
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
 });
