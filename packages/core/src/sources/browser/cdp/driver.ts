@@ -1,3 +1,6 @@
+import { randomInt } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+
 import type { Deadline } from "../../../deadline.ts";
 import { spawnBrowser } from "../browser-process.ts";
 import type { SpawnedBrowser } from "../browser-process.ts";
@@ -35,6 +38,8 @@ const LAUNCH_TIMEOUT_MS = 30_000;
 const DOWNLOAD_SETTLE_MS = 500;
 
 const NAVIGATION_DOWNLOAD = "navigation";
+
+const DIALOG_DISMISS_MS = { longest: 1500, shortest: 600 } as const;
 
 const CONTEXT_GONE = /Cannot find context with specified id|Execution context was destroyed/u;
 
@@ -92,6 +97,8 @@ class Tab {
   readonly #send: Send;
   readonly #main: TargetSession<"main">;
   readonly #lifetime: AbortSignal;
+  readonly #ended = new AbortController();
+  readonly #alive: AbortSignal;
   readonly #frame: MainFrameEvents;
   readonly #listeners = new Set<DriverListener>();
   readonly #ready: Promise<unknown>;
@@ -103,6 +110,7 @@ class Tab {
     this.#send = send;
     this.#main = main;
     this.#lifetime = lifetime;
+    this.#alive = AbortSignal.any([lifetime, this.#ended.signal]);
     this.#frame = new MainFrameEvents(main);
     this.#ready = Promise.all([
       send(main, "Page.enable", {}, lifetime),
@@ -173,12 +181,18 @@ class Tab {
     return value;
   };
 
+  readonly end = (): void => {
+    this.#ended.abort(new DriverError({ kind: "browser-gone" }));
+  };
+
   receive(event: ConnectionEvent): void {
     if (event.type === "domain") {
       this.#receiveDomain(event.session, event.event);
     } else if (event.type === "closed") {
+      this.end();
       this.#emit({ type: "disconnect" });
     } else if (event.type === "ended" && event.target.id === this.#main.id) {
+      this.end();
       this.#emit({ type: event.crashed ? "crash" : "disconnect" });
     }
   }
@@ -207,9 +221,7 @@ class Tab {
 
   #receiveDomain(session: AnyTargetSession, event: DomainEvent): void {
     if (event.method === "Page.javascriptDialogOpening") {
-      void settle(
-        this.#send(this.#main, "Page.handleJavaScriptDialog", { accept: false }, this.#lifetime),
-      );
+      void settle(this.#dismissDialog());
 
       return;
     }
@@ -233,6 +245,13 @@ class Tab {
     }
 
     this.#receivePageEvent(session, event);
+  }
+
+  async #dismissDialog(): Promise<void> {
+    const pause = randomInt(DIALOG_DISMISS_MS.shortest, DIALOG_DISMISS_MS.longest + 1);
+
+    await delay(pause, undefined, { signal: this.#alive });
+    await this.#send(this.#main, "Page.handleJavaScriptDialog", { accept: false }, this.#alive);
   }
 
   #downloadStarted(key: string): void {
@@ -335,6 +354,7 @@ const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
 
     return {
       close: async (budgetMs) => {
+        opener.end();
         await opener.downloadsSettled(DOWNLOAD_SETTLE_MS);
         await closeBrowser(send, chrome, budgetMs);
       },
