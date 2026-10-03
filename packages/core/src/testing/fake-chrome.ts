@@ -1,4 +1,3 @@
-import { createWriteStream } from "node:fs";
 import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -94,9 +93,9 @@ const FRAME_NOT_IN_TARGET = {
   message: "Frame with the given id does not belong to the target.",
 };
 
-const output = createWriteStream("", { fd: 4 });
+const output = new Socket({ fd: 4, readable: false });
 
-const input = new Socket({ fd: 3, readable: true }).setEncoding("utf-8");
+const input = new Socket({ fd: 3, writable: false }).setEncoding("utf-8");
 
 const pageSessions: string[] = [];
 
