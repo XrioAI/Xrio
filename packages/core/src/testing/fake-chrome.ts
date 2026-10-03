@@ -15,6 +15,7 @@ const SCENARIOS = [
   "navigate-during-capture",
   "commit-after-capture-error",
   "exit-after-capture-error",
+  "pipe-closes-on-navigate",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -375,6 +376,13 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Page.navigate": {
+      if (scenario === "pipe-closes-on-navigate") {
+        input.destroy();
+        output.destroy();
+        await delay(SLOW_START_MS);
+        break;
+      }
+
       await write(
         navigate(
           hasUrl(params) ? params.url : undefined,

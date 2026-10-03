@@ -52,8 +52,12 @@ interface CommittedDocument {
   readonly world: Promise<IsolatedContextId>;
 }
 
-interface Connected {
+interface Connection {
   readonly send: Send;
+  readonly isOpen: () => boolean;
+}
+
+interface Connected extends Connection {
   readonly opened: Promise<DriverBrowser>;
 }
 
@@ -345,10 +349,16 @@ class Tab {
 }
 
 const closeBrowser = async (
-  send: Send,
+  { isOpen, send }: Connection,
   chrome: SpawnedBrowser,
   budgetMs: number,
 ): Promise<void> => {
+  if (!isOpen()) {
+    await chrome.kill(budgetMs);
+
+    return;
+  }
+
   void settle(send(BROWSER, "Browser.close", {}, AbortSignal.timeout(budgetMs)));
   await chrome.stop(budgetMs);
 };
@@ -356,6 +366,7 @@ const closeBrowser = async (
 const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
   const firstTab = Promise.withResolvers<Tab>();
   let tab: Tab | undefined;
+  let open = true;
 
   const send = connectOverPipe(chrome.pipe, lifetime, (event, reply) => {
     if (event.type === "attached" && event.target.scope === "main") {
@@ -366,11 +377,14 @@ const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
     }
 
     if (event.type === "closed") {
+      open = false;
       firstTab.reject(new DriverError({ kind: "browser-gone" }));
     }
 
     tab?.receive(event);
   });
+
+  const connection: Connection = { isOpen: () => open, send };
 
   const opened = (async (): Promise<DriverBrowser> => {
     const configured = Promise.all([
@@ -388,7 +402,7 @@ const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
       close: async (budgetMs) => {
         opener.end();
         await opener.downloadsSettled(DOWNLOAD_SETTLE_MS);
-        await closeBrowser(send, chrome, budgetMs);
+        await closeBrowser(connection, chrome, budgetMs);
       },
       evaluateIsolated: opener.evaluateIsolated,
       navigate: opener.navigate,
@@ -400,7 +414,7 @@ const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
 
   void settle(opened);
 
-  return { opened, send };
+  return { ...connection, opened };
 };
 
 const withStderr = async (chrome: SpawnedBrowser, problem: string, cause: unknown) =>
@@ -410,12 +424,12 @@ export const cdpDriver: BrowserDriver = {
   launch: async (plan, deadline, deferCleanup) => {
     using stage = deadline.startStage(LAUNCH_TIMEOUT_MS);
     const chrome = await spawnBrowser(plan);
-    const { opened, send } = connect(chrome, deadline.signal);
+    const { opened, ...connection } = connect(chrome, deadline.signal);
 
     try {
       return await untilAborted(opened, stage.signal);
     } catch (error) {
-      deferCleanup(closeBrowser(send, chrome, CLOSE_BUDGET_MS));
+      deferCleanup(closeBrowser(connection, chrome, CLOSE_BUDGET_MS));
 
       if (isBrowserGone(error)) {
         throw await withStderr(chrome, "Chrome exited during launch.", error);

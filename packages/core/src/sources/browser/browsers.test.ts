@@ -25,19 +25,27 @@ const TEARDOWN_SETTLED_WITHIN_MS = 11_500;
 
 const DRIVER_NAMES = Object.keys(BROWSER_DRIVERS).filter(isBrowserDriverName);
 
-const isLaunchStage = (message: unknown): message is { stage: "launch"; durationMs: number } =>
+const DEAD_PIPE_TEARDOWN_BOUND_MS = 1000;
+
+const isStage = (message: unknown): message is { stage: string; durationMs: number } =>
   typeof message === "object" &&
   message !== null &&
   "stage" in message &&
-  message.stage === "launch" &&
+  typeof message.stage === "string" &&
   "durationMs" in message &&
   typeof message.durationMs === "number";
 
 const launchStages: number[] = [];
 
+const teardownStages: number[] = [];
+
 subscribe("xrio:stage", (message) => {
-  if (isLaunchStage(message)) {
+  if (isStage(message) && message.stage === "launch") {
     launchStages.push(message.durationMs);
+  }
+
+  if (isStage(message) && message.stage === "teardown") {
+    teardownStages.push(message.durationMs);
   }
 });
 
@@ -136,6 +144,14 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
     await expect(load(driver, "crash-on-navigate")).rejects.toMatchObject({
       code: "BROWSER_CRASHED",
     });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("kills a browser whose pipe closed while it kept running, without waiting out the close budget", async () => {
+    await expect(load(driver, "pipe-closes-on-navigate")).rejects.toMatchObject({
+      code: "BROWSER_CRASHED",
+    });
+    expect(teardownStages.at(-1)).toBeLessThan(DEAD_PIPE_TEARDOWN_BOUND_MS);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 

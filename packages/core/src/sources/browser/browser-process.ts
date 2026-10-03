@@ -166,6 +166,7 @@ export interface SpawnedBrowser {
   readonly pid: number;
   readonly pipe: { readonly toBrowser: Writable; readonly fromBrowser: Readable };
   readonly stop: (budgetMs: number) => Promise<void>;
+  readonly kill: (budgetMs: number) => Promise<void>;
   readonly stderrTail: () => Promise<string>;
 }
 
@@ -226,16 +227,20 @@ export const spawnBrowser = async (plan: LaunchPlan): Promise<SpawnedBrowser> =>
 
   const isRunning = () => child.exitCode === null && child.signalCode === null;
 
-  const stop = async (budgetMs: number) => {
-    await settleWithin(exited.promise, budgetMs);
-
+  const kill = async (budgetMs: number) => {
     if (isRunning()) {
       killProcessGroup(pid);
       await settleWithin(exited.promise, budgetMs);
     }
   };
 
+  const stop = async (budgetMs: number) => {
+    await settleWithin(exited.promise, budgetMs);
+    await kill(budgetMs);
+  };
+
   return {
+    kill,
     pid,
     pipe: { fromBrowser: pipes.fromBrowser, toBrowser: pipes.toBrowser },
     stderrTail: drainTail(pipes.stderr),
