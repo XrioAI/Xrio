@@ -267,64 +267,54 @@ const normalRequest = async (deadline: Deadline) => ({
 });
 
 describe("bounded teardown on the fake browser", () => {
-  it.each(["rejects", "hangs"])(
-    "kills the known browser when the process scan %s",
-    async (failure) => {
-      const pids: number[] = [];
-      const scanEntered = Promise.withResolvers<"entered">();
-      const hangingScan = Promise.withResolvers<number>();
+  it("kills the known browser without a process scan when Browser.close fails", async () => {
+    const pids: number[] = [];
+    let scans = 0;
 
-      const failedCloseDriver: BrowserDriver = {
-        launch: async (plan, deadline, deferCleanup) => {
-          const browser = await patchrightDriver.launch(plan, deadline, deferCleanup);
+    const failedCloseDriver: BrowserDriver = {
+      launch: async (plan, deadline, deferCleanup) => {
+        const browser = await patchrightDriver.launch(plan, deadline, deferCleanup);
 
-          pids.push(browser.pid);
+        pids.push(browser.pid);
 
-          return {
-            ...browser,
-            close: async () => {
-              await nextTurn();
-              throw new Error("Browser.close went unanswered");
-            },
-          };
-        },
-      };
+        return {
+          ...browser,
+          close: async () => {
+            await nextTurn();
+            throw new Error("Browser.close went unanswered");
+          },
+        };
+      },
+    };
 
-      const browsers = createBrowsers(failedCloseDriver, 1, {
-        findBrowserPid: async () => {
-          scanEntered.resolve("entered");
+    const browsers = createBrowsers(failedCloseDriver, 1, {
+      findBrowserPid: async () => {
+        scans += 1;
 
-          if (failure === "rejects") {
-            throw new Error("The process scan failed");
-          }
+        return await Promise.withResolvers<number>().promise;
+      },
+    });
 
-          return await hangingScan.promise;
-        },
-      });
+    using deadline = startDeadline(10_000);
 
-      using deadline = startDeadline(10_000);
-
-      try {
-        await expect(
-          browsers.load({
-            ...(await normalRequest(deadline)),
-            browserPath: await fakeChromePath("ignore-close"),
-          }),
-        ).resolves.toMatchObject({ status: 200 });
-        await scanEntered.promise;
-        await browsers.close();
-        await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
-      } finally {
-        hangingScan.resolve(0);
-
-        for (const pid of pids) {
-          killProcessGroup(pid);
-        }
-
-        await browsers.close();
+    try {
+      await expect(
+        browsers.load({
+          ...(await normalRequest(deadline)),
+          browserPath: await fakeChromePath("ignore-close"),
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      await browsers.close();
+      expect(scans).toBe(0);
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    } finally {
+      for (const pid of pids) {
+        killProcessGroup(pid);
       }
-    },
-  );
+
+      await browsers.close();
+    }
+  });
 
   it("continues to process discovery after a deferred launch cleanup hangs and admits queued work", async () => {
     const hangingCleanup = Promise.withResolvers<"released">();
@@ -372,7 +362,7 @@ describe("bounded teardown on the fake browser", () => {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
       await expect(second).resolves.toMatchObject({ status: 200 });
       await browsers.close();
-      expect(scannedProfiles).toHaveLength(2);
+      expect(scannedProfiles).toHaveLength(1);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     } finally {
       hangingCleanup.resolve("released");
@@ -443,7 +433,7 @@ describe("bounded teardown on the fake browser", () => {
         directories: [path.basename(unconfirmed.scratch)],
         processes: [unconfirmed.pid],
       });
-      expect(scans).toBe(2);
+      expect(scans).toBe(1);
     } finally {
       hangingCleanup.resolve("released");
       hangingScan.resolve(0);

@@ -146,6 +146,33 @@ const startBrowser = async (
   }
 };
 
+const browserGroup = async (
+  plan: LaunchPlan,
+  browser: DriverBrowser | undefined,
+  steps: TeardownSteps,
+  signal: AbortSignal,
+): Promise<{ group: number | undefined; complete: boolean }> => {
+  if (browser !== undefined) {
+    return { complete: true, group: browser.pid };
+  }
+
+  const scanSignal = AbortSignal.any([signal, AbortSignal.timeout(PROCESS_SCAN_BUDGET_MS)]);
+
+  const [scan] = await Promise.allSettled([
+    withinSignal(
+      async () =>
+        await steps.findBrowserPid(plan.directories.profile, PROCESS_SCAN_BUDGET_MS, scanSignal),
+      scanSignal,
+    ),
+  ]);
+
+  signal.throwIfAborted();
+
+  return scan.status === "fulfilled"
+    ? { complete: !scanSignal.aborted, group: scan.value }
+    : { complete: false, group: undefined };
+};
+
 const stopBrowser = async (
   plan: LaunchPlan,
   browser: DriverBrowser | undefined,
@@ -163,21 +190,10 @@ const stopBrowser = async (
     }, signal);
   }
 
-  const scanSignal = AbortSignal.any([signal, AbortSignal.timeout(PROCESS_SCAN_BUDGET_MS)]);
-
-  const [scan] = await Promise.allSettled([
-    withinSignal(
-      async () =>
-        await steps.findBrowserPid(plan.directories.profile, PROCESS_SCAN_BUDGET_MS, scanSignal),
-      scanSignal,
-    ),
-  ]);
-
-  signal.throwIfAborted();
-  const group = (scan.status === "fulfilled" ? scan.value : undefined) ?? browser?.pid;
+  const { group, complete } = await browserGroup(plan, browser, steps, signal);
 
   if (group === undefined) {
-    return scan.status === "fulfilled" && !scanSignal.aborted;
+    return complete;
   }
 
   killProcessGroup(group);
