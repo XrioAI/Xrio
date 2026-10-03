@@ -233,13 +233,14 @@ const load = async (
   route: string,
   timeoutMs = 20_000,
   signal?: AbortSignal,
+  browserArgs: readonly string[] = [],
 ): Promise<SourceDocument> => {
   const browsers = createBrowsers(cdpDriver, 1);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
     return await browsers.load({
-      browserArgs: [],
+      browserArgs,
       browserPath: chromePath(),
       deadline,
       mode,
@@ -586,6 +587,25 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
     expect(commandLine.split(" --").length - 1).toBe(
       args.filter((arg) => arg.startsWith("--")).length,
     );
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("launches Chrome with the client's switches once, after Xrio's own", async () => {
+    const controller = new AbortController();
+    const callerSwitches = ["--disable-gpu-compositing"];
+    const loading = load(mode, "/busy", 20_000, controller.signal, callerSwitches);
+
+    await busyPageStarted();
+    const commandLine = await commandLineOf(lastLaunchedPid() ?? 0);
+
+    controller.abort(new Error("argv checked"));
+    await expect(loading).rejects.toThrow("argv checked");
+
+    const caller = commandLine.indexOf("--disable-gpu-compositing");
+
+    expect(commandLine.split("--disable-gpu-compositing")).toHaveLength(2);
+    expect(commandLine.indexOf("--crash-dumps-dir=")).toBeLessThan(caller);
+    expect(caller).toBeLessThan(commandLine.indexOf("--user-data-dir="));
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
