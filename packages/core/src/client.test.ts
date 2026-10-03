@@ -7,6 +7,7 @@ import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import { fakeChromePath } from "./testing/fake-chrome-path.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
+import { stageTimeline } from "./testing/stage-timeline.ts";
 
 const html = `<!doctype html>
 <html lang="en">
@@ -42,6 +43,10 @@ const cookies = [
 const previewBytes = 65_536;
 
 const CAPTURE_BEFORE_TEARDOWN_MS = 1500;
+
+const ABORT_DURING_LAUNCH_MS = 200;
+
+const LAUNCH_TIMEOUT_MS = 500;
 
 let onRequest: (() => void) | undefined;
 
@@ -490,4 +495,69 @@ describe("XrioClient browser lifecycle", () => {
       }),
     ).resolves.toMatchObject({ status: 200 });
   });
+});
+
+describe("XrioClient browser admission", () => {
+  it("starts a queued scrape only after the previous visit has closed", async () => {
+    using stages = stageTimeline(new Set(["launch", "teardown"]));
+
+    await stages.recording(async () => {
+      await using client = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        maxBrowsers: 1,
+        mode: "headless",
+      });
+
+      const scrapeAndMark = async (name: string) => {
+        await client.scrape({ format: "html", url: "https://fake.test/page" });
+        stages.mark(`${name} resolved`);
+      };
+
+      await Promise.all([scrapeAndMark("first"), scrapeAndMark("second")]);
+    });
+
+    expect(stages.timeline).toStrictEqual([
+      "launch",
+      "first resolved",
+      "teardown",
+      "launch",
+      "second resolved",
+      "teardown",
+    ]);
+  });
+
+  it.each([
+    { error: { code: "BROWSER_LAUNCH_FAILED" }, scenario: "no-start" },
+    { error: { code: "BROWSER_CRASHED" }, scenario: "crash-on-navigate" },
+    { error: { code: "NETWORK_ERROR" }, scenario: "navigate-error" },
+    {
+      abortAfterMs: ABORT_DURING_LAUNCH_MS,
+      error: { name: "TimeoutError" },
+      scenario: "slow-start",
+    },
+    { error: { code: "TIMEOUT" }, scenario: "slow-start", timeoutMs: LAUNCH_TIMEOUT_MS },
+  ])(
+    "admits the next scrape after $scenario rejects with $error",
+    async ({ abortAfterMs, error, scenario, timeoutMs }) => {
+      await using client = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        maxBrowsers: 1,
+        mode: "headless",
+      });
+
+      const failing = client.scrape({
+        browserPath: await fakeChromePath(scenario),
+        format: "html",
+        mode: "headless",
+        signal: abortAfterMs === undefined ? undefined : AbortSignal.timeout(abortAfterMs),
+        timeoutMs,
+        url: "https://fake.test/page",
+      });
+
+      await expect(failing).rejects.toMatchObject(error);
+      await expect(
+        client.scrape({ format: "html", timeoutMs: 10_000, url: "https://fake.test/page" }),
+      ).resolves.toMatchObject({ status: 200 });
+    },
+  );
 });
