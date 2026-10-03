@@ -4,6 +4,10 @@ import type { FixtureHandler, FixtureOrigins } from "./fixture-server.ts";
 
 const HUGE_DOM_ELEMENTS = 200_000;
 
+const SLICED_FILLER_CODE_UNITS = 4 * 1024 * 1024;
+
+const OVERSIZED_FILLER_CODE_UNITS = 33 * 1024 * 1024;
+
 const CYRILLIC_WINDOWS_1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
 
 const PROBE_SCRIPT = `<script>
@@ -94,6 +98,14 @@ const recordRequest = (pathname: string): void => {
 };
 
 const hugeBody = (): string => "<p>x</p>".repeat(HUGE_DOM_ELEMENTS);
+
+const sendFilledPage = (response: ServerResponse, marker: string, filler: number): void => {
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.setHeader("x-page", marker);
+  response.end(
+    `<!DOCTYPE html><html><head><meta name="xrio-page" content="${marker}"></head><body><!--${"x".repeat(filler)}--><p id="last">${marker}-end</p></body></html>`,
+  );
+};
 
 const routes = new Map<
   string,
@@ -256,6 +268,18 @@ const routes = new Map<
     "/huge",
     (response) => {
       sendPage(response, "huge", hugeBody());
+    },
+  ],
+  [
+    "/sliced",
+    (response) => {
+      sendFilledPage(response, "sliced", SLICED_FILLER_CODE_UNITS);
+    },
+  ],
+  [
+    "/too-large",
+    (response) => {
+      sendFilledPage(response, "too-large", OVERSIZED_FILLER_CODE_UNITS);
     },
   ],
   [

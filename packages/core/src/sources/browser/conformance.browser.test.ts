@@ -417,6 +417,20 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
     expect(markerOf(document.html)).toBe("basic-auth");
   });
 
+  it("captures a page over 4 Mi code units in slices, whole", async () => {
+    const document = await load(driver, mode, "/sliced");
+
+    expect(document.html).toHaveLength(4_194_432);
+    expect(document.html.endsWith('<p id="last">sliced-end</p></body></html>')).toBeTruthy();
+  });
+
+  it("refuses a page over 32 Mi code units as too large", async () => {
+    await expect(load(driver, mode, "/too-large")).rejects.toMatchObject({
+      code: "RESPONSE_TOO_LARGE",
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
   it("returns a 403 with an empty body as data", async () => {
     const document = await load(driver, mode, "/empty-403");
 
