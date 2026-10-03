@@ -9,12 +9,14 @@
         "src/client.ts!",
         "src/proxy/route.ts!",
         "src/humanizer/contracts.ts!",
-        "src/humanizer/owned-inputs.ts!",
         "src/sessions/session.ts!",
         "scripts/*.ts!",
         "examples/*.ts"
       ],
       "project": ["src/**/*.ts!", "scripts/*.ts!", "examples/*.ts", "!src/testing/**!"]
+    },
+    ".": {
+      "entry": ["lint/*.ts!", "!lint/*.test.ts!"]
     }
   }
 }

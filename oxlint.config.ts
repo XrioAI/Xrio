@@ -15,11 +15,22 @@ export default defineConfig({
   extends: [core, react, next, vitest, antiSlop],
   ignorePatterns: core.ignorePatterns,
   jsPlugins: [
+    "./lint/xrio.ts",
     "oxlint-plugin-complexity",
     { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
   ],
   options: { typeAware: true },
   overrides: [
+    {
+      files: [
+        "apps/**",
+        "packages/core/src/humanizer/**/*.ts",
+        "packages/core/src/testing/**/*.ts",
+        "**/*.test.ts",
+        "**/*.test-d.ts",
+      ],
+      rules: { "xrio/identity-owner": "off" },
+    },
     {
       files: ["packages/core/src/sources/browser/cdp/**/*.ts"],
       rules: {
@@ -46,6 +57,7 @@ export default defineConfig({
     "complexity/complexity": ["error", { cognitive: 15, cyclomatic: 20, minLines: 0 }],
     "no-restricted-imports": ["error", { paths: [DEVTOOLS], patterns: [DEVTOOLS_SUBPATHS] }],
     "vite-plus/prefer-vite-plus-imports": "error",
+    "xrio/identity-owner": "error",
   },
   settings: { next: { rootDir: ["apps/landing/"] } },
 });

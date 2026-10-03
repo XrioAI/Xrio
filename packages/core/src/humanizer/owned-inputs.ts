@@ -18,6 +18,10 @@ export const OWNED_PREFERENCES = [
 
 export const OWNED_LOCAL_STATE = ["dns_over_https.mode"] as const;
 
+export const OWNED_HEADERS = ["accept-language"] as const;
+
+export const FORK_SWITCH_PREFIXES = ["--pxr-", "--xrio-"] as const;
+
 export type LaunchInput =
   | {
       readonly sink: "switch";
