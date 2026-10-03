@@ -443,7 +443,7 @@ describe("browser visits on the fake browser", () => {
 });
 
 const loadTwice = async (planSession: typeof sessionFor, firstScenario: string) => {
-  const browsers = createBrowsers(cdpDriver, 1, {}, planSession);
+  const browsers = createBrowsers(cdpDriver, 1, { sessionFor: planSession });
   using deadline = startDeadline(10_000);
 
   const request = {

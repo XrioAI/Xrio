@@ -37,6 +37,12 @@ interface BrowserVisit {
   readonly closed: Promise<Closed>;
 }
 
+interface VisitSteps extends Partial<RetireSteps> {
+  readonly sessionFor: typeof sessionFor;
+}
+
+const defaultSteps: VisitSteps = { sessionFor };
+
 export interface Browsers {
   readonly start: (request: BrowserRequest) => BrowserVisit;
   readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
@@ -207,9 +213,9 @@ const createAdmission = (maxBrowsers: number) => {
 export const createBrowsers = (
   driver: BrowserDriver,
   maxBrowsers = defaultMaxBrowsers(),
-  steps: Partial<RetireSteps> = {},
-  planSession = sessionFor,
+  overrides: Partial<VisitSteps> = {},
 ): Browsers => {
+  const steps = { ...defaultSteps, ...overrides };
   const admission = createAdmission(maxBrowsers);
   const visits = new Set<Promise<Closed>>();
   let closed = false;
@@ -227,7 +233,7 @@ export const createBrowsers = (
     });
 
     try {
-      const deadline = request.deadline.boundTo(planSession().ownership.signal);
+      const deadline = request.deadline.boundTo(steps.sessionFor().ownership.signal);
       const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
 
       return await renderInScope(driver, request, deadline, scope, document);
