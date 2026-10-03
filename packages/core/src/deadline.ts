@@ -20,35 +20,23 @@ interface Stage extends Disposable {
   readonly signal: AbortSignal;
 }
 
-export interface Deadline extends Disposable {
+export interface Deadline {
   readonly signal: AbortSignal;
   readonly remainingMs: () => number;
   readonly throwIfExpired: () => void;
   readonly stageTimeout: (capMs: number) => number | undefined;
   readonly startStage: (capMs: number) => Stage;
+  readonly boundTo: (signal: AbortSignal) => Deadline;
 }
 
-export const startDeadline = (
-  timeoutMs: number,
-  callerSignal?: AbortSignal,
-  clock: Clock = systemClock,
-): Deadline => {
-  const expiresAt = clock.now() + timeoutMs;
-  const expiry = new AbortController();
-  const signal = callerSignal ? AbortSignal.any([callerSignal, expiry.signal]) : expiry.signal;
+interface Expiry {
+  readonly clock: Clock;
+  readonly expire: () => void;
+  readonly remainingMs: () => number;
+}
 
-  const expire = () => {
-    if (!expiry.signal.aborted) {
-      expiry.abort(
-        new XrioError("TIMEOUT", `The scrape did not finish within ${timeoutMs} ms.`, {
-          details: undefined,
-        }),
-      );
-    }
-  };
-
-  const cancelTimer = clock.setTimer(timeoutMs, expire);
-  const remainingMs = () => Math.max(0, Math.ceil(expiresAt - clock.now()));
+const observeExpiry = (expiry: Expiry, signal: AbortSignal): Deadline => {
+  const { clock, expire, remainingMs } = expiry;
 
   const remainingMsOrThrow = () => {
     const remaining = remainingMs();
@@ -99,12 +87,40 @@ export const startDeadline = (
   };
 
   return {
-    [Symbol.dispose]: cancelTimer,
+    boundTo: (other) => observeExpiry(expiry, AbortSignal.any([signal, other])),
     remainingMs,
     signal,
     stageTimeout,
     startStage,
     throwIfExpired,
+  };
+};
+
+export const startDeadline = (
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+  clock: Clock = systemClock,
+): Deadline & Disposable => {
+  const expiresAt = clock.now() + timeoutMs;
+  const expiry = new AbortController();
+  const signal = callerSignal ? AbortSignal.any([callerSignal, expiry.signal]) : expiry.signal;
+
+  const expire = () => {
+    if (!expiry.signal.aborted) {
+      expiry.abort(
+        new XrioError("TIMEOUT", `The scrape did not finish within ${timeoutMs} ms.`, {
+          details: undefined,
+        }),
+      );
+    }
+  };
+
+  const cancelTimer = clock.setTimer(timeoutMs, expire);
+  const remainingMs = () => Math.max(0, Math.ceil(expiresAt - clock.now()));
+
+  return {
+    ...observeExpiry({ clock, expire, remainingMs }, signal),
+    [Symbol.dispose]: cancelTimer,
   };
 };
 

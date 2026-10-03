@@ -70,6 +70,29 @@ describe(startDeadline, () => {
     expect(startDeadline(1000, AbortSignal.abort(reason), clock).signal.reason).toBe(reason);
   });
 
+  it("ends a bound deadline when either its own signal or the bound one aborts", () => {
+    const { advance, clock } = manualClock();
+    const owner = new AbortController();
+    const reason = new Error("Ownership lost");
+    const deadline = startDeadline(1000, undefined, clock);
+    const bound = deadline.boundTo(owner.signal);
+
+    owner.abort(reason);
+
+    expect(bound.signal.reason).toBe(reason);
+    expect(() => {
+      bound.throwIfExpired();
+    }).toThrow(reason);
+    expect(deadline.signal.aborted).toBeFalsy();
+
+    const timed = deadline.boundTo(new AbortController().signal);
+
+    advance(1000);
+
+    expect(timed.signal.reason).toMatchObject({ code: "TIMEOUT" });
+    expect(timed.remainingMs()).toBe(0);
+  });
+
   it("cancels its timer when disposed", () => {
     const { clock, pendingTimers } = manualClock();
 
