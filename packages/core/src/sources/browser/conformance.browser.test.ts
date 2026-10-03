@@ -50,6 +50,8 @@ const MARKER = /<meta name="xrio-page" content="(?<marker>[^"]+)"/u;
 const PROBE =
   /<output id="probe" data-webdriver="(?<webdriver>\w+)" data-focus="(?<focus>\w+)" data-visibility="(?<visibility>\w+)"/u;
 
+const IDENTITY_REPORT = /<pre id="identity">(?<report>[^<]*)<\/pre>/u;
+
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const capturedPages = [
@@ -118,6 +120,9 @@ const FAVICON = "/favicon.ico";
 const markerOf = (html: string): string | undefined => MARKER.exec(html)?.groups?.marker;
 
 const pathOf = (url: string): string => new URL(url).pathname;
+
+const minutesAheadOfUtc = (month: number): number =>
+  0 - new Date(new Date().getFullYear(), month, 15).getTimezoneOffset();
 
 const isLaunchLine = (value: unknown): value is { launched: number } =>
   typeof value === "object" &&
@@ -389,6 +394,41 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
+
+  it("reads the launch's languages, zone offsets and automation flag on /identity", async () => {
+    const { html } = await load(mode, "/identity");
+    const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+    expect(report).toMatchObject({
+      language: "en-US",
+      languages: ["en-US", "en"],
+      offsets: { january: minutesAheadOfUtc(0), july: minutesAheadOfUtc(6) },
+      webdriver: false,
+      windowSizeWait: "settled",
+    });
+  });
+
+  it.runIf(mode === "headless")(
+    "reads the launch's emulated screen and window on /identity",
+    async () => {
+      const { html } = await load(mode, "/identity");
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toMatchObject({
+        screen: {
+          availHeight: 1040,
+          availLeft: 0,
+          availTop: 0,
+          availWidth: 1920,
+          colorDepth: 24,
+          devicePixelRatio: 1,
+          height: 1080,
+          width: 1920,
+        },
+        window: { outerHeight: 900, outerWidth: 1600 },
+      });
+    },
+  );
 
   it("sends cookies set on each redirect hop to the next", async () => {
     const document = await load(mode, "/redirect/1");

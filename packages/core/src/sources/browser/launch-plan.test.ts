@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
 import { planLaunch } from "./launch-plan.ts";
+import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
 
 const scratchDir = "/tmp/xrio-501/bAbC123";
 
@@ -182,4 +184,80 @@ describe(planLaunch, () => {
 
     expect(Buffer.byteLength(socket)).toBeLessThan(108);
   });
+});
+
+interface GoldenPlan {
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+  readonly files: readonly { readonly path: string; readonly contents: string }[];
+}
+
+const golden: Readonly<Record<string, GoldenPlan>> = goldenPlans;
+
+interface GoldenCase {
+  readonly headless: boolean;
+  readonly platform: NodeJS.Platform;
+  readonly timezone: string | undefined;
+  readonly display: string | undefined;
+  readonly xauthority: string | undefined;
+}
+
+const labelOf = ({ display, headless, platform, timezone, xauthority }: GoldenCase): string =>
+  [
+    headless ? "headless" : "headed",
+    platform,
+    `timezone=${timezone ?? "unset"}`,
+    `display=${display ?? "unset"}`,
+    `xauthority=${xauthority ?? "unset"}`,
+  ].join(" ");
+
+const goldenCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
+  (["linux", "darwin"] as const).flatMap((platform) =>
+    [undefined, "America/Chicago"].flatMap((timezone) =>
+      [undefined, ":7"].flatMap((display) =>
+        [undefined, "/tmp/xvfb-run.Xauthority"].map((xauthority) => ({
+          display,
+          headless,
+          platform,
+          timezone,
+          xauthority,
+        })),
+      ),
+    ),
+  ),
+);
+
+const requestOf = ({
+  display,
+  headless,
+  platform,
+  timezone,
+  xauthority,
+}: GoldenCase): LaunchRequest => ({
+  browserPath: "/opt/chrome/chrome",
+  display,
+  headless,
+  platform,
+  scratchDir,
+  timezone,
+  xauthority,
+});
+
+const goldenOf = ({ args, env, files }: LaunchPlan): GoldenPlan => ({ args, env, files });
+
+describe("the launch plan golden", () => {
+  it("covers every combination of mode, platform, timezone, display and xauthority once", () => {
+    expect(goldenCases.map(labelOf).toSorted()).toStrictEqual(Object.keys(golden).toSorted());
+    expect(new Set(goldenCases.map(labelOf)).size).toBe(32);
+  });
+
+  it.each(goldenCases.map((goldenCase) => [labelOf(goldenCase), goldenCase] as const))(
+    "plans %s as it always has",
+    (label, goldenCase) => {
+      const plan = goldenOf(planLaunch(requestOf(goldenCase)));
+
+      expect(plan).toStrictEqual(golden[label]);
+      expect(Object.keys(plan.env)).toStrictEqual(Object.keys(golden[label].env));
+    },
+  );
 });

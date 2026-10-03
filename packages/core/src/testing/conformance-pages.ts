@@ -9,6 +9,10 @@ const SLICED_FILLER_CODE_UNITS = 4 * 1024 * 1024;
 
 const OVERSIZED_FILLER_CODE_UNITS = 33 * 1024 * 1024;
 
+const WINDOW_SIZE_POLL_MS = 10;
+
+const WINDOW_SIZE_GIVE_UP_MS = 5000;
+
 const CYRILLIC_WINDOWS_1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
 
 const PROBE_SCRIPT = `<script>
@@ -21,6 +25,103 @@ document.addEventListener("DOMContentLoaded", () => {
   document.body.append(probe);
 });
 </script>`;
+
+const WINDOW_SIZE_WATCH = `<script>
+(() => {
+  const started = performance.now();
+  const watch = () => {
+    const sized = window.outerWidth > 0;
+    if (sized || performance.now() - started > ${WINDOW_SIZE_GIVE_UP_MS}) {
+      window.identitySizeWait = sized ? "settled" : "gave-up";
+      fetch("/identity-sized");
+    } else {
+      setTimeout(watch, ${WINDOW_SIZE_POLL_MS});
+    }
+  };
+  watch();
+})();
+</script>`;
+
+const IDENTITY_REPORT_SCRIPT = `<script>
+(() => {
+  const offsetIn = (month) => -new Date(new Date().getFullYear(), month, 15).getTimezoneOffset();
+  const gl = document.createElement("canvas").getContext("webgl");
+  const debug = gl?.getExtension("WEBGL_debug_renderer_info");
+  const glString = (unmasked, masked) => gl?.getParameter(debug ? unmasked : masked) ?? null;
+  const resolved = Intl.DateTimeFormat().resolvedOptions();
+  const screenFields = [
+    "width", "height", "availWidth", "availHeight", "availLeft", "availTop", "colorDepth", "pixelDepth",
+  ];
+  const report = {
+    timeZone: resolved.timeZone,
+    offsets: { january: offsetIn(0), july: offsetIn(6) },
+    intlLocale: resolved.locale,
+    language: navigator.language,
+    languages: [...navigator.languages],
+    screen: {
+      ...Object.fromEntries(screenFields.map((field) => [field, screen[field]])),
+      orientation: { angle: screen.orientation.angle, type: screen.orientation.type },
+      isExtended: screen.isExtended ?? null,
+      devicePixelRatio: window.devicePixelRatio,
+    },
+    window: {
+      outerWidth: window.outerWidth,
+      outerHeight: window.outerHeight,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      screenX: window.screenX,
+      screenY: window.screenY,
+    },
+    windowSizeWait: window.identitySizeWait,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    deviceMemory: navigator.deviceMemory ?? null,
+    userAgentData: { platform: navigator.userAgentData?.platform ?? null },
+    userAgent: navigator.userAgent,
+    webdriver: navigator.webdriver,
+    webgl: {
+      vendor: glString(debug?.UNMASKED_VENDOR_WEBGL, gl?.VENDOR),
+      renderer: glString(debug?.UNMASKED_RENDERER_WEBGL, gl?.RENDERER),
+      extensions: gl?.getSupportedExtensions() ?? null,
+    },
+  };
+  document.getElementById("identity").textContent = JSON.stringify(report);
+
+  const realms = {};
+  const record = (realm) => (event) => {
+    realms[realm] = event.data;
+    document.getElementById("identity-workers").textContent = JSON.stringify(realms);
+  };
+
+  new Worker("/identity-realm.js").addEventListener("message", record("dedicated"));
+  const shared = new SharedWorker("/identity-realm.js");
+  shared.port.addEventListener("message", record("shared"));
+  shared.port.start();
+  navigator.serviceWorker.addEventListener("message", record("service"));
+  navigator.serviceWorker.register("/identity-realm.js").then(async () => {
+    (await navigator.serviceWorker.ready).active.postMessage("report");
+  });
+})();
+</script>`;
+
+const IDENTITY_REALM_SCRIPT = `const report = () => ({
+  hardwareConcurrency: navigator.hardwareConcurrency,
+  deviceMemory: navigator.deviceMemory ?? null,
+  userAgent: navigator.userAgent,
+  languages: [...navigator.languages],
+  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+});
+
+switch (self.constructor.name) {
+  case "ServiceWorkerGlobalScope":
+    self.addEventListener("message", (event) => event.source.postMessage(report()));
+    break;
+  case "SharedWorkerGlobalScope":
+    self.addEventListener("connect", (event) => event.ports[0].postMessage(report()));
+    break;
+  default:
+    postMessage(report());
+}
+`;
 
 const page = (marker: string, body = "", head = ""): string =>
   `<!DOCTYPE html><html><head><meta name="xrio-page" content="${marker}">${head}${PROBE_SCRIPT}</head><body>${body}</body></html>`;
@@ -388,6 +489,25 @@ const routes = new Map<
     (response) => {
       response.setHeader("content-security-policy", "default-src 'none'; script-src 'none'");
       sendPage(response, "strict-csp");
+    },
+  ],
+  [
+    "/identity",
+    (response) => {
+      requestedPaths.delete("/identity-sized");
+      sendPage(
+        response,
+        "identity",
+        `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${IDENTITY_REPORT_SCRIPT}`,
+      );
+    },
+  ],
+  ["/identity-settled.js", holdScriptUntilRequested("/identity-sized")],
+  [
+    "/identity-realm.js",
+    (response) => {
+      response.setHeader("content-type", "text/javascript");
+      response.end(IDENTITY_REALM_SCRIPT);
     },
   ],
   [
