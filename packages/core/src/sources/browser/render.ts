@@ -100,6 +100,11 @@ const browserCrashed = (cause?: unknown): XrioError =>
     details: undefined,
   });
 
+const committedWithoutResponse = (): XrioError =>
+  new XrioError("NETWORK_ERROR", "The page committed a document that had no HTTP response.", {
+    details: undefined,
+  });
+
 const isDriverFailure = <Kind extends DriverErrorReason["kind"]>(
   error: unknown,
   kind: Kind,
@@ -160,6 +165,8 @@ class PageTracker {
         reject(this.#failure);
       } else if (this.#document !== undefined && this.#loaded.has(this.#document.loaderId)) {
         resolve(this.#document);
+      } else if (this.#loadedWithoutResponse()) {
+        reject(committedWithoutResponse());
       }
     };
 
@@ -177,6 +184,14 @@ class PageTracker {
       this.#waiters.delete(check);
       deadline.signal.removeEventListener("abort", abort);
     }
+  }
+
+  #loadedWithoutResponse(): boolean {
+    return (
+      this.#document === undefined &&
+      this.#committedLoader !== undefined &&
+      this.#loaded.has(this.#committedLoader)
+    );
   }
 
   isCurrent(document: DocumentHop): boolean {
@@ -202,7 +217,7 @@ class PageTracker {
     switch (event.type) {
       case "commit": {
         this.#committedLoader = event.loaderId;
-        this.#document = this.#responses.get(event.loaderId) ?? this.#document;
+        this.#document = this.#responses.get(event.loaderId);
         break;
       }
 

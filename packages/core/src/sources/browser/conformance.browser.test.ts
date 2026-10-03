@@ -440,6 +440,17 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
+  it.each(["/redirect-to-closed-port", "/replace-with-blank"])(
+    "fails %s, which commits a document with no response, as a network error",
+    async (route) => {
+      await expect(load(driver, mode, route)).rejects.toMatchObject({
+        code: "NETWORK_ERROR",
+        message: "The page committed a document that had no HTTP response.",
+      });
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
+
   it("returns a 403 with an empty body as data", async () => {
     const document = await load(driver, mode, "/empty-403");
 

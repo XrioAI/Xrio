@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { closedLoopbackPort } from "./fixture-server.ts";
 import type { FixtureHandler, FixtureOrigins } from "./fixture-server.ts";
 
 const HUGE_DOM_ELEMENTS = 200_000;
@@ -133,6 +134,32 @@ const routes = new Map<
     "/landing",
     (response, _origins, request) => {
       sendPage(response, "landing", `<p id="sent-cookies">${request.headers.cookie ?? ""}</p>`);
+    },
+  ],
+  [
+    "/redirect-to-closed-port",
+    (response) => {
+      void (async () => {
+        const port = await closedLoopbackPort();
+
+        sendPage(
+          response,
+          "redirect-to-closed-port",
+          "",
+          `<script>location.replace("http://127.0.0.1:${port}/");</script><script src="/hang"></script>`,
+        );
+      })();
+    },
+  ],
+  [
+    "/replace-with-blank",
+    (response) => {
+      sendPage(
+        response,
+        "replace-with-blank",
+        "",
+        '<script>location.replace("about:blank");</script><script src="/hang"></script>',
+      );
     },
   ],
   [
