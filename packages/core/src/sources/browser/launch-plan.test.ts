@@ -61,6 +61,7 @@ const tail = [`--user-data-dir=${scratchDir}/profile`, "--remote-debugging-pipe"
 describe(planLaunch, () => {
   it("plans the headless Linux argv", () => {
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: "/opt/chrome/chrome",
       display: ":99",
       headless: true,
@@ -86,8 +87,32 @@ describe(planLaunch, () => {
     expect(plan.env).not.toHaveProperty("XAUTHORITY");
   });
 
+  it("places the caller's switches after Xrio's and before the profile tail", () => {
+    const callerSwitches = ["--no-sandbox", "--disable-gpu-compositing"];
+
+    const plan = planLaunch({
+      browserArgs: callerSwitches,
+      browserPath: "/opt/chrome/chrome",
+      display: undefined,
+      headless: false,
+      identity: identityFor({ headless: false, platform: "darwin", timezone: undefined }),
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(plan.args).toStrictEqual([
+      ...baseline,
+      ...xrioSwitches,
+      "--window-size=1600,900",
+      `--crash-dumps-dir=${scratchDir}/crashes`,
+      ...callerSwitches,
+      ...tail,
+    ]);
+  });
+
   it("plans the headed macOS argv without headless switches or a GL override", () => {
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: "/Applications/Chrome.app/Contents/MacOS/Chrome",
       display: undefined,
       headless: false,
@@ -107,6 +132,7 @@ describe(planLaunch, () => {
 
   it("keeps one copy of each feature switch and never weakens the sandbox or automation flags", () => {
     const { args } = planLaunch({
+      browserArgs: [],
       browserPath: "chrome",
       display: ":0",
       headless: true,
@@ -127,6 +153,7 @@ describe(planLaunch, () => {
   it("builds the child environment explicitly", () => {
     expect(
       planLaunch({
+        browserArgs: [],
         browserPath: "chrome",
         display: ":7",
         headless: false,
@@ -150,6 +177,7 @@ describe(planLaunch, () => {
 
   it("writes the prediction, language and DNS-over-HTTPS preferences", () => {
     const { files } = planLaunch({
+      browserArgs: [],
       browserPath: "chrome",
       display: undefined,
       headless: true,
@@ -181,6 +209,7 @@ describe(planLaunch, () => {
 
   it("keeps Chrome's singleton socket path within the 108-byte limit", () => {
     const { env } = planLaunch({
+      browserArgs: [],
       browserPath: "chrome",
       display: undefined,
       headless: true,
@@ -240,6 +269,7 @@ const requestOf = ({
   timezone,
   xauthority,
 }: GoldenCase): LaunchRequest => ({
+  browserArgs: [],
   browserPath: "/opt/chrome/chrome",
   display,
   headless,

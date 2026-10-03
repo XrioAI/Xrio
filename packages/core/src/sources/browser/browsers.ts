@@ -123,6 +123,7 @@ const planVisit = (request: VisitTarget, scratch: ScratchDir, steps: VisitSteps)
   return {
     identity,
     launch: planLaunch({
+      browserArgs: request.browserArgs,
       browserPath: request.browserPath,
       display,
       headless: request.mode === "headless",

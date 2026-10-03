@@ -1,10 +1,12 @@
 import path from "node:path";
 
+import { invalidOptions } from "../../errors.ts";
 import { isMinted } from "../../humanizer/inputs.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
 
 export interface LaunchRequest {
   browserPath: string;
+  browserArgs: readonly string[];
   headless: boolean;
   scratchDir: string;
   display: string | undefined;
@@ -32,6 +34,8 @@ export interface LaunchPlan {
   directories: LaunchDirectories;
   files: readonly ProfileFile[];
 }
+
+const SWITCH = /^--[^\s=-][^\s=]*(?:=.*)?$/su;
 
 const HEADLESS_POINTER_SETTINGS =
   "primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4";
@@ -82,6 +86,29 @@ export const directoriesIn = (scratchDir: string): LaunchDirectories => ({
   profile: path.join(scratchDir, "profile"),
   tmp: path.join(scratchDir, "tmp"),
 });
+
+const isSwitch = (entry: unknown): entry is string =>
+  typeof entry === "string" && !entry.includes("\0") && SWITCH.test(entry);
+
+export const parseBrowserArgs = (browserArgs: readonly string[]): readonly string[] => {
+  if (!Array.isArray(browserArgs)) {
+    throw invalidOptions("browserArgs must be an array of strings.");
+  }
+
+  const args: string[] = [];
+
+  for (const [index, entry] of browserArgs.entries()) {
+    if (!isSwitch(entry)) {
+      throw invalidOptions(
+        `browserArgs entry ${index} must be a switch such as --name or --name=value.`,
+      );
+    }
+
+    args.push(entry);
+  }
+
+  return Object.freeze(args);
+};
 
 const xrioSwitches = ({ identity }: LaunchRequest, directories: LaunchDirectories): string[] => [
   `--disable-features=${DISABLED_FEATURES.join(",")}`,
@@ -142,6 +169,7 @@ export const planLaunch = (request: LaunchRequest): LaunchPlan => {
       ...chromeBaselineSwitches,
       ...(request.headless ? chromeHeadlessSwitches : []),
       ...xrioSwitches(request, directories),
+      ...request.browserArgs,
       `--user-data-dir=${directories.profile}`,
       "--remote-debugging-pipe",
       "about:blank",

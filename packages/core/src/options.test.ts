@@ -175,3 +175,125 @@ describe("proxy option", () => {
     ).not.toThrow();
   });
 });
+
+describe("browserArgs option", () => {
+  const browser = { browserPath: "/browser", mode: "headless" } as const;
+
+  it("keeps the client's switches in order, as a frozen copy the caller cannot change", () => {
+    const browserArgs = [
+      "--no-sandbox",
+      "--disable-gpu-compositing",
+      "--disk-cache-dir=/tmp/cache dir",
+    ];
+
+    const defaults = resolveClientOptions({ ...browser, browserArgs });
+
+    browserArgs.push("--lang=fr");
+
+    expect(defaults.browserArgs).toStrictEqual([
+      "--no-sandbox",
+      "--disable-gpu-compositing",
+      "--disk-cache-dir=/tmp/cache dir",
+    ]);
+    expect(Object.isFrozen(defaults.browserArgs)).toBeTruthy();
+  });
+
+  it("defaults to no switches", () => {
+    expect(resolveClientOptions(browser).browserArgs).toStrictEqual([]);
+    expect(resolveClientOptions({ mode: "http" }).browserArgs).toStrictEqual([]);
+  });
+
+  it("reaches every browser scrape of the client, whatever mode it overrides to", () => {
+    const defaults = resolveClientOptions({ ...browser, browserArgs: ["--no-sandbox"] });
+
+    const headed = resolveScrapeOptions(
+      { ...page, browserPath: "/other", mode: "headed" },
+      defaults,
+    );
+
+    expect(resolveScrapeOptions(page, defaults).source).toMatchObject({
+      browserArgs: ["--no-sandbox"],
+      mode: "headless",
+    });
+    expect(headed.source).toMatchObject({ browserArgs: ["--no-sandbox"], mode: "headed" });
+    expect(resolveScrapeOptions({ ...page, mode: "http" }, defaults).source).not.toHaveProperty(
+      "browserArgs",
+    );
+  });
+
+  it("refuses browserArgs on a scrape, even from an options object the types did not check", () => {
+    const defaults = resolveClientOptions({ ...browser, browserArgs: ["--no-sandbox"] });
+    const unchecked = { ...page, browserArgs: ["--no-sandbox"] };
+    const absent = { ...page, browserArgs: undefined };
+
+    expect(() => resolveScrapeOptions(unchecked, defaults)).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "browserArgs is a client option.",
+        name: "TypeError",
+      }),
+    );
+    expect(() => resolveScrapeOptions(absent, defaults)).not.toThrow();
+  });
+
+  it("gives a browser override of an http client no switches", () => {
+    const defaults = resolveClientOptions({ mode: "http" });
+
+    expect(
+      resolveScrapeOptions({ ...page, browserPath: "/browser", mode: "headless" }, defaults).source,
+    ).toMatchObject({ browserArgs: [], mode: "headless" });
+  });
+
+  it.each([
+    { browserArgs: [], mode: "http" },
+    { browserArgs: ["--no-sandbox"], mode: "http" },
+  ])("refuses $browserArgs in http mode", (options) => {
+    // @ts-expect-error JavaScript callers can pass browserArgs to an http client.
+    expect(() => resolveClientOptions(options)).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "browserArgs is only supported in browser modes.",
+        name: "TypeError",
+      }),
+    );
+  });
+
+  it.each([
+    { entry: 1, value: ["--ok", 42] },
+    { entry: 0, value: [""] },
+    { entry: 0, value: ["no-sandbox"] },
+    { entry: 0, value: ["-no-sandbox"] },
+    { entry: 0, value: ["--"] },
+    { entry: 0, value: ["--=1"] },
+    { entry: 0, value: ["---x"] },
+    { entry: 0, value: ["--two words"] },
+    { entry: 0, value: ["--ok\0"] },
+    { entry: 1, value: ["--ok", "secret"] },
+    { entry: 1, value: ["--ok", undefined] },
+  ])("rejects the malformed entry in $value and names only its position", ({ entry, value }) => {
+    const refusal = {
+      code: "INVALID_OPTIONS",
+      message: `browserArgs entry ${entry} must be a switch such as --name or --name=value.`,
+      name: "TypeError",
+    };
+
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, browserArgs: value })).toThrow(
+      expect.objectContaining(refusal),
+    );
+  });
+
+  it.each(["--no-sandbox", { 0: "--no-sandbox", length: 1 }, null])(
+    "rejects %j, which is not an array",
+    (value) => {
+      // @ts-expect-error JavaScript callers can pass anything.
+      expect(() => resolveClientOptions({ ...browser, browserArgs: value })).toThrow(
+        expect.objectContaining({
+          code: "INVALID_OPTIONS",
+          message: "browserArgs must be an array of strings.",
+          name: "TypeError",
+        }),
+      );
+    },
+  );
+});

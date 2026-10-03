@@ -82,6 +82,7 @@ const withDriver = async (
   const scratch = await createScratchDir(Date.now());
 
   const plan = planLaunch({
+    browserArgs: [],
     browserPath: chromePath(),
     display: process.env.DISPLAY,
     headless: true,

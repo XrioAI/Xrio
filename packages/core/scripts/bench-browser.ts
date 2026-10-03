@@ -90,6 +90,7 @@ const scrapeOnce = async (): Promise<Sample> => {
     using deadline = startDeadline(SCRAPE_TIMEOUT_MS);
 
     await browsers.load({
+      browserArgs: [],
       browserPath: chromePath(),
       deadline,
       mode,
@@ -133,6 +134,7 @@ for (let run = 0; run < runs; run += 1) {
 await server[Symbol.asyncDispose]();
 
 const { args } = planLaunch({
+  browserArgs: [],
   browserPath: chromePath(),
   display: process.env.DISPLAY,
   headless: mode === "headless",

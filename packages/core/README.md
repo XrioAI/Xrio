@@ -54,6 +54,12 @@ Current limits, lifted in later releases:
 - JSON, XML, and PDF responses return the HTML of Chrome's viewer instead of `UNSUPPORTED_CONTENT_TYPE`. A download or an HTTP 204 rejects with `NETWORK_ERROR` and `details.netError` `net::ERR_ABORTED`.
 - There is no challenge wait, and `waitFor`, `locale`, and `timezone` are not available yet.
 
+`browserArgs` adds Chrome switches to every browser scrape of a client, for settings Xrio does not manage, such as `--no-sandbox` in a container that runs as root. Each entry is `--name` or `--name=value`, and any other entry rejects with `INVALID_OPTIONS`. Xrio appends them after its own switches and before the profile arguments. Only browser clients take them, and a scrape that passes `browserArgs` rejects with `INVALID_OPTIONS`.
+
+```ts
+const xrio = new XrioClient({ mode: "headless", browserPath, browserArgs: ["--no-sandbox"] });
+```
+
 `maxBrowsers` caps the browsers one client runs at once. It defaults to the CPU count or one browser per 0.5 GB of memory, whichever is smaller. Further scrapes queue, and time spent queued counts against `timeoutMs`; aborting a queued scrape removes it from the queue.
 
 ```ts
@@ -119,7 +125,7 @@ try {
 
 | Code                       | Error class | When                                                                                                                                                                              |
 | -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, `maxBrowsers`, a proxy in a browser mode, or a URL that is relative, not HTTP(S), or carries credentials.       |
+| `INVALID_OPTIONS`          | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, `maxBrowsers`, `browserArgs`, a browser-mode proxy, or a URL that is relative, not HTTP(S), or has credentials. |
 | `UNSUPPORTED_CONTENT_TYPE` | `XrioError` | The response is not HTML. `details` holds the response details, a body preview, and the block report.                                                                             |
 | `TIMEOUT`                  | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                         |
 | `NETWORK_ERROR`            | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504). Browser modes add `details.netError`, Chrome's `net::ERR_*` name. |

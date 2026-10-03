@@ -17,7 +17,12 @@ export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: 
 
 type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
 
-export type ClientOptions = ModeOptions & { proxy?: string; maxBrowsers?: number };
+export type ClientOptions = (
+  | (HttpMode & { browserArgs?: never })
+  | ((BrowserMode | { mode?: never; browserPath: string }) & {
+      browserArgs?: readonly string[];
+    })
+) & { proxy?: string; maxBrowsers?: number };
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
@@ -76,12 +81,13 @@ export interface ProxyEndpoint {
 }
 
 export interface ClientDefaults {
+  browserArgs: readonly string[];
   mode: ResolvedMode;
   proxy: ProxyEndpoint | undefined;
   maxBrowsers: number | undefined;
 }
 
-type SourceRequest = ResolvedMode & {
+type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[] })) & {
   url: URL;
   proxy: ProxyEndpoint | undefined;
 };

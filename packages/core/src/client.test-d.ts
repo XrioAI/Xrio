@@ -71,6 +71,24 @@ describe("XrioClient types", () => {
     void new XrioClient({ mode: "http", timeoutMs: 1000 });
   });
 
+  it("takes browserArgs on browser clients only, never per scrape", () => {
+    const browserArgs = ["--no-sandbox"];
+    const url = "https://example.com";
+
+    expectTypeOf<ClientOptions["browserArgs"]>().toEqualTypeOf<readonly string[] | undefined>();
+    void new XrioClient({ browserArgs, browserPath: "/browser" });
+    void new XrioClient({ browserArgs, browserPath: "/browser", mode: "headless" });
+    void new XrioClient({ browserArgs: ["--no-sandbox"] as const, browserPath: "/browser" });
+    // @ts-expect-error An http client has no browser to pass switches to.
+    void new XrioClient({ browserArgs, mode: "http" });
+    // @ts-expect-error browserArgs needs a browser path, even with a switch list.
+    void new XrioClient({ browserArgs });
+    // @ts-expect-error browserArgs are switches, not one string.
+    void new XrioClient({ browserArgs: "--no-sandbox", browserPath: "/browser" });
+    // @ts-expect-error browserArgs belong to the client, not to a scrape.
+    void new XrioClient({ mode: "http" }).scrape({ browserArgs, format: "html", url });
+  });
+
   it("exposes each response header as an optional string and cookies separately", () => {
     expectTypeOf<ScrapeResult["headers"]["content-type"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ScrapeResult["cookies"]>().toEqualTypeOf<string[]>();

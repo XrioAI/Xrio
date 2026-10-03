@@ -66,6 +66,7 @@ const setup = async () => {
   const scope = new ChromeScope(await createScratchDir(Date.now(), root));
 
   const plan = planLaunch({
+    browserArgs: [],
     browserPath: process.execPath,
     display: undefined,
     headless: true,

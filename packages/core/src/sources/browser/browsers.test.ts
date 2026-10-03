@@ -98,6 +98,7 @@ const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) 
 
   try {
     return await browsers.load({
+      browserArgs: [],
       browserPath: await fakeChromePath(scenario),
       deadline,
       mode: "headless",
@@ -208,6 +209,7 @@ describe("browser lifecycle on the fake browser", () => {
 
     await expect(
       browsers.load({
+        browserArgs: [],
         browserPath: await fakeChromePath("slow-start"),
         deadline,
         mode: "headless",
@@ -233,6 +235,7 @@ describe("browser lifecycle on the fake browser", () => {
 
       const settled = Promise.allSettled([
         browsers.load({
+          browserArgs: [],
           browserPath: await fakeChromePath(scenario),
           deadline,
           mode: "headless",
@@ -254,6 +257,7 @@ describe("browser lifecycle on the fake browser", () => {
 });
 
 const queuedRequest = async () => ({
+  browserArgs: [],
   browserPath: await fakeChromePath("slow-start"),
   mode: "headless" as const,
   proxy: undefined,
@@ -337,6 +341,7 @@ const visitOn = async (
   using deadline: Deadline & Disposable = startDeadline(timeoutMs);
 
   const visit = browsers.start({
+    browserArgs: [],
     browserPath,
     deadline: deadline.boundTo(owner.signal),
     mode: "headless",
@@ -397,6 +402,7 @@ describe("browser visits on the fake browser", () => {
     using deadline = startDeadline(10_000);
 
     const visit = browsers.start({
+      browserArgs: [],
       get browserPath(): string {
         throw new Error("Planning failed.");
       },
@@ -453,6 +459,7 @@ const loadTwice = async (steps: PlanningOverrides, firstScenario: string) => {
   using deadline = startDeadline(10_000);
 
   const request = {
+    browserArgs: [],
     deadline,
     mode: "headless" as const,
     proxy: undefined,
@@ -538,6 +545,7 @@ describe("planning between admission and start", () => {
 });
 
 const normalRequest = async (deadline: Deadline) => ({
+  browserArgs: [],
   browserPath: await fakeChromePath("normal"),
   deadline,
   mode: "headless" as const,
@@ -1019,6 +1027,7 @@ describe("visits started directly with start", () => {
 const launchPlanOf = async (
   steps: PlanningOverrides,
   mode: "headless" | "headed" = "headless",
+  browserArgs: readonly string[] = [],
 ): Promise<LaunchPlan | undefined> => {
   const launched: LaunchPlan[] = [];
 
@@ -1033,7 +1042,7 @@ const launchPlanOf = async (
   const browsers = createBrowsers(recordingDriver, 1, steps);
   using deadline = startDeadline(10_000);
 
-  await browsers.load({ ...(await normalRequest(deadline)), mode });
+  await browsers.load({ ...(await normalRequest(deadline)), browserArgs, mode });
   await browsers.close();
 
   return launched[0];
@@ -1053,6 +1062,18 @@ const changeHostAfterSession: typeof sessionFor = () => {
 describe("the identity a visit launches Chrome with", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("launches Chrome with the client's switches once, after Xrio's own", async () => {
+    const plan = await launchPlanOf({}, "headless", ["--no-sandbox"]);
+
+    expect(plan?.args.filter((arg) => arg === "--no-sandbox")).toStrictEqual(["--no-sandbox"]);
+    expect(plan?.args.slice(-4)).toStrictEqual([
+      "--no-sandbox",
+      `--user-data-dir=${plan?.directories.profile}`,
+      "--remote-debugging-pipe",
+      "about:blank",
+    ]);
   });
 
   it("passes the TZ the host exports through to Chrome", async () => {

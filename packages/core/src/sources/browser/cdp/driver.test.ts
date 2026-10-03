@@ -66,6 +66,7 @@ describe("the CDP driver's launch", () => {
     using deadline = startDeadline(SCRAPE_DEADLINE_MS, undefined, watched);
 
     const loading = browsers.load({
+      browserArgs: [],
       browserPath: await fakeChromePath("slow-start"),
       deadline,
       mode: "headless",
@@ -93,6 +94,7 @@ describe("the CDP driver's launch", () => {
     try {
       await expect(
         browsers.load({
+          browserArgs: [],
           browserPath: await fakeChromePath("exit-after-capture-error"),
           deadline,
           mode: "headless",
@@ -113,6 +115,7 @@ describe("the CDP driver's documents", () => {
     const scratch = await createScratchDir(Date.now());
 
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: await fakeChromePath("evaluate-throws"),
       display: undefined,
       headless: true,
@@ -150,6 +153,7 @@ describe("the CDP driver's documents", () => {
     const scratch = await createScratchDir(Date.now());
 
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: await fakeChromePath("startup-blank-commit"),
       display: undefined,
       headless: true,
@@ -203,6 +207,7 @@ describe("the CDP driver's documents", () => {
     const scratch = await createScratchDir(Date.now());
 
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: await fakeChromePath("normal"),
       display: undefined,
       headless: true,
@@ -257,6 +262,7 @@ describe("the CDP driver's documents", () => {
 
     try {
       const document = await browsers.load({
+        browserArgs: [],
         browserPath: await fakeChromePath("startup-blank-commit"),
         deadline,
         mode: "headless",
@@ -295,6 +301,7 @@ describe("the CDP driver's capture", () => {
 
       try {
         const document = await browsers.load({
+          browserArgs: [],
           browserPath: await fakeChromePath(scenario),
           deadline,
           mode: "headless",

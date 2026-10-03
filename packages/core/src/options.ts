@@ -1,4 +1,5 @@
 import { invalidOptions, redactUrl } from "./errors.ts";
+import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientDefaults,
   ClientOptions,
@@ -120,15 +121,36 @@ const resolveMaxBrowsers = (maxBrowsers: number | undefined): number | undefined
   return maxBrowsers;
 };
 
+const resolveBrowserArgs = (
+  browserArgs: readonly string[] | undefined,
+  { mode }: ResolvedMode,
+): readonly string[] => {
+  if (browserArgs === undefined) {
+    return [];
+  }
+
+  if (mode === "http") {
+    throw invalidOptions("browserArgs is only supported in browser modes.");
+  }
+
+  return parseBrowserArgs(browserArgs);
+};
+
 export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
   }
 
+  const maxBrowsers = resolveMaxBrowsers(options.maxBrowsers);
+  const mode = resolveMode(options);
+  const browserArgs = resolveBrowserArgs(options.browserArgs, mode);
+  const proxy = options.proxy === undefined ? undefined : parseProxy(options.proxy);
+
   return {
-    maxBrowsers: resolveMaxBrowsers(options.maxBrowsers),
-    mode: resolveMode(options),
-    proxy: options.proxy === undefined ? undefined : parseProxy(options.proxy),
+    browserArgs,
+    maxBrowsers,
+    mode,
+    proxy,
   };
 };
 
@@ -154,5 +176,14 @@ export const resolveScrapeOptions = (
     throw invalidOptions('proxy is not supported in browser modes yet; use mode: "http".');
   }
 
-  return { format, signal, source: { ...mode, proxy, url }, timeoutMs };
+  if ("browserArgs" in options && options.browserArgs !== undefined) {
+    throw invalidOptions("browserArgs is a client option.");
+  }
+
+  const source =
+    mode.mode === "http"
+      ? { ...mode, proxy, url }
+      : { ...mode, browserArgs: defaults.browserArgs, proxy, url };
+
+  return { format, signal, source, timeoutMs };
 };

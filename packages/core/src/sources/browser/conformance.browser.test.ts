@@ -239,6 +239,7 @@ const load = async (
 
   try {
     return await browsers.load({
+      browserArgs: [],
       browserPath: chromePath(),
       deadline,
       mode,
@@ -305,6 +306,7 @@ const withBrowser = async <Result>(
   const scratch = await createScratchDir(Date.now());
 
   const plan = planLaunch({
+    browserArgs: [],
     browserPath: chromePath(),
     display: process.env.DISPLAY,
     headless: mode === "headless",
@@ -565,6 +567,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
     const [commandLine, profile] = await Promise.all([commandLineOf(pid), profileOf(pid)]);
 
     const { args } = planLaunch({
+      browserArgs: [],
       browserPath: chromePath(),
       display: process.env.DISPLAY,
       headless: mode === "headless",
@@ -740,6 +743,7 @@ const failOnce = async (
   const owner = new AbortController();
 
   const loading = loadWith({
+    browserArgs: [],
     browserPath: failure.browserPath ?? chromePath(),
     deadline: deadline.boundTo(owner.signal),
     mode,
@@ -775,6 +779,7 @@ describe.each(MODES)("browser visits, %s", (mode) => {
       using deadline = startDeadline(20_000);
 
       const next = await browsers.load({
+        browserArgs: [],
         browserPath: chromePath(),
         deadline,
         mode,
