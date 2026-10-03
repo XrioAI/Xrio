@@ -126,6 +126,8 @@ export const CONSUMED_EVENTS = [
   "Network.requestWillBeSent",
   "Network.responseReceived",
   "Network.responseReceivedExtraInfo",
+  "Page.downloadProgress",
+  "Page.downloadWillBegin",
   "Page.frameNavigated",
   "Page.javascriptDialogOpening",
   "Page.lifecycleEvent",

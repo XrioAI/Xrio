@@ -5,7 +5,15 @@ import type { AnyTargetSession, DomainEvent, TargetSession } from "./protocol.ts
 
 const NOTHING: readonly DriverEvent[] = [];
 
-type PageEvent = Exclude<DomainEvent, { readonly method: "Page.javascriptDialogOpening" }>;
+type PageEvent = Exclude<
+  DomainEvent,
+  {
+    readonly method:
+      | "Page.downloadProgress"
+      | "Page.downloadWillBegin"
+      | "Page.javascriptDialogOpening";
+  }
+>;
 
 const LOGGED_URL = /^https?:/u;
 

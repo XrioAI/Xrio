@@ -35,6 +35,8 @@ const ABANDONED_LONG_AGO_MS = 2 * 60 * 60 * 1000;
 
 const BUSY_TIMEOUT_MS = 5000;
 
+const DOWNLOAD_TEARDOWN_BOUND_MS = 1000;
+
 const MARKER = /<meta name="xrio-page" content="(?<marker>[^"]+)"/u;
 
 const PROBE =
@@ -572,6 +574,20 @@ describe.each(MODES)("commands Patchright sends, %s", (mode) => {
       sentCommands(trace).filter((command) => !KNOWN_PATCHRIGHT_COMMANDS.has(command)),
     ).toStrictEqual([]);
     expect(sentCommands(trace)).toContain("browser>page Page.setLifecycleEventsEnabled");
+  });
+});
+
+describe.each(MODES)("downloads on our CDP client, %s", (mode) => {
+  serveFixturePages();
+
+  it("lets a denied download settle, so teardown finishes well within its budget", async () => {
+    using stages = recordStages();
+
+    await expect(load("cdp", mode, "/download")).rejects.toMatchObject({
+      details: { netError: "net::ERR_ABORTED" },
+    });
+    expect(stages.timings.get("teardown")).toBeLessThan(DOWNLOAD_TEARDOWN_BOUND_MS);
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 });
 

@@ -32,6 +32,10 @@ const PAGES_ONLY: ParamsOf<"Target.setAutoAttach", "browser"> = {
 
 const LAUNCH_TIMEOUT_MS = 30_000;
 
+const DOWNLOAD_SETTLE_MS = 500;
+
+const NAVIGATION_DOWNLOAD = "navigation";
+
 const CONTEXT_GONE = /Cannot find context with specified id|Execution context was destroyed/u;
 
 interface CommittedDocument {
@@ -72,6 +76,10 @@ const untilAborted = async <Result>(
   }
 };
 
+const settleWithin = async (operation: Promise<unknown>, budgetMs: number): Promise<void> => {
+  await settle(untilAborted(operation, AbortSignal.timeout(budgetMs)));
+};
+
 const isBrowserGone = (cause: unknown): boolean =>
   cause instanceof DriverError && cause.reason.kind === "browser-gone";
 
@@ -87,6 +95,8 @@ class Tab {
   readonly #frame: MainFrameEvents;
   readonly #listeners = new Set<DriverListener>();
   readonly #ready: Promise<unknown>;
+  readonly #downloads = new Set<string>();
+  #downloadsIdle = Promise.withResolvers<"idle">();
   #document: CommittedDocument | undefined;
 
   constructor(send: Send, main: TargetSession<"main">, lifetime: AbortSignal) {
@@ -114,15 +124,25 @@ class Tab {
     deadline.throwIfExpired();
     await untilAborted(this.#ready, deadline.signal);
 
-    const { errorText = "" } = await this.#send(
+    const { errorText = "", isDownload = false } = await this.#send(
       this.#main,
       "Page.navigate",
       { url },
       deadline.signal,
     );
 
+    if (isDownload) {
+      this.#downloadStarted(NAVIGATION_DOWNLOAD);
+    }
+
     if (errorText !== "") {
       throw new DriverError({ kind: "navigation-failed", netError: errorText });
+    }
+  };
+
+  readonly downloadsSettled = async (budgetMs: number): Promise<void> => {
+    if (this.#downloads.size > 0) {
+      await settleWithin(this.#downloadsIdle.promise, budgetMs);
     }
   };
 
@@ -194,6 +214,45 @@ class Tab {
       return;
     }
 
+    if (event.method === "Page.downloadWillBegin") {
+      this.#downloadStarted(event.params.guid);
+
+      if (event.params.frameId === this.#main.targetId) {
+        this.#downloadEnded(NAVIGATION_DOWNLOAD);
+      }
+
+      return;
+    }
+
+    if (event.method === "Page.downloadProgress") {
+      if (event.params.state !== "inProgress") {
+        this.#downloadEnded(event.params.guid);
+      }
+
+      return;
+    }
+
+    this.#receivePageEvent(session, event);
+  }
+
+  #downloadStarted(key: string): void {
+    if (this.#downloads.size === 0) {
+      this.#downloadsIdle = Promise.withResolvers<"idle">();
+    }
+
+    this.#downloads.add(key);
+  }
+
+  #downloadEnded(key: string): void {
+    if (this.#downloads.delete(key) && this.#downloads.size === 0) {
+      this.#downloadsIdle.resolve("idle");
+    }
+  }
+
+  #receivePageEvent(
+    session: AnyTargetSession,
+    event: Parameters<MainFrameEvents["translate"]>[1],
+  ): void {
     for (const driverEvent of this.#frame.translate(session, event)) {
       if (driverEvent.type === "commit") {
         this.#adopt(driverEvent.loaderId);
@@ -276,6 +335,7 @@ const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
 
     return {
       close: async (budgetMs) => {
+        await opener.downloadsSettled(DOWNLOAD_SETTLE_MS);
         await closeBrowser(send, chrome, budgetMs);
       },
       evaluateIsolated: opener.evaluateIsolated,
