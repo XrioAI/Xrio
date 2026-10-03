@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
+import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
@@ -438,6 +439,73 @@ describe("browser visits on the fake browser", () => {
     });
     expect(outcome.leftAtClose).toStrictEqual({ directories: [directory], processes: [] });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+});
+
+const loadTwice = async (planSession: typeof sessionFor, firstScenario: string) => {
+  const browsers = createBrowsers(cdpDriver, 1, {}, planSession);
+  using deadline = startDeadline(10_000);
+
+  const request = {
+    deadline,
+    mode: "headless" as const,
+    proxy: undefined,
+    url: new URL("https://fake.test/page"),
+  };
+
+  const first = await settledValue(
+    browsers.load({ ...request, browserPath: await fakeChromePath(firstScenario) }),
+  );
+
+  const second = await settledValue(
+    browsers.load({ ...request, browserPath: await fakeChromePath("normal") }),
+  );
+
+  await browsers.close();
+
+  return { first, left: await leftovers(), second };
+};
+
+describe("planning between admission and start", () => {
+  it("releases admission when a planning step throws before start", async () => {
+    let plans = 0;
+
+    const failFirstPlan = () => {
+      plans += 1;
+
+      if (plans === 1) {
+        throw new Error("The session step failed.");
+      }
+
+      return sessionFor();
+    };
+
+    await expect(loadTwice(failFirstPlan, "normal")).resolves.toMatchObject({
+      first: { error: { message: "The session step failed." } },
+      left: nothingLeft,
+      second: { value: { status: 200 } },
+    });
+  });
+
+  it("stops a visit when its session's ownership aborts, then admits the next scrape", async () => {
+    let plans = 0;
+
+    const loseFirstOwnership = () => {
+      plans += 1;
+
+      return plans === 1
+        ? {
+            kind: "anonymous" as const,
+            ownership: { signal: AbortSignal.timeout(ABORT_DURING_LAUNCH_MS) },
+          }
+        : sessionFor();
+    };
+
+    await expect(loadTwice(loseFirstOwnership, "slow-start")).resolves.toMatchObject({
+      first: { error: { name: "TimeoutError" } },
+      left: nothingLeft,
+      second: { value: { status: 200 } },
+    });
   });
 });
 

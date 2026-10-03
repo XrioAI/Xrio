@@ -5,6 +5,7 @@ import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
+import { sessionFor } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
@@ -207,6 +208,7 @@ export const createBrowsers = (
   driver: BrowserDriver,
   maxBrowsers = defaultMaxBrowsers(),
   steps: Partial<RetireSteps> = {},
+  planSession = sessionFor,
 ): Browsers => {
   const admission = createAdmission(maxBrowsers);
   const visits = new Set<Promise<Closed>>();
@@ -225,7 +227,7 @@ export const createBrowsers = (
     });
 
     try {
-      const { deadline } = request;
+      const deadline = request.deadline.boundTo(planSession().ownership.signal);
       const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
 
       return await renderInScope(driver, request, deadline, scope, document);
