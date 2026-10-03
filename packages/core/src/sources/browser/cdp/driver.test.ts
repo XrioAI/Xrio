@@ -63,41 +63,68 @@ describe("the CDP driver's launch", () => {
     await browsers.close();
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
-});
 
-describe("the CDP driver's capture", () => {
-  it("treats a capture that fails as a newer document commits as replaced, and captures the newer one", async () => {
-    const rebinds: string[] = [];
-
-    const record: ChannelListener = (message) => {
-      if (isRebind(message)) {
-        rebinds.push(message.detail);
-      }
-    };
-
-    subscribe("xrio:event", record);
+  it("reports a browser that dies after cutting off the capture as crashed, not as a timeout", async () => {
     const browsers = createBrowsers(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     try {
-      const document = await browsers.load({
-        browserPath: await fakeChromePath("navigate-during-capture"),
-        deadline,
-        mode: "headless",
-        proxy: undefined,
-        url: new URL("https://fake.test/page"),
-      });
-
-      expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
-      expect(document.html).toContain("<p>fake page</p>");
-      expect(rebinds).toStrictEqual([
-        "The main-frame document changed during capture; capturing its replacement.",
-      ]);
+      await expect(
+        browsers.load({
+          browserPath: await fakeChromePath("exit-after-capture-error"),
+          deadline,
+          mode: "headless",
+          proxy: undefined,
+          url: new URL("https://fake.test/page"),
+        }),
+      ).rejects.toMatchObject({ code: "BROWSER_CRASHED" });
     } finally {
-      unsubscribe("xrio:event", record);
       await browsers.close();
     }
 
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
+});
+
+describe("the CDP driver's capture", () => {
+  it.each([
+    { order: "in the same read", scenario: "navigate-during-capture" },
+    { order: "after the capture's error", scenario: "commit-after-capture-error" },
+  ])(
+    "captures the newer document when a navigation cuts off the capture and commits $order",
+    async ({ scenario }) => {
+      const rebinds: string[] = [];
+
+      const record: ChannelListener = (message) => {
+        if (isRebind(message)) {
+          rebinds.push(message.detail);
+        }
+      };
+
+      subscribe("xrio:event", record);
+      const browsers = createBrowsers(cdpDriver, 1);
+      using deadline = startDeadline(10_000);
+
+      try {
+        const document = await browsers.load({
+          browserPath: await fakeChromePath(scenario),
+          deadline,
+          mode: "headless",
+          proxy: undefined,
+          url: new URL("https://fake.test/page"),
+        });
+
+        expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
+        expect(document.html).toContain("<p>fake page</p>");
+        expect(rebinds).toStrictEqual([
+          "The main-frame document changed during capture; capturing its replacement.",
+        ]);
+      } finally {
+        unsubscribe("xrio:event", record);
+        await browsers.close();
+      }
+
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
 });

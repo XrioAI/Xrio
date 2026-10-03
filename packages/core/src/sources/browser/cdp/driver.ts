@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { Deadline } from "../../../deadline.ts";
@@ -43,6 +44,8 @@ const DIALOG_DISMISS_MS = { longest: 1500, shortest: 600 } as const;
 
 const CONTEXT_GONE = /Cannot find context with specified id|Execution context was destroyed/u;
 
+const NAVIGATED_AWAY = /Inspected target navigated or closed/u;
+
 interface CommittedDocument {
   readonly loaderId: string;
   readonly replaced: AbortController;
@@ -84,6 +87,15 @@ const untilAborted = async <Result>(
 const settleWithin = async (operation: Promise<unknown>, budgetMs: number): Promise<void> => {
   await settle(untilAborted(operation, AbortSignal.timeout(budgetMs)));
 };
+
+const whenAborted = async (signal: AbortSignal): Promise<void> => {
+  if (!signal.aborted) {
+    await once(signal, "abort");
+  }
+};
+
+const isNavigatedAway = (cause: unknown): boolean =>
+  cause instanceof Error && NAVIGATED_AWAY.test(cause.message);
 
 const isBrowserGone = (cause: unknown): boolean =>
   cause instanceof DriverError && cause.reason.kind === "browser-gone";
@@ -210,6 +222,12 @@ class Tab {
 
       return await this.#send(this.#main, "Runtime.evaluate", params, signal);
     } catch (error) {
+      if (isNavigatedAway(error)) {
+        await this.#replacementOf(document, deadline);
+
+        throw new DriverError({ kind: "document-replaced" }, { cause: error });
+      }
+
       const superseded =
         this.#document !== document && !deadline.signal.aborted && !(error instanceof DriverError);
 
@@ -217,6 +235,20 @@ class Tab {
         ? new DriverError({ kind: "document-replaced" }, { cause: error })
         : (replacedBy(error) ?? error);
     }
+  }
+
+  async #replacementOf(document: CommittedDocument, deadline: Deadline): Promise<void> {
+    await whenAborted(
+      AbortSignal.any([document.replaced.signal, deadline.signal, this.#ended.signal]),
+    );
+
+    if (document.replaced.signal.aborted) {
+      return;
+    }
+
+    deadline.throwIfExpired();
+
+    throw new DriverError({ kind: "browser-gone" });
   }
 
   #receiveDomain(session: AnyTargetSession, event: DomainEvent): void {

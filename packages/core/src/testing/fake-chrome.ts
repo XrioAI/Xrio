@@ -13,6 +13,8 @@ const SCENARIOS = [
   "ignore-close",
   "slow-start",
   "navigate-during-capture",
+  "commit-after-capture-error",
+  "exit-after-capture-error",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -29,6 +31,8 @@ const SCENARIO_NAMES = new Set<string>(SCENARIOS);
 const FRAGMENT_BYTES = 7;
 
 const SLOW_START_MS = 30_000;
+
+const AFTER_CAPTURE_ERROR_MS = 50;
 
 const TARGET_ID = "T1";
 
@@ -273,14 +277,36 @@ const navigate = (url: string | undefined, committed: Json): Json[] => {
   return [...navigationEvents(currentUrl), committed, ...commitEvents(currentUrl)];
 };
 
-const evaluateByValue = (reply: Json, failed: Json): Json[] => {
-  if (scenario !== "navigate-during-capture" || navigatedDuringCapture) {
-    return [reply];
+const CAPTURE_ERROR_SCENARIOS = new Set<Scenario>([
+  "navigate-during-capture",
+  "commit-after-capture-error",
+  "exit-after-capture-error",
+]);
+
+const evaluateByValue = async (reply: Json, failed: Json): Promise<void> => {
+  if (!CAPTURE_ERROR_SCENARIOS.has(scenario) || navigatedDuringCapture) {
+    await write([reply]);
+
+    return;
   }
 
   navigatedDuringCapture = true;
+  const replacement = [...navigationEvents(currentUrl, "L2"), ...commitEvents(currentUrl, "L2")];
 
-  return [failed, ...navigationEvents(currentUrl, "L2"), ...commitEvents(currentUrl, "L2")];
+  if (scenario === "navigate-during-capture") {
+    await write([failed, ...replacement]);
+
+    return;
+  }
+
+  await write([failed]);
+  await delay(AFTER_CAPTURE_ERROR_MS);
+
+  if (scenario === "exit-after-capture-error") {
+    process.exit(1);
+  }
+
+  await write(replacement);
 };
 
 const closeBrowser = async (closed: Json): Promise<void> => {
@@ -339,14 +365,12 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Runtime.evaluate": {
-      await write(
-        returnsByValue(params)
-          ? evaluateByValue(
-              reply(CAPTURED_PAGE),
-              onSession(sessionId, { error: TARGET_NAVIGATED, id }),
-            )
-          : [reply(UTILITY_SCRIPT)],
-      );
+      await (returnsByValue(params)
+        ? evaluateByValue(
+            reply(CAPTURED_PAGE),
+            onSession(sessionId, { error: TARGET_NAVIGATED, id }),
+          )
+        : write([reply(UTILITY_SCRIPT)]));
       break;
     }
 
