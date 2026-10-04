@@ -106,6 +106,12 @@ const IDENTITY_REPORT_SCRIPT = `<script>
 })();
 </script>`;
 
+const RESPONSIVE_SCRIPT = `<script>
+document.getElementById("layout").textContent = matchMedia("(min-width: 1200px)").matches
+  ? "desktop"
+  : "tablet";
+</script>`;
+
 const WATCH_SCRIPT = `<script>
 (() => {
   const seen = () => {
@@ -558,6 +564,12 @@ const routes = new Map<
         `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${IDENTITY_REPORT_SCRIPT}`,
         `<meta name="request-accept-language" content="${request.headers["accept-language"] ?? ""}">`,
       );
+    },
+  ],
+  [
+    "/responsive",
+    (response) => {
+      sendPage(response, "responsive", `<p id="layout"></p>${RESPONSIVE_SCRIPT}`);
     },
   ],
   [

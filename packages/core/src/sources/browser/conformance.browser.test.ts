@@ -14,13 +14,14 @@ import type { Deadline } from "../../deadline.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityIntent } from "../../humanizer/intent.ts";
+import type { SurfaceChoices } from "../../humanizer/surfaces.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
 import {
   busyPageStarted,
   conformancePages,
   wasRequested,
 } from "../../testing/conformance-pages.ts";
-import { fixedDevice, fixedRandom } from "../../testing/fixed-seed.ts";
+import { fixedDevice, fixedRandom, fixedSeed } from "../../testing/fixed-seed.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
@@ -65,6 +66,34 @@ const PROBE =
 const IDENTITY_REPORT = /<pre id="identity">(?<report>[^<]*)<\/pre>/u;
 
 const MEDIA_REPORT = /<pre id="media">(?<report>[^<]*)<\/pre>/u;
+
+const RESPONSIVE = /<p id="layout">(?<layout>[a-z]+)<\/p>/u;
+
+const pageReportOf = ({ screen, window }: SurfaceChoices) =>
+  screen.source === "host" || !("x" in window)
+    ? { screen: screen.source, window: window.source }
+    : {
+        screen: {
+          availHeight: screen.size.height - screen.workArea.top - screen.workArea.bottom,
+          availLeft: screen.workArea.left,
+          availTop: screen.workArea.top,
+          availWidth: screen.size.width - screen.workArea.left - screen.workArea.right,
+          height: screen.size.height,
+          width: screen.size.width,
+        },
+        window: {
+          innerWidth: window.width,
+          outerHeight: window.height,
+          outerWidth: window.width,
+          screenX: window.x,
+          screenY: window.y,
+        },
+      };
+
+const seeded =
+  (seed: string): (() => Uint8Array) =>
+  () =>
+    Buffer.from(seed, "hex");
 
 const INTL_LOCALE = /"intlLocale":"(?<locale>[^"]*)"/u;
 
@@ -250,8 +279,9 @@ const load = async (
   signal?: AbortSignal,
   browserArgs: readonly string[] = [],
   pins: IdentityIntent = noPins,
+  random: () => Uint8Array = fixedRandom,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(cdpDriver, 1, { random: fixedRandom });
+  const browsers = createBrowsers(cdpDriver, 1, { random });
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -682,6 +712,79 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
       await browsers.close();
     }
   });
+});
+
+describe.each(MODES)("the drawn device, %s", (mode) => {
+  serveFixturePages();
+
+  it.runIf(mode === "headless").each([
+    { layout: "gnome", seed: fixedSeed, window: "maximized" },
+    { layout: "ubuntu", seed: "0000000000000028", window: "floating" },
+    { layout: "kde", seed: "0000000000000005", window: "maximized" },
+    { layout: "cinnamon", seed: "00000000000000a1", window: "maximized" },
+  ])(
+    "presents $seed's $layout screen and $window window exactly, at least 1265 px wide",
+    async ({ layout, seed, window }) => {
+      const { html, identity } = await load(
+        mode,
+        "/identity",
+        20_000,
+        undefined,
+        [],
+        noPins,
+        seeded(seed),
+      );
+
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(identity).toMatchObject({
+        notes: [],
+        surfaces: { screen: { layout }, window: { kind: window } },
+      });
+      expect(report).toMatchObject(
+        identity.mode === "http" ? { mode: "http" } : pageReportOf(identity.surfaces),
+      );
+
+      const drawnWidth =
+        identity.mode === "http" || !("width" in identity.surfaces.window)
+          ? 0
+          : identity.surfaces.window.width;
+
+      expect(drawnWidth).toBeGreaterThanOrEqual(1265);
+    },
+  );
+
+  it.runIf(mode === "headless")(
+    "presents a pinned 1440x900 screen with a 48 px bottom taskbar and a maximized window",
+    async () => {
+      const display = {
+        screens: [{ height: 900, weight: 1, width: 1440 }],
+        taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
+        windows: [{ kind: "maximized", weight: 1 }],
+      } as const;
+
+      const { html } = await load(mode, "/identity", 20_000, undefined, [], {
+        ...noPins,
+        display,
+      });
+
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toMatchObject({
+        screen: { availHeight: 852, availTop: 0, availWidth: 1440, height: 900, width: 1440 },
+        window: { outerHeight: 852, outerWidth: 1440, screenX: 0, screenY: 0 },
+      });
+    },
+  );
+
+  it.each([fixedSeed, "0000000000000028", "0000000000000005"])(
+    "serves the desktop layout to a 1200 px media query under seed %s",
+    async (seed) => {
+      const { html } = await load(mode, "/responsive", 20_000, undefined, [], noPins, seeded(seed));
+
+      expect(RESPONSIVE.exec(html)?.groups?.layout).toBe("desktop");
+    },
+  );
 });
 
 describe.each(MODES)("browser lifecycle, %s", (mode) => {
