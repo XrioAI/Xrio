@@ -28,6 +28,7 @@ import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
 import { fakeForkPath } from "../../testing/fake-fork.ts";
 import type { FakeForkScenario } from "../../testing/fake-fork.ts";
+import { fixedRandom, fixedSeed } from "../../testing/fixed-seed.ts";
 import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
 import { noPins } from "../../testing/no-pins.ts";
@@ -1366,6 +1367,7 @@ describe("the launch identity check", () => {
 
     const browsers = createBrowsers(cdpDriver, 1, {
       hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+      random: fixedRandom,
     });
 
     using deadline = startDeadline(10_000);
@@ -1385,10 +1387,11 @@ describe("the launch identity check", () => {
       observed: {
         deviceMemory: 8,
         offsets: ["GMT+00:00", "GMT+00:00"],
-        screen: { availHeight: 1040, height: 1080, width: 1920 },
+        screen: { availHeight: 1018, availTop: 32, height: 1050, width: 1680 },
         timeZone: "UTC",
-        window: { outerHeight: 900, outerWidth: 1600 },
+        window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
       },
+      seed: fixedSeed,
       surfaces: {
         fonts: { reason: "no fontstack/ beside the binary", source: "host" },
         timezone: { source: "host", zone: "UTC" },
@@ -1569,7 +1572,11 @@ describe("the launch identity check", () => {
       return evaluate(expected, observation);
     };
 
-    const browsers = createBrowsers(cdpDriver, 1, { evaluate: recordingEvaluate });
+    const browsers = createBrowsers(cdpDriver, 1, {
+      evaluate: recordingEvaluate,
+      random: fixedRandom,
+    });
+
     using deadline = startDeadline(10_000);
 
     const document = await settledValue(
@@ -1582,7 +1589,7 @@ describe("the launch identity check", () => {
     await browsers.close();
     expect({ document, observed }).toMatchObject({
       document: { value: { status: 200 } },
-      observed: [{ outerHeight: 900, outerWidth: 1600 }],
+      observed: [{ outerHeight: 1018, outerWidth: 1680 }],
     });
   });
 
@@ -1692,6 +1699,7 @@ describe("the identity-chosen event", () => {
 
       const browsers = createBrowsers(cdpDriver, 1, {
         hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+        random: fixedRandom,
       });
 
       using deadline = startDeadline(10_000);
@@ -1721,6 +1729,7 @@ describe("the identity-chosen event", () => {
         chosen: {
           exit: { facts: { kind: "unknown" }, route: "direct" },
           mode: "headless",
+          seed: fixedSeed,
           surfaces: {
             automation: null,
             gpu: { backend: "swiftshader", persona: null },
@@ -1728,12 +1737,20 @@ describe("the identity-chosen event", () => {
             locale: { languages: ["en-US", "en"], tag: "en-US" },
             media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
             screen: {
-              size: { height: 1080, width: 1920 },
-              source: "fixed",
-              workArea: { bottom: 40, left: 0, right: 0, top: 0 },
+              layout: "gnome",
+              size: { height: 1050, width: 1680 },
+              source: "drawn",
+              workArea: { bottom: 0, left: 0, right: 0, top: 32 },
             },
             timezone: { source: "host", zone: "UTC" },
-            window: { size: { height: 900, width: 1600 }, source: "fixed" },
+            window: {
+              height: 1018,
+              kind: "maximized",
+              source: "drawn",
+              width: 1680,
+              x: 0,
+              y: 32,
+            },
           },
         },
         document: outcome,

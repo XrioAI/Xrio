@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
+import { fixedDevice } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
@@ -24,10 +25,10 @@ const UNMEASURED = { headless: false, major: 152, version: "152.0.7977.75" };
 const linuxHeadless: Observation = {
   afterCapture: { kind: "not-navigated" },
   anyPointer: "fine",
-  availHeight: 1040,
+  availHeight: 1018,
   availLeft: 0,
-  availTop: 0,
-  availWidth: 1920,
+  availTop: 32,
+  availWidth: 1680,
   colorDepth: 24,
   colorScheme: "light",
   devicePixelRatio: 1,
@@ -38,17 +39,17 @@ const linuxHeadless: Observation = {
   intlLocale: "en-US",
   languages: ["en-US", "en"],
   maxTouchPoints: 0,
-  outerHeight: 900,
-  outerWidth: 1600,
+  outerHeight: 1018,
+  outerWidth: 1680,
   pointer: "fine",
   product: MEASURED,
   reducedMotion: "no-preference",
   requestedOffsets: ["GMT+05:30", "GMT+05:30"],
   requestedZone: "Asia/Kolkata",
-  screenHeight: 1080,
-  screenWidth: 1920,
-  screenX: 22,
-  screenY: 22,
+  screenHeight: 1050,
+  screenWidth: 1680,
+  screenX: 0,
+  screenY: 32,
   userAgent:
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
   webdriver: false,
@@ -59,6 +60,7 @@ const linuxHeadless: Observation = {
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
   capabilities: { fontStack: CHECKED_FONT_STACK, platform: "linux" },
+  device: fixedDevice,
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "Asia/Kolkata",
   mode: "headless",
@@ -122,15 +124,15 @@ describe("each matcher kind", () => {
       wanted: ["GMT+05:30", "GMT+05:30"],
     },
     {
-      held: { ...linuxHeadless, outerWidth: 1920 },
+      held: { ...linuxHeadless, outerWidth: 1680 },
       kind: "at-most-field",
-      missed: { ...linuxHeadless, outerWidth: 1921 },
+      missed: { ...linuxHeadless, outerWidth: 1681 },
       rule: expectation({
         field: "outerWidth",
         matcher: { field: "availWidth", kind: "at-most-field" },
         surface: "window",
       }),
-      wanted: 1920,
+      wanted: 1680,
     },
     {
       held: linuxHeadless,
@@ -301,8 +303,11 @@ describe("the headed window", () => {
     const smallXvfb = {
       ...linuxHeadless,
       availHeight: 768,
+      availTop: 0,
       availWidth: 1024,
       colorDepth: 16,
+      outerHeight: 900,
+      outerWidth: 1600,
       screenHeight: 768,
       screenWidth: 1024,
     };

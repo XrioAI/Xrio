@@ -15,6 +15,7 @@ describe(isOwnedSwitch, () => {
     "--use-angle",
     "--enable-unsafe-swiftshader",
     "--window-size",
+    "--window-position",
     "--screen-info",
     "--use-fake-device-for-media-stream",
   ])("owns %s", (name) => {
@@ -25,7 +26,6 @@ describe(isOwnedSwitch, () => {
     "--force-device-scale-factor",
     "--device-scale-factor",
     "--high-dpi-support",
-    "--window-position",
     "--start-maximized",
     "--start-fullscreen",
     "--user-agent",

@@ -13,6 +13,7 @@ import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
 import { conformancePages } from "../src/testing/conformance-pages.ts";
+import { fixedDevice, fixedRandom } from "../src/testing/fixed-seed.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
 import { noPins } from "../src/testing/no-pins.ts";
 
@@ -102,7 +103,7 @@ const scrapeOnce = async (): Promise<Sample> => {
   };
 
   subscribe("xrio:stage", record);
-  const browsers = createBrowsers(cdpDriver, 1);
+  const browsers = createBrowsers(cdpDriver, 1, { random: fixedRandom });
   const started = performance.now();
 
   try {
@@ -160,6 +161,7 @@ const { args } = planLaunch({
   headless: mode === "headless",
   identity: planIdentity({
     capabilities: await createCapabilityProbe()(chromePath()),
+    device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: readHostZone(),
     mode,

@@ -8,6 +8,7 @@ import type { Clock } from "../../../deadline.ts";
 import { isXrioError } from "../../../errors.ts";
 import { planIdentity } from "../../../humanizer/humanizer.ts";
 import { fakeChromePath } from "../../../testing/fake-chrome-path.ts";
+import { fixedDevice } from "../../../testing/fixed-seed.ts";
 import { leftovers, nothingLeft } from "../../../testing/leftovers.ts";
 import { manualClock } from "../../../testing/manual-clock.ts";
 import { noPins } from "../../../testing/no-pins.ts";
@@ -124,6 +125,7 @@ describe("the CDP driver's documents", () => {
       headless: true,
       identity: planIdentity({
         capabilities: { platform: process.platform },
+        device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
@@ -164,6 +166,7 @@ describe("the CDP driver's documents", () => {
       headless: true,
       identity: planIdentity({
         capabilities: { platform: process.platform },
+        device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
@@ -222,6 +225,7 @@ describe("the CDP driver's documents", () => {
       headless: true,
       identity: planIdentity({
         capabilities: await createCapabilityProbe()(browserPath),
+        device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",

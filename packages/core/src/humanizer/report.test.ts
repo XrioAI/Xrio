@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { HostCapabilities, Observation } from "./contracts.ts";
 import { httpIdentity, planIdentity } from "./humanizer.ts";
@@ -33,10 +34,10 @@ const headlessLinux: Observation = {
     webgpu: false,
   },
   anyPointer: "fine",
-  availHeight: 1040,
+  availHeight: 1018,
   availLeft: 0,
-  availTop: 0,
-  availWidth: 1920,
+  availTop: 32,
+  availWidth: 1680,
   colorDepth: 24,
   colorScheme: "light",
   devicePixelRatio: 1,
@@ -47,17 +48,17 @@ const headlessLinux: Observation = {
   intlLocale: "en-US",
   languages: ["en-US", "en"],
   maxTouchPoints: 0,
-  outerHeight: 900,
-  outerWidth: 1600,
+  outerHeight: 1018,
+  outerWidth: 1680,
   pointer: "fine",
   product: { headless: true, major: 154, version: "154.0.8037.57" },
   reducedMotion: "no-preference",
   requestedOffsets: ["GMT+00:00", "GMT+00:00"],
   requestedZone: "UTC",
-  screenHeight: 1080,
-  screenWidth: 1920,
-  screenX: 22,
-  screenY: 22,
+  screenHeight: 1050,
+  screenWidth: 1680,
+  screenX: 0,
+  screenY: 32,
   userAgent: linuxUserAgent,
   webdriver: false,
   webgl: true,
@@ -69,6 +70,7 @@ const headedMac: Observation = {
   ...headlessLinux,
   afterCapture: { kind: "insecure" },
   availHeight: 1079,
+  availTop: 0,
   availWidth: 1728,
   colorScheme: "dark",
   devicePixelRatio: 2,
@@ -82,6 +84,8 @@ const headedMac: Observation = {
   requestedZone: "America/Toronto",
   screenHeight: 1117,
   screenWidth: 1728,
+  screenX: 22,
+  screenY: 22,
   userAgent: macUserAgent,
   zone: "America/Toronto",
   zoneOffsets: ["GMT-05:00", "GMT-04:00"],
@@ -177,6 +181,7 @@ describe("the identity report", () => {
   it("reports a headless stock scrape on Linux", () => {
     const plan = planIdentity({
       capabilities: { platform: "linux" },
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",
@@ -207,21 +212,22 @@ describe("the identity report", () => {
           pointer: "fine",
           reducedMotion: "no-preference",
           screen: {
-            availHeight: 1040,
+            availHeight: 1018,
             availLeft: 0,
-            availTop: 0,
-            availWidth: 1920,
+            availTop: 32,
+            availWidth: 1680,
             colorDepth: 24,
             devicePixelRatio: 1,
-            height: 1080,
-            width: 1920,
+            height: 1050,
+            width: 1680,
           },
           timeZone: "UTC",
           userAgent: linuxUserAgent,
           webdriver: false,
           webgpu: false,
-          window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
+          window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
         },
+        seed: fixedSeed,
         surfaces: {
           automation: null,
           fonts: { reason: "no fontstack/ beside the binary", source: "host" },
@@ -230,13 +236,14 @@ describe("the identity report", () => {
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
           screen: {
-            size: { height: 1080, width: 1920 },
-            source: "fixed",
-            workArea: { bottom: 40, left: 0, right: 0, top: 0 },
+            layout: "gnome",
+            size: { height: 1050, width: 1680 },
+            source: "drawn",
+            workArea: { bottom: 0, left: 0, right: 0, top: 32 },
           },
           speech: { persona: null },
           timezone: { source: "host", zone: "UTC" },
-          window: { size: { height: 900, width: 1600 }, source: "fixed" },
+          window: { height: 1018, kind: "maximized", source: "drawn", width: 1680, x: 0, y: 32 },
         },
         tells: ["headless-token", "host-zone-utc", "host-fonts"],
       },
@@ -255,6 +262,7 @@ describe("the identity report", () => {
         },
         platform: "linux",
       },
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",
@@ -277,6 +285,7 @@ describe("the identity report", () => {
   it("reports a headed stock scrape of a non-secure page on macOS, with no secure-context surface read", () => {
     const plan = planIdentity({
       capabilities: { platform: "darwin" },
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "America/Toronto",
       mode: "headed",
@@ -322,6 +331,7 @@ describe("the identity report", () => {
           webgpu: null,
           window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
         },
+        seed: fixedSeed,
         surfaces: {
           automation: null,
           fonts: { reason: null, source: "host" },
@@ -343,6 +353,7 @@ describe("the identity report", () => {
 describe("the secure-context surfaces' coverage", () => {
   const plan = planIdentity({
     capabilities: { platform: "linux" },
+    device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
@@ -375,6 +386,7 @@ describe("a secure origin whose individual reads gave nothing", () => {
   it("marks only those surfaces unchecked with read-failed", () => {
     const plan = planIdentity({
       capabilities: { platform: "linux" },
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",
@@ -409,6 +421,7 @@ describe("a secure origin whose individual reads gave nothing", () => {
 describe("report independence", () => {
   const plan = planIdentity({
     capabilities: { platform: "linux" },
+    device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
@@ -483,6 +496,7 @@ const aliasedPaths = (report: IdentityReport): string[][] => {
 describe("no shared object inside one report", () => {
   const plan = planIdentity({
     capabilities: { platform: "linux" },
+    device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
@@ -514,6 +528,7 @@ describe("no shared object inside one report", () => {
 describe("coverage backed by timezone reads", () => {
   const plan = planIdentity({
     capabilities: { platform: "linux" },
+    device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",

@@ -16,6 +16,7 @@ import { planLaunch } from "../sources/browser/launch-plan.ts";
 import { settleWithin } from "../sources/browser/lifetime.ts";
 import type { BrowserDriver, DriverBrowser, DriverEvent } from "../sources/browser/port.ts";
 import { chromePath } from "./chrome-path.ts";
+import { fixedDevice } from "./fixed-seed.ts";
 import { startFixtureServer } from "./fixture-server.ts";
 import { noPins } from "./no-pins.ts";
 import { killRenderers } from "./processes.ts";
@@ -88,6 +89,7 @@ const withDriver = async (
     headless: true,
     identity: planIdentity({
       capabilities: { platform: process.platform },
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode: "headless",

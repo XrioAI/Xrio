@@ -20,6 +20,7 @@ import {
   conformancePages,
   wasRequested,
 } from "../../testing/conformance-pages.ts";
+import { fixedDevice, fixedRandom } from "../../testing/fixed-seed.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
@@ -250,7 +251,7 @@ const load = async (
   browserArgs: readonly string[] = [],
   pins: IdentityIntent = noPins,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(cdpDriver, 1);
+  const browsers = createBrowsers(cdpDriver, 1, { random: fixedRandom });
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -331,6 +332,7 @@ const withBrowser = async <Result>(
     headless: mode === "headless",
     identity: planIdentity({
       capabilities: await createCapabilityProbe()(chromePath()),
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode,
@@ -448,23 +450,23 @@ describe.each(MODES)("documents captured, %s", (mode) => {
   });
 
   it.runIf(mode === "headless")(
-    "reads the launch's emulated screen and window on /identity",
+    "reads the fixed seed's drawn screen, work area and maximized window on /identity",
     async () => {
       const { html } = await load(mode, "/identity");
       const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
 
       expect(report).toMatchObject({
         screen: {
-          availHeight: 1040,
+          availHeight: 1018,
           availLeft: 0,
-          availTop: 0,
-          availWidth: 1920,
+          availTop: 32,
+          availWidth: 1680,
           colorDepth: 24,
           devicePixelRatio: 1,
-          height: 1080,
-          width: 1920,
+          height: 1050,
+          width: 1680,
         },
-        window: { outerHeight: 900, outerWidth: 1600 },
+        window: { innerWidth: 1680, outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
       });
     },
   );
@@ -717,6 +719,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
       headless: mode === "headless",
       identity: planIdentity({
         capabilities: await createCapabilityProbe()(chromePath()),
+        device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: readHostZone(),
         mode,

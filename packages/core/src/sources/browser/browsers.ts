@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { availableParallelism, totalmem } from "node:os";
 import { constrainedMemory } from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -8,6 +9,7 @@ import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
 import type { AfterCapture, HostCapabilities, Observation } from "../../humanizer/contracts.ts";
+import { SEED_BYTES, seedOf } from "../../humanizer/draws.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
@@ -65,6 +67,7 @@ interface BrowserVisit {
 }
 
 interface VisitSteps extends Partial<RetireSteps> {
+  readonly random: (size: number) => Uint8Array;
   readonly sessionFor: typeof sessionFor;
   readonly hostCapabilities: HostFacts["snapshotFor"];
   readonly fontEvidence: FontEvidenceStore;
@@ -82,6 +85,7 @@ interface VisitPlan {
 const defaultSteps: Omit<VisitSteps, "fontEvidence" | "hostCapabilities"> = {
   evaluate,
   planIdentity,
+  random: randomBytes,
   sessionFor,
 };
 
@@ -170,6 +174,7 @@ const planVisit = async (
         fonts.evidence === undefined
           ? capabilities
           : { ...capabilities, fontEvidence: fonts.evidence },
+      device: { kind: "fresh", seed: seedOf(steps.random(SEED_BYTES)) },
       exit: { facts: exitFactsFor(route), route: route.kind },
       hostZone,
       mode: request.mode,

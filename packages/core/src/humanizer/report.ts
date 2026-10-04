@@ -92,6 +92,7 @@ export interface ObservedIdentity {
 
 export interface BrowserIdentityReport {
   readonly mode: IdentityContext["mode"];
+  readonly seed: string;
   readonly binary: { readonly version: string; readonly fork: "xrio" | null };
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;

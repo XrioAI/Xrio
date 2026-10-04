@@ -14,6 +14,7 @@ import type { FactTell, SurfaceExpectation } from "./verify.ts";
 interface ChosenIdentity {
   readonly mode: IdentityContext["mode"];
   readonly fork: ForkFacts["dialect"] | null;
+  readonly seed: IdentityContext["device"]["seed"];
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;
 }
@@ -48,6 +49,7 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
       exit: context.exit,
       fork: context.capabilities.fork?.dialect ?? null,
       mode: context.mode,
+      seed: context.device.seed,
       surfaces: choicesOf(resolutions),
     },
     expected: EMISSION_ORDER.flatMap((surface) =>

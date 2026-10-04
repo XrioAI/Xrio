@@ -258,12 +258,47 @@ const UTILITY_SCRIPT: Json = {
 
 const UTC_OFFSETS = ["GMT+00:00", "GMT+00:00"];
 
+const SCREEN_INFO =
+  /^--screen-info=\{0,0 (?<width>\d+)x(?<height>\d+) .*workAreaLeft=(?<left>\d+) workAreaRight=(?<right>\d+) workAreaTop=(?<top>\d+) workAreaBottom=(?<bottom>\d+)\}$/u;
+
+const PAIR = /^(?<first>\d+),(?<second>\d+)$/u;
+
+const switchValue = (name: string): string | undefined =>
+  process.argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+
+const pairOf = (name: string, fallback: readonly [number, number]): readonly [number, number] => {
+  const groups = PAIR.exec(switchValue(name) ?? "")?.groups;
+
+  return groups === undefined ? fallback : [Number(groups.first), Number(groups.second)];
+};
+
+const DEFAULT_SCREEN = { bottom: 40, height: 1080, left: 0, right: 0, top: 0, width: 1920 };
+
+const screenOf = () => {
+  const groups = process.argv.map((arg) => SCREEN_INFO.exec(arg)?.groups).find(Boolean);
+
+  const { bottom, height, left, right, top, width } =
+    groups === undefined
+      ? DEFAULT_SCREEN
+      : Object.fromEntries(Object.entries(groups).map(([key, value]) => [key, Number(value)]));
+
+  return {
+    availHeight: height - top - bottom,
+    availLeft: left,
+    availTop: top,
+    availWidth: width - left - right,
+    screenHeight: height,
+    screenWidth: width,
+  };
+};
+
+const [OUTER_WIDTH, OUTER_HEIGHT] = pairOf("--window-size", [1600, 900]);
+
+const [SCREEN_X, SCREEN_Y] = pairOf("--window-position", [22, 22]);
+
 const OBSERVATION = {
+  ...screenOf(),
   anyPointer: "fine",
-  availHeight: 1040,
-  availLeft: 0,
-  availTop: 0,
-  availWidth: 1920,
   colorDepth: 24,
   colorScheme: "light",
   devicePixelRatio: 1,
@@ -274,16 +309,14 @@ const OBSERVATION = {
   intlLocale: "en-US",
   languages: ["en-US", "en"],
   maxTouchPoints: 0,
-  outerHeight: 900,
-  outerWidth: 1600,
+  outerHeight: OUTER_HEIGHT,
+  outerWidth: OUTER_WIDTH,
   pointer: "fine",
   reducedMotion: "no-preference",
   requestedOffsets: scenario === "identity-drift" ? ["GMT-06:00", "GMT-05:00"] : UTC_OFFSETS,
   requestedZone: scenario === "identity-drift" ? "America/Chicago" : "UTC",
-  screenHeight: 1080,
-  screenWidth: 1920,
-  screenX: 22,
-  screenY: 22,
+  screenX: SCREEN_X,
+  screenY: SCREEN_Y,
   userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
   webdriver: false,
   webgl: scenario !== "no-webgl",

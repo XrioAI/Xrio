@@ -4,6 +4,7 @@ import type { HostCapabilities } from "../../humanizer/contracts.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
 import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
+import { fixedDevice } from "../../testing/fixed-seed.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
 import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
@@ -23,6 +24,7 @@ interface IdentityChoice {
 const identityFor = ({ fontStack, headless, platform, timezone }: IdentityChoice): BrowserInputs =>
   planIdentity({
     capabilities: fontStack === undefined ? { platform } : { fontStack, platform },
+    device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: timezone,
     mode: headless ? "headless" : "headed",
@@ -84,8 +86,9 @@ describe(planLaunch, () => {
       "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
       ...xrioSwitches,
       "--enable-unsafe-swiftshader",
-      "--window-size=1600,900",
-      "--screen-info={0,0 1920x1080 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=0 workAreaBottom=40}",
+      "--window-size=1680,1018",
+      "--window-position=0,32",
+      "--screen-info={0,0 1680x1050 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=32 workAreaBottom=0}",
       "--use-fake-device-for-media-stream=device-count=0",
       `--crash-dumps-dir=${scratchDir}/crashes`,
       ...tail,
@@ -102,6 +105,7 @@ describe(planLaunch, () => {
       headless: false,
       identity: planIdentity({
         capabilities: { platform: "linux", readableRenderNode: true },
+        device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headed",
@@ -319,6 +323,7 @@ describe(planLaunch, () => {
       headless: true,
       identity: planIdentity({
         capabilities: { platform: "linux" },
+        device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",

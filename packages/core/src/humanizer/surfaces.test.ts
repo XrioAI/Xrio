@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { FontStack, HostCapabilities } from "./contracts.ts";
 import { fontConfigOf } from "./fonts.ts";
@@ -10,6 +11,7 @@ import type { IdentityContext } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
   capabilities: { platform: "linux" },
+  device: fixedDevice,
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "America/Chicago",
   mode: "headless",
@@ -405,25 +407,45 @@ describe("the gpu surface", () => {
   });
 });
 
+const fatalEquals = (field: string, value: number) => ({
+  compatibility: true,
+  field,
+  matcher: { kind: "equals", value },
+  severity: "fatal",
+});
+
 describe("the window surface", () => {
-  it("sizes the headless window at 1600x900 and expects exactly that", () => {
+  it("maximizes the fixed seed's headless window to its work area and expects exactly that", () => {
     expect(resolveSurfaces(contextOf()).window).toStrictEqual({
       expected: [
-        {
-          compatibility: true,
-          field: "outerWidth",
-          matcher: { kind: "equals", value: 1600 },
-          severity: "fatal",
-        },
-        {
-          compatibility: true,
-          field: "outerHeight",
-          matcher: { kind: "equals", value: 900 },
-          severity: "fatal",
-        },
+        fatalEquals("outerWidth", 1680),
+        fatalEquals("outerHeight", 1018),
+        fatalEquals("screenX", 0),
+        fatalEquals("screenY", 32),
       ],
-      inputs: [{ name: "--window-size", sink: "switch", value: "1600,900" }],
-      value: { size: { height: 900, width: 1600 }, source: "fixed" },
+      inputs: [
+        { name: "--window-size", sink: "switch", value: "1680,1018" },
+        { name: "--window-position", sink: "switch", value: "0,32" },
+      ],
+      value: { height: 1018, kind: "maximized", source: "drawn", width: 1680, x: 0, y: 32 },
+    });
+  });
+
+  it("places a floating headless window where its seed drew it", () => {
+    expect(
+      resolveSurfaces(contextOf({ device: { kind: "fresh", seed: "0000000000000028" } })).window,
+    ).toStrictEqual({
+      expected: [
+        fatalEquals("outerWidth", 1466),
+        fatalEquals("outerHeight", 879),
+        fatalEquals("screenX", 243),
+        fatalEquals("screenY", 43),
+      ],
+      inputs: [
+        { name: "--window-size", sink: "switch", value: "1466,879" },
+        { name: "--window-position", sink: "switch", value: "243,43" },
+      ],
+      value: { height: 879, kind: "floating", source: "drawn", width: 1466, x: 243, y: 43 },
     });
   });
 
@@ -450,61 +472,42 @@ describe("the window surface", () => {
 });
 
 describe("the screen surface", () => {
-  it("describes a 1920x1080 screen with a 40 px bottom inset in headless mode", () => {
-    expect(resolveSurfaces(contextOf()).screen).toStrictEqual({
-      expected: [
-        {
-          compatibility: true,
-          field: "screenWidth",
-          matcher: { kind: "equals", value: 1920 },
-          severity: "fatal",
-        },
-        {
-          compatibility: true,
-          field: "screenHeight",
-          matcher: { kind: "equals", value: 1080 },
-          severity: "fatal",
-        },
-        {
-          compatibility: true,
-          field: "availWidth",
-          matcher: { kind: "equals", value: 1920 },
-          severity: "fatal",
-        },
-        {
-          compatibility: true,
-          field: "availHeight",
-          matcher: { kind: "equals", value: 1040 },
-          severity: "fatal",
-        },
-        {
-          compatibility: true,
-          field: "availLeft",
-          matcher: { kind: "equals", value: 0 },
-          severity: "fatal",
-        },
-        {
-          compatibility: true,
-          field: "availTop",
-          matcher: { kind: "equals", value: 0 },
-          severity: "fatal",
-        },
-      ],
-      inputs: [
-        {
-          name: "--screen-info",
-          sink: "switch",
-          value:
-            "{0,0 1920x1080 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=0 workAreaBottom=40}",
-        },
-      ],
-      value: {
-        size: { height: 1080, width: 1920 },
-        source: "fixed",
-        workArea: { bottom: 40, left: 0, right: 0, top: 0 },
-      },
-    });
-  });
+  it.each([
+    {
+      expected: [1680, 1050, 1680, 1018, 0, 32],
+      info: "{0,0 1680x1050 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=32 workAreaBottom=0}",
+      layout: "gnome",
+      seed: fixedSeed,
+      size: { height: 1050, width: 1680 },
+      workArea: { bottom: 0, left: 0, right: 0, top: 32 },
+    },
+    {
+      expected: [1920, 1200, 1854, 1168, 66, 32],
+      info: "{0,0 1920x1200 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=66 workAreaRight=0 workAreaTop=32 workAreaBottom=0}",
+      layout: "ubuntu",
+      seed: "0000000000000028",
+      size: { height: 1200, width: 1920 },
+      workArea: { bottom: 0, left: 66, right: 0, top: 32 },
+    },
+  ])(
+    "presents $seed's drawn $layout screen and work area in headless mode",
+    ({ expected, info, layout, seed, size, workArea }) => {
+      const fields = [
+        "screenWidth",
+        "screenHeight",
+        "availWidth",
+        "availHeight",
+        "availLeft",
+        "availTop",
+      ];
+
+      expect(resolveSurfaces(contextOf({ device: { kind: "fresh", seed } })).screen).toStrictEqual({
+        expected: fields.map((field, index) => fatalEquals(field, expected[index])),
+        inputs: [{ name: "--screen-info", sink: "switch", value: info }],
+        value: { layout, size, source: "drawn", workArea },
+      });
+    },
+  );
 
   it("leaves a headed browser the real display", () => {
     expect(resolveSurfaces(contextOf({ mode: "headed" })).screen).toStrictEqual({
@@ -850,7 +853,7 @@ describe("the planned tells", () => {
 });
 
 describe("the chosen identity", () => {
-  it("names the mode, the exit and every surface's choice, with no input or expectation", () => {
+  it("names the mode, the exit, the seed and every surface's choice, with no input or expectation", () => {
     expect(
       planIdentity(
         contextOf({
@@ -864,6 +867,7 @@ describe("the chosen identity", () => {
       exit: { facts: { kind: "unknown" }, route: "proxy" },
       fork: null,
       mode: "headed",
+      seed: fixedSeed,
       surfaces: {
         automation: null,
         fonts: { reason: null, source: "host" },

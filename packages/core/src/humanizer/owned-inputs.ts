@@ -5,6 +5,7 @@ export const OWNED_SWITCHES = [
   "--use-angle",
   "--enable-unsafe-swiftshader",
   "--window-size",
+  "--window-position",
   "--screen-info",
   "--use-fake-device-for-media-stream",
 ] as const;
@@ -103,6 +104,66 @@ export const measuredLocalesFor = (tag: string): readonly string[] => {
 export const chromeAcceptLanguages = (tag: string): readonly string[] | undefined =>
   isShippedLocale(tag) ? CHROME_ACCEPT_LANGUAGES[tag] : undefined;
 
+const PXRENDER_SCREENS =
+  "pxrender src/pxrender/browser/display.py DESKTOP_SCREENS: native DPR-1 panel sizes with approximate desktop population weights";
+
+export const DESKTOP_SCREENS = [
+  { height: 1080, source: PXRENDER_SCREENS, weight: 40, width: 1920 },
+  { height: 768, source: PXRENDER_SCREENS, weight: 14, width: 1366 },
+  { height: 1024, source: PXRENDER_SCREENS, weight: 11, width: 1280 },
+  { height: 900, source: PXRENDER_SCREENS, weight: 8, width: 1440 },
+  { height: 900, source: PXRENDER_SCREENS, weight: 7, width: 1600 },
+  { height: 1440, source: PXRENDER_SCREENS, weight: 7, width: 2560 },
+  { height: 1050, source: PXRENDER_SCREENS, weight: 5, width: 1680 },
+  { height: 1200, source: PXRENDER_SCREENS, weight: 4, width: 1920 },
+  { height: 800, source: PXRENDER_SCREENS, weight: 4, width: 1280 },
+] as const;
+
+const LAYOUT_WEIGHT_SOURCE = "guess: no population data on Linux desktop environments";
+
+export const DESKTOP_LAYOUTS = [
+  {
+    insets: { bottom: 0, left: 0, right: 0, top: 32 },
+    name: "gnome",
+    source:
+      "measured 2026-10-04: _NET_WORKAREA of Fedora 42 gnome-shell 48.8 --x11 --mode=user, and of Ubuntu 24.04 gnome-shell 46.0 --mode=user, under Xvfb at 96 dpi, 1920x1080 and 1366x768",
+    weight: 25,
+    weightSource: LAYOUT_WEIGHT_SOURCE,
+  },
+  {
+    insets: { bottom: 0, left: 66, right: 0, top: 32 },
+    name: "ubuntu",
+    source:
+      "measured 2026-10-04: _NET_WORKAREA of Ubuntu 24.04.5 ubuntu-desktop-minimal, gnome-shell 46.0 --x11 --mode=ubuntu with ubuntu-dock 90ubuntu3, under Xvfb at 96 dpi, 1920x1080 and 1366x768",
+    weight: 35,
+    weightSource: LAYOUT_WEIGHT_SOURCE,
+  },
+  {
+    insets: { bottom: 44, left: 0, right: 0, top: 0 },
+    name: "kde",
+    source:
+      "measured 2026-10-04: _NET_WORKAREA and panel strut of Kubuntu 24.04.5, Plasma 5.27.12 on kwin_x11, under Xvfb at 96 dpi, 1920x1080 and 1366x768; Fedora 42 Plasma 6.6.4 floats its panel with a 46 px strut",
+    weight: 20,
+    weightSource: LAYOUT_WEIGHT_SOURCE,
+  },
+  {
+    insets: { bottom: 40, left: 0, right: 0, top: 0 },
+    name: "cinnamon",
+    source:
+      "measured 2026-10-04: _NET_WORKAREA of Linux Mint 22 Cinnamon 6.2.10 on muffin, under Xvfb at 96 dpi, 1920x1080 and 1366x768",
+    weight: 20,
+    weightSource: LAYOUT_WEIGHT_SOURCE,
+  },
+] as const;
+
+const WINDOW_WEIGHT_SOURCE =
+  "guess: most desktop browser windows are maximized; no population data on floating sizes";
+
+export const WINDOW_STATES = [
+  { kind: "maximized", source: WINDOW_WEIGHT_SOURCE, weight: 80 },
+  { kind: "floating", source: WINDOW_WEIGHT_SOURCE, weight: 20 },
+] as const;
+
 export const FORK_SWITCH_PREFIXES = ["--pxr-", "--xrio-"] as const;
 
 export const FORK_DUMP_SWITCH = "--xrio-dump-config";
@@ -111,7 +172,6 @@ const RESERVED_IDENTITY_SWITCHES = [
   "--force-device-scale-factor",
   "--device-scale-factor",
   "--high-dpi-support",
-  "--window-position",
   "--start-maximized",
   "--start-fullscreen",
   "--user-agent",

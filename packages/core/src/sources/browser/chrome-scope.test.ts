@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
+import { fixedDevice } from "../../testing/fixed-seed.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
 import { createScratchDir, spawnChrome } from "./browser-process.ts";
@@ -72,6 +73,7 @@ const setup = async () => {
     headless: true,
     identity: planIdentity({
       capabilities: { platform: process.platform },
+      device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",

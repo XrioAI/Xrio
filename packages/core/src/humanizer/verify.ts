@@ -399,6 +399,7 @@ export const evaluate = (
       mode: chosen.mode,
       notes: structuredClone(notes),
       observed: observedOf(observation, drifted ? undefined : fontEvidence),
+      seed: chosen.seed,
       surfaces: chosen.surfaces,
       tells: [
         ...TELL_ORDER.filter((tell) => TELLS[tell](observation)),
