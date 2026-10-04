@@ -1,6 +1,8 @@
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { FontStackFacts } from "../humanizer/contracts.ts";
+
 export const FIXTURE_PAYLOAD = "fe735e7625f633233c23b518ecaa0d5962c1f934481b70f51e7e302e3c8de141";
 
 export const FIXTURE_FAMILIES = [
@@ -29,6 +31,15 @@ const FIXTURE_FILES = {
   "share/truetype/Fixture-Bold.ttf": "bold\n",
   "share/truetype/Fixture.ttf": "regular\n",
 } as const satisfies Record<string, string>;
+
+export const CHECKED_FONT_STACK: FontStackFacts = {
+  cacheDir: "/tmp/xrio-501/fontcache-0123456789abcdef",
+  directory: "/opt/xrio-chrome/fontstack",
+  families: 175,
+  kind: "checked",
+  payload: "62bbc5617946311ab21ed9ec8ef22f68a15e4ccf06cebf01aca807fedb1def3d",
+  rules: ["10-antialias.conf", "60-latin.conf"],
+};
 
 export interface FakeFontStack {
   readonly binary: string;

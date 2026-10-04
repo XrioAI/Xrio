@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { HostCapabilities } from "../../humanizer/contracts.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
+import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
 import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
@@ -15,11 +17,12 @@ interface IdentityChoice {
   readonly headless: boolean;
   readonly platform: NodeJS.Platform;
   readonly timezone: string;
+  readonly fontStack?: HostCapabilities["fontStack"];
 }
 
-const identityFor = ({ headless, platform, timezone }: IdentityChoice): BrowserInputs =>
+const identityFor = ({ fontStack, headless, platform, timezone }: IdentityChoice): BrowserInputs =>
   planIdentity({
-    capabilities: { platform },
+    capabilities: fontStack === undefined ? { platform } : { fontStack, platform },
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: timezone,
     mode: headless ? "headless" : "headed",
@@ -202,6 +205,80 @@ describe(planLaunch, () => {
     });
   });
 
+  it("pins fontconfig to the checked stack, with the per-profile fonts.conf in the scratch", () => {
+    const plan = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/chrome/chrome",
+      display: undefined,
+      headless: true,
+      identity: identityFor({
+        fontStack: CHECKED_FONT_STACK,
+        headless: true,
+        platform: "linux",
+        timezone: "UTC",
+      }),
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect({
+      file: plan.env.FONTCONFIG_FILE,
+      path: plan.env.FONTCONFIG_PATH,
+      variables: Object.keys(plan.env).filter((name) => name.startsWith("FONTCONFIG")),
+    }).toStrictEqual({
+      file: `${scratchDir}/home/identity-files/fonts.conf`,
+      path: "/opt/xrio-chrome/fontstack/fonts",
+      variables: ["FONTCONFIG_PATH", "FONTCONFIG_FILE"],
+    });
+    expect(plan.files.map(({ path: file }) => file)).toStrictEqual([
+      `${scratchDir}/profile/Default/Preferences`,
+      `${scratchDir}/profile/Local State`,
+      `${scratchDir}/home/identity-files/fonts.conf`,
+    ]);
+  });
+
+  it("sets neither fontconfig variable without a checked stack, or off Linux", () => {
+    const stackless = [
+      identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      identityFor({
+        fontStack: {
+          kind: "refused",
+          reason: "fc-list printed 0 families, the manifest lists 175",
+        },
+        headless: true,
+        platform: "linux",
+        timezone: "UTC",
+      }),
+      identityFor({
+        fontStack: CHECKED_FONT_STACK,
+        headless: true,
+        platform: "darwin",
+        timezone: "UTC",
+      }),
+    ].map((identity) =>
+      planLaunch({
+        browserArgs: [],
+        browserPath: "/opt/chrome/chrome",
+        display: undefined,
+        headless: true,
+        identity,
+        scratchDir,
+        xauthority: undefined,
+      }),
+    );
+
+    expect(
+      stackless.map(({ env, files }) => [
+        Object.keys(env).filter((name) => name.startsWith("FONTCONFIG")),
+        files.length,
+      ]),
+    ).toStrictEqual([
+      [[], 2],
+      [[], 2],
+      [[], 2],
+    ]);
+  });
+
   it("writes the prediction, language and DNS-over-HTTPS preferences", () => {
     const { files } = planLaunch({
       browserArgs: [],
@@ -337,6 +414,14 @@ describe("the launch plan golden", () => {
   it("covers every combination of mode, platform, timezone, display and xauthority once", () => {
     expect(goldenCases.map(labelOf).toSorted()).toStrictEqual(Object.keys(golden).toSorted());
     expect(new Set(goldenCases.map(labelOf)).size).toBe(32);
+  });
+
+  it("holds no fontconfig variable in any plan made without a font stack", () => {
+    expect(
+      Object.values(golden).filter(({ env }) =>
+        Object.keys(env).some((name) => name.startsWith("FONTCONFIG")),
+      ),
+    ).toStrictEqual([]);
   });
 
   it.each(goldenCases.map((goldenCase) => [labelOf(goldenCase), goldenCase] as const))(

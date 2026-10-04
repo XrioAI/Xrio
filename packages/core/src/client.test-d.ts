@@ -243,6 +243,7 @@ describe("XrioClient types", () => {
       | "gpu"
       | "window"
       | "screen"
+      | "fonts"
       | "speech"
       | "leaks"
       | "media"

@@ -229,6 +229,21 @@ const violations = [
       "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const language = headers.get("Accept-Language");',
   },
+  {
+    message:
+      "`FONTCONFIG_FILE` is an environment variable the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'export const fontFile = { FONTCONFIG_FILE: "/x/fonts.conf" };',
+  },
+  {
+    message:
+      "`FONTCONFIG_PATH` is an environment variable the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'export const fontPath = { "FONTCONFIG_PATH": "/x" };',
+  },
+  {
+    message:
+      "`process.env.FONTCONFIG_FILE` is read by the Humanizer; take the value from the identity inputs.",
+    source: "export const { FONTCONFIG_FILE } = process.env;",
+  },
 ];
 
 const allowed = [

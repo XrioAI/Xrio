@@ -210,6 +210,7 @@ describe("the identity report", () => {
         },
         surfaces: {
           automation: null,
+          fonts: { reason: "no fontstack/ beside the binary", source: "host" },
           gpu: { backend: "swiftshader", persona: null },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
@@ -223,7 +224,7 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "UTC" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
-        tells: ["headless-token", "host-zone-utc"],
+        tells: ["headless-token", "host-zone-utc", "host-fonts"],
       },
     });
   });
@@ -255,7 +256,7 @@ describe("the identity report", () => {
     }).toStrictEqual({
       binary: { fork: "xrio", version: "154.0.8037.57" },
       speech: { persona: "basharsx4-google-linux-154" },
-      tells: ["headless-token", "host-zone-utc", "speech-persona-skew"],
+      tells: ["headless-token", "host-zone-utc", "host-fonts", "speech-persona-skew"],
     });
   });
 
@@ -305,6 +306,7 @@ describe("the identity report", () => {
         },
         surfaces: {
           automation: null,
+          fonts: { reason: null, source: "host" },
           gpu: { backend: "native" },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },

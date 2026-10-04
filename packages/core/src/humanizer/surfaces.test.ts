@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { noPins } from "../testing/no-pins.ts";
-import type { HostCapabilities } from "./contracts.ts";
+import type { FontStack, HostCapabilities } from "./contracts.ts";
+import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
@@ -63,6 +64,21 @@ const forkWith = (
     version: "154.0.8037.57",
   },
   platform: "linux",
+});
+
+const PAYLOAD = "62bbc5617946311ab21ed9ec8ef22f68a15e4ccf06cebf01aca807fedb1def3d";
+
+const STACK: FontStack = {
+  cacheDir: "/tmp/xrio-501/fontcache-0123456789abcdef",
+  directory: "/opt/xrio-chrome/fontstack",
+  families: 175,
+  payload: PAYLOAD,
+  rules: ["10-antialias.conf", "50-user.conf", "51-local.conf", "60-latin.conf"],
+};
+
+const withStack = (platform: NodeJS.Platform = "linux"): HostCapabilities => ({
+  fontStack: { ...STACK, kind: "checked" },
+  platform,
 });
 
 describe("the locale surface", () => {
@@ -531,6 +547,124 @@ describe("the media surface", () => {
   });
 });
 
+describe("the fonts surface", () => {
+  it("writes a per-profile fonts.conf from the checked stack and points both fontconfig variables at it", () => {
+    const { fonts } = resolveSurfaces(contextOf({ capabilities: withStack() }));
+
+    expect(fonts.inputs).toStrictEqual([
+      {
+        contents: fontConfigOf(STACK),
+        file: "fonts.conf",
+        name: "FONTCONFIG_FILE",
+        sink: "file-environment",
+      },
+      { name: "FONTCONFIG_PATH", sink: "environment", value: "/opt/xrio-chrome/fontstack/fonts" },
+    ]);
+  });
+
+  it("names the stack's absolute share directory and the per-host cache, and drops the user's rules", () => {
+    const [contents = ""] = resolveSurfaces(
+      contextOf({ capabilities: withStack() }),
+    ).fonts.inputs.flatMap((input) => (input.sink === "file-environment" ? [input.contents] : []));
+
+    expect(contents.split("\n").filter((line) => line.includes("<"))).toStrictEqual([
+      '<?xml version="1.0"?>',
+      '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">',
+      "<fontconfig>",
+      "  <dir>/opt/xrio-chrome/fontstack/share</dir>",
+      "  <cachedir>/tmp/xrio-501/fontcache-0123456789abcdef</cachedir>",
+      '  <include ignore_missing="no">/opt/xrio-chrome/fontstack/fonts/conf.d/10-antialias.conf</include>',
+      '  <include ignore_missing="no">/opt/xrio-chrome/fontstack/fonts/conf.d/60-latin.conf</include>',
+      "</fontconfig>",
+    ]);
+  });
+
+  it("reports the stack's payload and the digest of the config it wrote, and tells nothing", () => {
+    const { fonts } = resolveSurfaces(contextOf({ capabilities: withStack() }));
+
+    expect(fonts).not.toHaveProperty("tells");
+    expect(fonts).toMatchObject({
+      expected: [],
+      value: {
+        config: "af5559ed3284a8ae0b81fab350523bb7110e8017285701dd499fbadfcbadbd32",
+        payload: PAYLOAD,
+        source: "package",
+      },
+    });
+  });
+
+  it("reports the same config digest for the same rules at another path, with another cache", () => {
+    const moved: FontStack = {
+      ...STACK,
+      cacheDir: "/var/tmp/xrio-1002/fontcache-fedcba9876543210",
+      directory: "/srv/other/fontstack",
+    };
+
+    const digests = [STACK, moved].map((stack) => {
+      const { fonts } = resolveSurfaces(
+        contextOf({
+          capabilities: { fontStack: { ...stack, kind: "checked" }, platform: "linux" },
+        }),
+      );
+
+      return "config" in fonts.value ? fonts.value.config : null;
+    });
+
+    expect(digests).toStrictEqual(
+      Array.from(
+        { length: 2 },
+        () => "af5559ed3284a8ae0b81fab350523bb7110e8017285701dd499fbadfcbadbd32",
+      ),
+    );
+  });
+
+  it("reports another config digest when the rules the config includes change", () => {
+    const { fonts } = resolveSurfaces(
+      contextOf({
+        capabilities: {
+          fontStack: { ...STACK, kind: "checked", rules: [...STACK.rules, "70-extra.conf"] },
+          platform: "linux",
+        },
+      }),
+    );
+
+    expect("config" in fonts.value ? fonts.value.config : null).not.toBe(
+      "af5559ed3284a8ae0b81fab350523bb7110e8017285701dd499fbadfcbadbd32",
+    );
+  });
+
+  it("tells host-fonts on Linux with no stack beside the binary", () => {
+    expect(resolveSurfaces(contextOf()).fonts).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: ["host-fonts"],
+      value: { reason: "no fontstack/ beside the binary", source: "host" },
+    });
+  });
+
+  it("tells host-fonts with the reason a stack failed its check, and emits nothing", () => {
+    const capabilities: HostCapabilities = {
+      fontStack: { kind: "refused", reason: "fc-list printed 0 families, the manifest lists 175" },
+      platform: "linux",
+    };
+
+    expect(resolveSurfaces(contextOf({ capabilities })).fonts).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: ["host-fonts"],
+      value: { reason: "fc-list printed 0 families, the manifest lists 175", source: "host" },
+    });
+  });
+
+  it("sets no variable and tells nothing on macOS, whatever stack the capabilities carry", () => {
+    expect(resolveSurfaces(contextOf({ capabilities: withStack("darwin") })).fonts).toStrictEqual({
+      expected: [],
+      inputs: [],
+      value: { reason: null, source: "host" },
+    });
+  });
+});
+
 describe("the speech surface", () => {
   it("chooses nothing and emits nothing on a stock binary", () => {
     expect(resolveSurfaces(contextOf()).speech).toStrictEqual({
@@ -635,7 +769,7 @@ describe("the fork in the plan", () => {
 
     expect({ fork: plan.chosen.fork, tells: plan.tells }).toStrictEqual({
       fork: "xrio",
-      tells: ["speech-persona-skew"],
+      tells: ["host-fonts", "speech-persona-skew"],
     });
   });
 });
@@ -650,11 +784,21 @@ describe("emission order", () => {
 
 describe("the planned tells", () => {
   it("gathers what each surface's facts show", () => {
+    const capabilities = withStack();
+
     expect(
-      planIdentity(contextOf({ exit: proxyRoute, hostZone: "America/Chicago" })).tells,
+      planIdentity(contextOf({ capabilities, exit: proxyRoute, hostZone: "America/Chicago" }))
+        .tells,
     ).toStrictEqual(["exit-unknown"]);
-    expect(planIdentity(contextOf({ hostZone: "UTC" })).tells).toStrictEqual(["host-zone-utc"]);
-    expect(planIdentity(contextOf({ hostZone: "America/Chicago" })).tells).toStrictEqual([]);
+    expect(planIdentity(contextOf({ capabilities, hostZone: "UTC" })).tells).toStrictEqual([
+      "host-zone-utc",
+    ]);
+    expect(
+      planIdentity(contextOf({ capabilities, hostZone: "America/Chicago" })).tells,
+    ).toStrictEqual([]);
+    expect(planIdentity(contextOf({ hostZone: "America/Chicago" })).tells).toStrictEqual([
+      "host-fonts",
+    ]);
   });
 });
 
@@ -675,6 +819,7 @@ describe("the chosen identity", () => {
       mode: "headed",
       surfaces: {
         automation: null,
+        fonts: { reason: null, source: "host" },
         gpu: { backend: "native" },
         leaks: { dnsOverHttps: "off", networkPrediction: "off" },
         locale: { languages: ["en-US", "en"], tag: "en-US" },

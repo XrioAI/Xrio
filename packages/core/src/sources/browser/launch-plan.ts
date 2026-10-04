@@ -36,6 +36,8 @@ export interface LaunchPlan {
   files: readonly ProfileFile[];
 }
 
+const IDENTITY_FILES_DIRECTORY = "identity-files";
+
 const SWITCH = /^--[^\s=-][^\s=]*(?:=.*)?$/su;
 
 const HEADLESS_POINTER_SETTINGS =
@@ -174,9 +176,21 @@ const displayEnvironment = ({ display, headless, xauthority }: LaunchRequest) =>
   return Object.fromEntries(variables);
 };
 
+const identityFilePath = (directories: LaunchDirectories, name: string): string =>
+  path.join(directories.home, IDENTITY_FILES_DIRECTORY, name);
+
+const identityFileEnvironment = (
+  { identity }: LaunchRequest,
+  directories: LaunchDirectories,
+): Record<string, string> =>
+  Object.fromEntries(
+    identity.files.map(({ name, variable }) => [variable, identityFilePath(directories, name)]),
+  );
+
 const childEnvironment = (request: LaunchRequest, directories: LaunchDirectories) => ({
   HOME: directories.home,
   ...request.identity.environment,
+  ...identityFileEnvironment(request, directories),
   TMPDIR: directories.tmp,
   XDG_CACHE_HOME: path.join(directories.home, ".cache"),
   XDG_CONFIG_HOME: path.join(directories.home, ".config"),
@@ -196,6 +210,10 @@ const profileFiles = (
     contents: JSON.stringify({ auth: { schemes: "" }, ...identity.localState }),
     path: path.join(directories.profile, "Local State"),
   },
+  ...identity.files.map(({ contents, name }) => ({
+    contents,
+    path: identityFilePath(directories, name),
+  })),
 ];
 
 export const planLaunch = (request: LaunchRequest): LaunchPlan => {

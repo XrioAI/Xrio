@@ -2,6 +2,7 @@ import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
@@ -50,7 +51,7 @@ const linuxHeadless: Observation = {
 };
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
-  capabilities: { platform: "linux" },
+  capabilities: { fontStack: CHECKED_FONT_STACK, platform: "linux" },
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "Asia/Kolkata",
   mode: "headless",

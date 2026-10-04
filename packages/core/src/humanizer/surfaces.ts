@@ -2,6 +2,7 @@ import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
 import { knobOf } from "./contracts.ts";
 import type { GpuChoice, HostCapabilities, Insets, MediaDeviceCounts } from "./contracts.ts";
+import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
@@ -17,6 +18,8 @@ const SCREEN = { height: 1080, width: 1920, workAreaInset: 40 } as const;
 const WINDOW = { height: 900, width: 1600 } as const;
 
 const NETWORK_PREDICTION_NEVER = 2;
+
+const NO_FONT_STACK = "no fontstack/ beside the binary";
 
 export interface ExitChoice {
   readonly route: Route["kind"];
@@ -45,6 +48,9 @@ export interface SurfaceChoices {
   readonly screen:
     | { readonly source: "fixed"; readonly size: Size; readonly workArea: Insets }
     | { readonly source: "host" };
+  readonly fonts:
+    | { readonly source: "package"; readonly payload: string; readonly config: string }
+    | { readonly source: "host"; readonly reason: string | null };
   readonly speech: { readonly persona: string | null };
   readonly leaks: { readonly networkPrediction: "off"; readonly dnsOverHttps: "off" };
   readonly media:
@@ -66,6 +72,7 @@ export const EMISSION_ORDER = [
   "gpu",
   "window",
   "screen",
+  "fonts",
   "speech",
   "leaks",
   "media",
@@ -261,6 +268,41 @@ const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["sc
       }
     : { expected: [], inputs: [], value: { source: "host" } };
 
+const resolveFonts = ({
+  capabilities,
+}: Pick<IdentityContext, "capabilities">): Resolutions["fonts"] => {
+  const { fontStack } = capabilities;
+
+  if (capabilities.platform !== "linux") {
+    return { expected: [], inputs: [], value: { reason: null, source: "host" } };
+  }
+
+  if (fontStack?.kind !== "checked") {
+    return {
+      expected: [],
+      inputs: [],
+      tells: ["host-fonts"],
+      value: { reason: fontStack?.reason ?? NO_FONT_STACK, source: "host" },
+    };
+  }
+
+  const config = fontConfigOf(fontStack);
+
+  return {
+    expected: [],
+    inputs: [
+      {
+        contents: config,
+        file: FONT_CONFIG_NAME,
+        name: "FONTCONFIG_FILE",
+        sink: "file-environment",
+      },
+      { name: "FONTCONFIG_PATH", sink: "environment", value: fontConfigPathOf(fontStack) },
+    ],
+    value: { config: fontConfigDigestOf(fontStack), payload: fontStack.payload, source: "package" },
+  };
+};
+
 const resolveSpeech = ({
   capabilities,
 }: Pick<IdentityContext, "capabilities">): Resolutions["speech"] => {
@@ -325,6 +367,7 @@ const resolveAutomation = ({
 
 export const resolveSurfaces = (context: IdentityContext): Resolutions => ({
   automation: resolveAutomation(context),
+  fonts: resolveFonts(context),
   gpu: resolveGpu(context),
   leaks: resolveLeaks(),
   locale: resolveLocale(context),

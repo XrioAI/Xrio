@@ -90,6 +90,27 @@ describe(mergeBrowserInputs, () => {
     });
   });
 
+  it("keeps a file input apart, naming the variable that points at it", () => {
+    const inputs = mergeBrowserInputs(
+      resolutionsOf({
+        fonts: [
+          {
+            contents: "<fontconfig/>",
+            file: "fonts.conf",
+            name: "FONTCONFIG_FILE",
+            sink: "file-environment",
+          },
+          { name: "FONTCONFIG_PATH", sink: "environment", value: "/opt/stack/fonts" },
+        ],
+      }),
+    );
+
+    expect({ environment: inputs.environment, files: inputs.files }).toStrictEqual({
+      environment: { FONTCONFIG_PATH: "/opt/stack/fonts" },
+      files: [{ contents: "<fontconfig/>", name: "fonts.conf", variable: "FONTCONFIG_FILE" }],
+    });
+  });
+
   it("throws when two surfaces emit one owned name", () => {
     expect(() =>
       mergeBrowserInputs(
@@ -128,11 +149,12 @@ describe(mergeBrowserInputs, () => {
     expect([
       Object.isFrozen(inputs),
       Object.isFrozen(inputs.switches),
+      Object.isFrozen(inputs.files),
       Object.isFrozen(inputs.environment),
       Object.isFrozen(inputs.preferences),
       Object.isFrozen(inputs.localState),
       Object.isFrozen(inputs.localState.dns_over_https),
-    ]).toStrictEqual([true, true, true, true, true, true]);
+    ]).toStrictEqual([true, true, true, true, true, true, true]);
   });
 
   it("recognises what it minted and nothing copied from it", () => {

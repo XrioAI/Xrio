@@ -51,16 +51,18 @@ export type FactTell =
   | "host-zone-utc"
   | "exit-unknown"
   | "speech-persona-skew"
-  | "http-profile-skew";
+  | "http-profile-skew"
+  | "host-fonts";
 
 export type IdentityTell =
   | "no-taskbar"
   | "display-implausible"
   | "headless-token"
   | "unmeasured-chrome"
-  | FactTell;
+  | FactTell
+  | "fonts-drift";
 
-type ObservedTell = Exclude<IdentityTell, FactTell>;
+type ObservedTell = Exclude<IdentityTell, FactTell | "fonts-drift">;
 
 export interface Evaluation {
   readonly report: BrowserIdentityReport;

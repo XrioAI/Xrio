@@ -4,6 +4,7 @@ import type { ESTree } from "vite-plus/lint/plugins";
 import {
   FORK_SWITCH_PREFIXES,
   OWNED_ENVIRONMENT,
+  OWNED_FILE_ENVIRONMENT,
   OWNED_HEADERS,
   OWNED_LOCAL_STATE,
   OWNED_PREFERENCES,
@@ -19,13 +20,15 @@ interface LiteralMatcher {
 
 const PROFILE_SETTINGS: readonly string[] = [...OWNED_PREFERENCES, ...OWNED_LOCAL_STATE];
 
+const ENVIRONMENT_NAMES: readonly string[] = [...OWNED_ENVIRONMENT, ...OWNED_FILE_ENVIRONMENT];
+
 const literalMatchers: readonly LiteralMatcher[] = [
   {
     find: (text) => OWNED_SWITCHES.find((name) => text === name || text.startsWith(`${name}=`)),
     kind: "switch",
   },
   { find: (text) => FORK_SWITCH_PREFIXES.find((prefix) => text.startsWith(prefix)), kind: "fork" },
-  { find: (text) => OWNED_ENVIRONMENT.find((name) => name === text), kind: "environment" },
+  { find: (text) => ENVIRONMENT_NAMES.find((name) => name === text), kind: "environment" },
   { find: (text) => PROFILE_SETTINGS.find((name) => name === text), kind: "preference" },
   { find: (text) => OWNED_HEADERS.find((name) => name === text.toLowerCase()), kind: "header" },
 ];
@@ -117,7 +120,7 @@ const memberName = ({ computed, property }: ESTree.MemberExpression): string | u
   !computed && property.type === "Identifier" ? property.name : undefined;
 
 const ownedVariable = (name: string | undefined): string | undefined =>
-  OWNED_ENVIRONMENT.find((owned) => owned === name);
+  ENVIRONMENT_NAMES.find((owned) => owned === name);
 
 export default defineRule({
   create: (context) => {

@@ -1,4 +1,4 @@
-import type { LaunchInput } from "./owned-inputs.ts";
+import type { LaunchInput, OWNED_FILE_ENVIRONMENT } from "./owned-inputs.ts";
 import { EMISSION_ORDER } from "./surfaces.ts";
 import type { SurfaceName } from "./surfaces.ts";
 
@@ -10,10 +10,17 @@ interface JsonObject {
   [key: string]: string | number | JsonObject;
 }
 
+interface InputFile {
+  readonly variable: (typeof OWNED_FILE_ENVIRONMENT)[number];
+  readonly name: string;
+  readonly contents: string;
+}
+
 export interface BrowserInputs {
   readonly [MINTED]: true;
   readonly switches: readonly string[];
   readonly environment: Readonly<Record<string, string>>;
+  readonly files: readonly InputFile[];
   readonly preferences: Readonly<JsonObject>;
   readonly localState: Readonly<JsonObject>;
 }
@@ -54,6 +61,7 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
   const owners = new Map<string, SurfaceName>();
   const switches: string[] = [];
   const environment: Record<string, string> = {};
+  const files: InputFile[] = [];
   const preferences: JsonObject = {};
   const localState: JsonObject = {};
 
@@ -66,6 +74,11 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
 
       case "environment": {
         environment[input.name] = input.value;
+        break;
+      }
+
+      case "file-environment": {
+        files.push({ contents: input.contents, name: input.file, variable: input.name });
         break;
       }
 
@@ -102,6 +115,7 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
   const inputs: BrowserInputs = {
     [MINTED]: true,
     environment: Object.freeze(environment),
+    files: Object.freeze(files),
     localState: freezeJson(localState),
     preferences: freezeJson(preferences),
     switches: Object.freeze(switches),

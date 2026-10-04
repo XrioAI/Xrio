@@ -1,6 +1,6 @@
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
@@ -15,6 +15,7 @@ import { planIdentity } from "../../humanizer/humanizer.ts";
 import { AFTER_CAPTURE_READ, evaluate } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
+import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
 import { fakeForkPath } from "../../testing/fake-fork.ts";
 import type { FakeForkScenario } from "../../testing/fake-fork.ts";
 import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
@@ -1220,6 +1221,34 @@ describe("the identity a visit launches Chrome with", () => {
     });
   });
 
+  it("writes the checked font stack's fonts.conf into the scratch before Chrome starts", async () => {
+    const seen: { file: string | undefined; config: string }[] = [];
+
+    const readingDriver: BrowserDriver = {
+      launch: async (plan, deadline, owned, deferCleanup) => {
+        const file = plan.env.FONTCONFIG_FILE;
+
+        seen.push({ config: file === undefined ? "" : await readFile(file, "utf-8"), file });
+
+        return await cdpDriver.launch(plan, deadline, owned, deferCleanup);
+      },
+    };
+
+    using deadline = startDeadline(10_000);
+
+    const browsers = createBrowsers(readingDriver, 1, {
+      hostCapabilities: async () =>
+        await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" }),
+    });
+
+    await browsers.load(await normalRequest(deadline));
+    await browsers.close();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.file).toMatch(/\/home\/identity-files\/fonts\.conf$/u);
+    expect(seen[0]?.config).toContain("<dir>/opt/xrio-chrome/fontstack/share</dir>");
+  });
+
   it.each([
     {
       capabilities: { platform: "linux" },
@@ -1335,8 +1364,11 @@ describe("the launch identity check", () => {
         timeZone: "UTC",
         window: { outerHeight: 900, outerWidth: 1600 },
       },
-      surfaces: { timezone: { source: "host", zone: "UTC" } },
-      tells: ["headless-token", "host-zone-utc"],
+      surfaces: {
+        fonts: { reason: "no fontstack/ beside the binary", source: "host" },
+        timezone: { source: "host", zone: "UTC" },
+      },
+      tells: ["headless-token", "host-zone-utc", "host-fonts"],
     });
   });
 
@@ -1357,7 +1389,7 @@ describe("the launch identity check", () => {
     await browsers.close();
     expect(document.identity).toMatchObject({
       surfaces: { timezone: { source: "pin", zone: "UTC" } },
-      tells: ["headless-token"],
+      tells: ["headless-token", "host-fonts"],
     });
   });
 

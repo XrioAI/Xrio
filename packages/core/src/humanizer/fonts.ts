@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import type { FontStack } from "./contracts.ts";
@@ -29,6 +30,11 @@ export const fontConfigOf = ({ cacheDir, directory, rules }: FontStack): string 
     "</fontconfig>",
     "",
   ].join("\n");
+
+export const fontConfigDigestOf = (stack: FontStack): string =>
+  createHash("sha256")
+    .update(fontConfigOf({ ...stack, cacheDir: "@cache", directory: "@stack" }))
+    .digest("hex");
 
 export const fontCheckEnvironment = (
   stack: FontStack,

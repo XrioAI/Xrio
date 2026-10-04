@@ -28,6 +28,7 @@ export interface IdentityPlan {
 
 const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   automation: resolutions.automation.value,
+  fonts: resolutions.fonts.value,
   gpu: resolutions.gpu.value,
   leaks: resolutions.leaks.value,
   locale: resolutions.locale.value,
