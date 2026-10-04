@@ -61,6 +61,8 @@ const PROBE =
 
 const IDENTITY_REPORT = /<pre id="identity">(?<report>[^<]*)<\/pre>/u;
 
+const MEDIA_REPORT = /<pre id="media">(?<report>[^<]*)<\/pre>/u;
+
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const capturedPages = [
@@ -572,6 +574,24 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
     });
     expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
   });
+
+  it.runIf(process.platform === "linux")(
+    "lists one unlabelled microphone and speaker and no camera on Linux, with no permission granted",
+    async () => {
+      const { html } = await load(mode, "/media");
+      const report: unknown = JSON.parse(MEDIA_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toStrictEqual({
+        kinds: { audioinput: 1, audiooutput: 1 },
+        named: [],
+        permissions: { camera: "prompt", microphone: "prompt" },
+        requests:
+          mode === "headless"
+            ? { audio: "NotAllowedError", video: "NotFoundError" }
+            : { audio: "pending", video: "pending" },
+      });
+    },
+  );
 
   it("reads after capture in an isolated world, out of reach of the page's own wrappers", async () => {
     const { identity } = await load(mode, "/watch");

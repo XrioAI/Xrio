@@ -12,6 +12,8 @@ const OVERSIZED_FILLER_CODE_UNITS = 33 * 1024 * 1024;
 
 const WINDOW_SIZE_POLL_MS = 10;
 
+const MEDIA_REQUEST_WAIT_MS = 1500;
+
 const WINDOW_SIZE_GIVE_UP_MS = 5000;
 
 const CYRILLIC_WINDOWS_1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
@@ -122,6 +124,37 @@ const WATCH_SCRIPT = `<script>
       return memory.get.call(this);
     },
   });
+})();
+</script>`;
+
+const MEDIA_REPORT_SCRIPT = `<script>
+(async () => {
+  const kinds = {};
+  const named = [];
+  for (const device of await navigator.mediaDevices.enumerateDevices()) {
+    kinds[device.kind] = (kinds[device.kind] ?? 0) + 1;
+    if (device.label !== "" || device.deviceId !== "" || device.groupId !== "") {
+      named.push(device.kind);
+    }
+  }
+  const permissions = {};
+  for (const name of ["camera", "microphone"]) {
+    permissions[name] = (await navigator.permissions.query({ name })).state;
+  }
+  const answerTo = (constraints) =>
+    Promise.race([
+      navigator.mediaDevices.getUserMedia(constraints).then(
+        (stream) => {
+          stream.getTracks().forEach((track) => track.stop());
+          return "granted";
+        },
+        (error) => error.name,
+      ),
+      new Promise((resolve) => setTimeout(resolve, ${MEDIA_REQUEST_WAIT_MS}, "pending")),
+    ]);
+  const requests = { audio: await answerTo({ audio: true }), video: await answerTo({ video: true }) };
+  document.getElementById("media").textContent = JSON.stringify({ kinds, named, permissions, requests });
+  fetch("/media-done");
 })();
 </script>`;
 
@@ -547,6 +580,25 @@ const routes = new Map<
       response.end();
     },
   ],
+  [
+    "/media",
+    (response) => {
+      requestedPaths.delete("/media-done");
+      sendPage(
+        response,
+        "media",
+        `<pre id="media"></pre>${MEDIA_REPORT_SCRIPT}<script src="/media-settled.js"></script>`,
+      );
+    },
+  ],
+  [
+    "/media-done",
+    (response) => {
+      response.writeHead(204);
+      response.end();
+    },
+  ],
+  ["/media-settled.js", holdScriptUntilRequested("/media-done")],
   ["/identity-settled.js", holdScriptUntilRequested("/identity-sized")],
   [
     "/identity-realm.js",
