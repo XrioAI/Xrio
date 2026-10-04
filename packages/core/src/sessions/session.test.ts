@@ -16,7 +16,7 @@ const named: Extract<SessionContext, { kind: "named" }> = {
   id: "shop-1",
   kind: "named",
   ownership: { epoch: 1, expiresAt: 60_000, signal: new AbortController().signal },
-  pins: { locale: undefined, timezone: "Europe/Berlin" },
+  pins: { display: undefined, locale: undefined, timezone: "Europe/Berlin" },
   record: {
     device: {
       cores: 8,

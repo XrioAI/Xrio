@@ -5,9 +5,10 @@ import { noPins } from "../testing/no-pins.ts";
 import type { FontStack, HostCapabilities } from "./contracts.ts";
 import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
+import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
-import type { IdentityContext } from "./surfaces.ts";
+import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
   capabilities: { platform: "linux" },
@@ -20,7 +21,7 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
 });
 
 const pinnedTo = (locale: string): Partial<IdentityContext> => ({
-  pins: { locale, timezone: undefined },
+  pins: { display: undefined, locale, timezone: undefined },
 });
 
 const expectedLocale = (
@@ -513,6 +514,7 @@ describe("the screen surface", () => {
     expect(resolveSurfaces(contextOf({ mode: "headed" })).screen).toStrictEqual({
       expected: [],
       inputs: [],
+      tells: [],
       value: { source: "host" },
     });
   });
@@ -886,6 +888,64 @@ describe("the chosen identity", () => {
         timezone: { source: "host", zone: "Europe/Berlin" },
         window: { size: { height: 900, width: 1600 }, source: "fixed" },
       },
+    });
+  });
+});
+
+const lane5 = {
+  screens: [{ height: 900, weight: 1, width: 1440 }],
+  taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
+  windows: [{ kind: "maximized", weight: 1 }],
+} as const;
+
+const pinned = (display: IdentityIntent["display"], mode: IdentityContext["mode"] = "headless") =>
+  planIdentity(contextOf({ mode, pins: { ...noPins, display } })).chosen.surfaces;
+
+describe("a display the caller pins", () => {
+  it("presents the pinned screen, taskbar and maximized window in headless mode", () => {
+    expect(pinned(lane5)).toMatchObject({
+      screen: {
+        layout: null,
+        size: { height: 900, width: 1440 },
+        source: "display",
+        workArea: { bottom: 48, left: 0, right: 0, top: 0 },
+      },
+      window: { height: 852, kind: "maximized", source: "display", width: 1440, x: 0, y: 0 },
+    });
+  });
+
+  it("draws what the caller leaves out, and places a sized window inside the work area", () => {
+    const surfaces = pinned({
+      screens: undefined,
+      taskbars: undefined,
+      windows: [{ height: 700, kind: "sized", weight: 1, width: 1300 }],
+    });
+
+    expect(surfaces).toMatchObject({
+      screen: { layout: "gnome", size: { height: 1050, width: 1680 }, source: "drawn" },
+      window: { height: 700, kind: "floating", source: "display", width: 1300 },
+    });
+    expect(surfaces.window).toSatisfy(
+      (window: SurfaceChoices["window"]) =>
+        "x" in window &&
+        window.x >= 0 &&
+        window.y >= 32 &&
+        window.x + window.width <= 1680 &&
+        window.y + window.height <= 1050,
+    );
+  });
+
+  it("changes nothing in headed mode and tells that the pin was not honoured", () => {
+    const headed = planIdentity(contextOf({ mode: "headed", pins: { ...noPins, display: lane5 } }));
+
+    expect({
+      screen: headed.chosen.surfaces.screen,
+      tells: headed.tells,
+      window: headed.chosen.surfaces.window,
+    }).toStrictEqual({
+      screen: { source: "host" },
+      tells: ["display-pin-unhonored", "host-fonts"],
+      window: { size: { height: 900, width: 1600 }, source: "fixed" },
     });
   });
 });

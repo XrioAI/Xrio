@@ -542,6 +542,7 @@ describe("locale option", () => {
 
     expect(defaults.locale).toBeUndefined();
     expect(resolveScrapeOptions(page, defaults).source.pins).toStrictEqual({
+      display: undefined,
       locale: undefined,
       timezone: undefined,
     });
@@ -614,6 +615,280 @@ describe("locale option", () => {
       );
     },
   );
+});
+
+const refusal = (message: string) => ({ code: "INVALID_OPTIONS", message, name: "TypeError" });
+
+describe("display option", () => {
+  const browser = { browserPath: "/browser", mode: "headless" } as const;
+
+  it("turns single values into one-row tables and leaves the rest to the draw", () => {
+    expect(
+      resolveClientOptions({
+        ...browser,
+        display: {
+          screen: { height: 900, width: 1440 },
+          taskbar: { bottom: 48 },
+          window: "maximized",
+        },
+      }).display,
+    ).toStrictEqual({
+      screens: [{ height: 900, weight: 1, width: 1440 }],
+      taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
+      windows: [{ kind: "maximized", weight: 1 }],
+    });
+    expect(resolveClientOptions({ ...browser, display: { taskbar: {} } }).display).toStrictEqual({
+      screens: undefined,
+      taskbars: [{ bottom: 0, left: 0, right: 0, top: 0, weight: 1 }],
+      windows: undefined,
+    });
+    expect(resolveClientOptions(browser).display).toBeUndefined();
+  });
+
+  it("keeps weighted tables, sized windows and their positions", () => {
+    expect(
+      resolveClientOptions({
+        ...browser,
+        display: {
+          screen: [
+            { height: 1080, weight: 40, width: 1920 },
+            { height: 1440, weight: 7, width: 2560 },
+          ],
+          taskbar: [
+            { left: 64, top: 32, weight: 3 },
+            { bottom: 48, weight: 2 },
+          ],
+          window: [
+            { maximized: true, weight: 4 },
+            { height: 800, weight: 1, width: 1280 },
+            { height: 700, weight: 1, width: 1300, x: 100, y: 120 },
+          ],
+        },
+      }).display,
+    ).toStrictEqual({
+      screens: [
+        { height: 1080, weight: 40, width: 1920 },
+        { height: 1440, weight: 7, width: 2560 },
+      ],
+      taskbars: [
+        { bottom: 0, left: 64, right: 0, top: 32, weight: 3 },
+        { bottom: 48, left: 0, right: 0, top: 0, weight: 2 },
+      ],
+      windows: [
+        { kind: "maximized", weight: 4 },
+        { height: 800, kind: "sized", weight: 1, width: 1280 },
+        { height: 700, kind: "sized", position: { x: 100, y: 120 }, weight: 1, width: 1300 },
+      ],
+    });
+  });
+
+  it("lets a scrape replace one field of the client's display and keeps the others", () => {
+    const defaults = resolveClientOptions({
+      ...browser,
+      display: { screen: { height: 900, width: 1440 }, taskbar: { bottom: 48 } },
+    });
+
+    expect(
+      resolveScrapeOptions({ ...page, display: { taskbar: { top: 32 } } }, defaults).source.pins
+        .display,
+    ).toStrictEqual({
+      screens: [{ height: 900, weight: 1, width: 1440 }],
+      taskbars: [{ bottom: 0, left: 0, right: 0, top: 32, weight: 1 }],
+      windows: undefined,
+    });
+    expect(resolveScrapeOptions(page, defaults).source.pins.display).toBe(defaults.display);
+  });
+
+  it.each([
+    {
+      display: { screen: { height: 900, width: 1440 }, window: { height: 900, width: 1440 } },
+      message:
+        "display window 1440x900 at 0,32 does not fit the 1440x868 work area at 0,32 of a 1440x900 screen.",
+      name: "a window taller than the work area under a drawn top bar",
+    },
+    {
+      display: {
+        screen: { height: 900, width: 1440 },
+        taskbar: { top: 32 },
+        window: { height: 800, width: 1200, x: 300, y: 10 },
+      },
+      message:
+        "display window 1200x800 at 300,10 does not fit the 1440x868 work area at 0,32 of a 1440x900 screen.",
+      name: "a window placed over the top bar",
+    },
+    {
+      display: { screen: { height: 900, width: 1440 }, window: { height: 600, width: 499 } },
+      message:
+        "display leaves a 499x600 window in the 1440x868 work area at 0,32 of a 1440x900 screen, under Chrome's 500x88 px minimum window.",
+      name: "a window under Chrome's minimum width",
+    },
+    {
+      display: { screen: { height: 600, width: 800 }, taskbar: { left: 400 } },
+      message:
+        "display leaves a 400x600 window in the 400x600 work area at 400,0 of a 800x600 screen, under Chrome's 500x88 px minimum window.",
+      name: "a taskbar that leaves a maximized window under the minimum",
+    },
+    {
+      display: {
+        screen: { height: 900, width: 1440 },
+        taskbar: {},
+        window: { height: 50, width: 600, x: 0, y: 0 },
+      },
+      message:
+        "display leaves a 600x50 window in the 1440x900 work area at 0,0 of a 1440x900 screen, under Chrome's 500x88 px minimum window.",
+      name: "a window shorter than Chrome's minimum height",
+    },
+    {
+      display: { screen: { height: 900, width: 1440 }, taskbar: { top: 820 }, window: "maximized" },
+      message:
+        "display leaves a 1440x80 window in the 1440x80 work area at 0,820 of a 1440x900 screen, under Chrome's 500x88 px minimum window.",
+      name: "a taskbar that leaves a maximized window under the minimum height",
+    },
+    {
+      display: { window: { height: 1000, width: 1700 } },
+      message:
+        "display window 1700x1000 at 0,32 does not fit the 1366x736 work area at 0,32 of a 1366x768 screen.",
+      name: "a window that does not fit one of Xrio's screens",
+    },
+  ] as const)("refuses $name", ({ display, message }) => {
+    expect(() => resolveClientOptions({ ...browser, display })).toThrow(
+      expect.objectContaining(refusal(message)),
+    );
+  });
+
+  it("accepts a window at exactly Chrome's 500x88 px minimum", () => {
+    expect(
+      resolveClientOptions({
+        ...browser,
+        display: {
+          screen: { height: 900, width: 1440 },
+          taskbar: {},
+          window: { height: 88, width: 500 },
+        },
+      }).display?.windows,
+    ).toStrictEqual([{ height: 88, kind: "sized", weight: 1, width: 500 }]);
+  });
+
+  it("checks a scrape's display against the client's fields it keeps", () => {
+    const defaults = resolveClientOptions({
+      ...browser,
+      display: { screen: { height: 768, width: 1366 } },
+    });
+
+    expect(() =>
+      resolveScrapeOptions(
+        { ...page, display: { window: { height: 900, width: 1600 } } },
+        defaults,
+      ),
+    ).toThrow(
+      expect.objectContaining(
+        refusal(
+          "display window 1600x900 at 0,32 does not fit the 1366x736 work area at 0,32 of a 1366x768 screen.",
+        ),
+      ),
+    );
+  });
+
+  it.each([
+    {
+      display: { screen: { height: 900, width: 0 } },
+      message:
+        "display.screen takes a width and a height in whole pixels, such as { width: 1440, height: 900 }.",
+    },
+    {
+      display: { screen: { height: 900.5, width: 1440 } },
+      message:
+        "display.screen takes a width and a height in whole pixels, such as { width: 1440, height: 900 }.",
+    },
+    {
+      display: { screen: [] },
+      message: "display.screen must be a value or a non-empty weighted table.",
+    },
+    {
+      display: { screen: [{ height: 900, weight: 0, width: 1440 }] },
+      message: "display.screen weights must be positive numbers.",
+    },
+    {
+      display: { taskbar: { bottom: -1 } },
+      message:
+        "display.taskbar takes top, right, bottom and left insets in whole pixels, such as { bottom: 48 }.",
+    },
+    {
+      display: { screen: { dpr: 2, height: 900, width: 1440 } },
+      message:
+        "display.screen takes a width and a height in whole pixels, such as { width: 1440, height: 900 }.",
+    },
+    {
+      display: { window: { height: 800, left: 10, width: 1200 } },
+      message:
+        "display.window takes a width and a height in whole pixels, with an optional x and y.",
+    },
+    {
+      display: { taskbar: { height: 40 } },
+      message:
+        "display.taskbar takes top, right, bottom and left insets in whole pixels, such as { bottom: 48 }.",
+    },
+    {
+      display: { window: { height: 800, width: 1200, x: 10 } },
+      message: "display.window x and y must be given together, as whole pixels.",
+    },
+    {
+      display: { window: "fullscreen" },
+      message: "display.window must be a value or a non-empty weighted table.",
+    },
+    { display: { dpr: 2 }, message: "display takes screen, taskbar and window." },
+    {
+      display: { window: [{ height: 600, maximized: true, weight: 1, width: 900 }] },
+      message:
+        "display.window rows that maximize take only { maximized: true, weight }, with no size.",
+    },
+    {
+      display: { window: [{ maximized: true, typo: 1, weight: 1 }] },
+      message:
+        "display.window rows that maximize take only { maximized: true, weight }, with no size.",
+    },
+    {
+      display: { window: [{ maximized: "no", weight: 1 }] },
+      message:
+        "display.window rows that maximize take only { maximized: true, weight }, with no size.",
+    },
+    {
+      display: {
+        screen: [
+          { height: 1080, weight: 1e308, width: 1920 },
+          { height: 900, weight: 1e308, width: 1440 },
+        ],
+      },
+      message: "display.screen weights must add up to a finite number.",
+    },
+    { display: null, message: "display takes screen, taskbar and window." },
+  ])("refuses the malformed display $display", ({ display, message }) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, display })).toThrow(
+      expect.objectContaining(refusal(message)),
+    );
+  });
+
+  it("is only for browser modes", () => {
+    const notInHttp = refusal("display is only supported in browser modes.");
+
+    // @ts-expect-error display needs a browser mode.
+    expect(() => resolveClientOptions({ display: { window: "maximized" }, mode: "http" })).toThrow(
+      expect.objectContaining(notInHttp),
+    );
+    expect(() =>
+      resolveScrapeOptions(
+        { ...page, display: { window: "maximized" } },
+        resolveClientOptions({ mode: "http" }),
+      ),
+    ).toThrow(expect.objectContaining(notInHttp));
+    expect(
+      resolveScrapeOptions(
+        { ...page, mode: "http" },
+        resolveClientOptions({ ...browser, display: { window: "maximized" } }),
+      ).source.pins.display,
+    ).toBeUndefined();
+  });
 });
 
 describe("the cache directory", () => {

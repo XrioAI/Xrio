@@ -65,7 +65,8 @@ export type FactTell =
   | "speech-persona-skew"
   | "http-profile-skew"
   | "host-fonts"
-  | "replay-host-skew";
+  | "replay-host-skew"
+  | "display-pin-unhonored";
 
 export type IdentityTell =
   | "no-taskbar"
@@ -336,7 +337,8 @@ const TELLS: Readonly<Record<ObservedTell, (observation: Observation) => boolean
   "display-implausible": ({ colorDepth, screenWidth }) =>
     screenWidth < PLAUSIBLE_MIN_WIDTH || colorDepth !== PLAUSIBLE_COLOR_DEPTH,
   "headless-token": ({ userAgent }) => userAgent.includes("HeadlessChrome"),
-  "no-taskbar": ({ availHeight, screenHeight }) => availHeight === screenHeight,
+  "no-taskbar": ({ availHeight, availWidth, screenHeight, screenWidth }) =>
+    availHeight === screenHeight && availWidth === screenWidth,
   "unmeasured-chrome": ({ product }) => !isMeasured(product),
 };
 

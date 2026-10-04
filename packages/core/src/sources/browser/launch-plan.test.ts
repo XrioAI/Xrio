@@ -327,7 +327,7 @@ describe(planLaunch, () => {
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
-        pins: { locale: "de-DE", timezone: undefined },
+        pins: { display: undefined, locale: "de-DE", timezone: undefined },
       }).inputs,
       scratchDir,
       xauthority: undefined,

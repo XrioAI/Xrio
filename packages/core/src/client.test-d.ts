@@ -13,6 +13,7 @@ import type {
   Coverage,
   CoverageReason,
   CoveredSurface,
+  DisplayOptions,
   ErrorCode,
   HttpIdentityReport,
   IdentityMismatch,
@@ -123,6 +124,54 @@ describe("XrioClient types", () => {
     ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
     // @ts-expect-error A locale is one tag, not a list.
     void new XrioClient({ locale: ["de-DE"], mode: "http" });
+  });
+
+  it("takes display in browser modes only, as values or weighted tables", () => {
+    const url = "https://example.com";
+
+    const browser = new XrioClient({
+      browserPath: "/browser",
+      display: {
+        screen: [
+          { height: 1080, weight: 40, width: 1920 },
+          { height: 1440, weight: 7, width: 2560 },
+        ],
+        taskbar: [
+          { left: 64, top: 32, weight: 3 },
+          { bottom: 48, weight: 2 },
+        ],
+        window: "maximized",
+      },
+    });
+
+    expectTypeOf<ClientOptions["display"]>().toEqualTypeOf<DisplayOptions | undefined>();
+    void browser.scrape({
+      display: { screen: { height: 900, width: 1440 }, taskbar: {} },
+      format: "html",
+      url,
+    });
+    void browser.scrape({
+      display: {
+        window: [
+          { maximized: true, weight: 3 },
+          { height: 800, weight: 1, width: 1280, x: 0, y: 32 },
+        ],
+      },
+      format: "html",
+      url,
+    });
+    // @ts-expect-error An http client has no screen to present.
+    void new XrioClient({ display: { window: "maximized" }, mode: "http" });
+    // @ts-expect-error An explicit http mode takes no display.
+    void browser.scrape({ display: { window: "maximized" }, format: "html", mode: "http", url });
+    void browser.scrape({
+      // @ts-expect-error A table row needs a weight.
+      display: { screen: [{ height: 900, width: 1440 }] },
+      format: "html",
+      url,
+    });
+    // @ts-expect-error A window is maximized or a size.
+    void browser.scrape({ display: { window: "fullscreen" }, format: "html", url });
   });
 
   it("takes timezone in browser modes only, as a client default and per scrape", () => {

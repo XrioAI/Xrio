@@ -602,8 +602,8 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
     "presents the pinned $tag in the page, the Intl language and the request header",
     async ({ header, languages, tag }) => {
       const { html, identity } = await load(mode, "/identity", 20_000, undefined, [], {
+        ...noPins,
         locale: tag,
-        timezone: undefined,
       });
 
       const reportText = IDENTITY_REPORT.exec(html)?.groups?.report ?? "null";
@@ -615,7 +615,9 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
         (INTL_LOCALE.exec(reportText)?.groups?.locale ?? "").startsWith(intlLanguage),
       ).toBeTruthy();
       expect(ACCEPT_LANGUAGE.exec(html)?.groups?.header).toBe(header);
-      expect(identity).toMatchObject({ surfaces: { locale: { languages, tag } } });
+      expect(identity).toMatchObject({
+        surfaces: { locale: { languages, tag } },
+      });
     },
   );
 

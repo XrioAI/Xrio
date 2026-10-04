@@ -1534,7 +1534,7 @@ describe("the launch identity check", () => {
         await settledValue(
           browsers.load({
             ...(await normalRequest(deadline)),
-            pins: { locale: "de-DE", timezone: undefined },
+            pins: { display: undefined, locale: "de-DE", timezone: undefined },
           }),
         ),
     );

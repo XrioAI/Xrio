@@ -5,7 +5,7 @@ import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
 import { DeviceRecordRefusedError, readDeviceRecord } from "./contracts.ts";
 import type { DeviceRecord, Observation } from "./contracts.ts";
-import { drawDisplay, seedOf, windowBounds, workAreaOf } from "./draws.ts";
+import { displayMisfit, drawDisplay, seedOf, windowBounds, workAreaOf } from "./draws.ts";
 import type { DrawnDisplay } from "./draws.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityPlan } from "./humanizer.ts";
@@ -146,6 +146,38 @@ const launchOf = ({ chosen, expected, inputs, read }: IdentityPlan) => ({
 
 const DISPLAY_SWITCH = /^--(?:window-size|window-position|screen-info)=/u;
 
+describe("a display the caller narrows", () => {
+  it("draws only maximized windows on a pinned work area too short to float one at 88 px", () => {
+    const tables = { screens: [{ height: 132, weight: 1, width: 1700 }] };
+
+    const windows = new Set(
+      Array.from({ length: 400 }, (_, index) => {
+        const { screen, window } = drawDisplay(seedAt(index + 1), tables);
+
+        return `${window.kind} ${windowBounds(screen, window).height}`;
+      }),
+    );
+
+    expect({ misfit: displayMisfit(tables), windows }).toStrictEqual({
+      misfit: undefined,
+      windows: new Set(["maximized 100", "maximized 88", "maximized 92"]),
+    });
+  });
+
+  it("draws any of Xrio's layouts on a pinned screen too narrow for the 1265 px floor", () => {
+    const layouts = new Set(
+      Array.from(
+        { length: 200 },
+        (_, index) =>
+          drawDisplay(seedAt(index + 1), { screens: [{ height: 768, weight: 1, width: 1024 }] })
+            .layout,
+      ),
+    );
+
+    expect(layouts).toStrictEqual(new Set(["gnome", "ubuntu", "kde", "cinnamon"]));
+  });
+});
+
 const fixedRecord: DeviceRecord = {
   device: {
     cores: 0,
@@ -190,7 +222,7 @@ describe("the device record", () => {
       ...context,
       device: { kind: "record", record },
       hostZone: "Asia/Tokyo",
-      pins: { locale: "de-DE", timezone: "America/New_York" },
+      pins: { display: undefined, locale: "de-DE", timezone: "America/New_York" },
     });
 
     expect(launchOf(replayed)).toStrictEqual(launchOf(plan));

@@ -31,7 +31,9 @@ describe(httpIdentity, () => {
     { header: "ja,en-US;q=0.9,en;q=0.8", locale: "ja-JP" },
     { header: "nb-NO,nb;q=0.9,no;q=0.8,nn;q=0.7,en-US;q=0.6,en;q=0.5", locale: "nb-NO" },
   ])("hands the http client the Chrome 149 Linux profile and $locale's header", (pins) => {
-    expect(httpIdentity({ locale: pins.locale, timezone: undefined }).inputs).toStrictEqual({
+    expect(
+      httpIdentity({ display: undefined, locale: pins.locale, timezone: undefined }).inputs,
+    ).toStrictEqual({
       browser: "chrome_149",
       headerOrder: CHROME_HTTP1_HEADER_ORDER,
       headers: { "accept-language": pins.header },
@@ -40,8 +42,8 @@ describe(httpIdentity, () => {
   });
 
   it("refuses a locale whose Chrome list is unmeasured, which the options never let through", () => {
-    expect(() => httpIdentity({ locale: "sw-KE", timezone: undefined })).toThrow(
-      "Xrio has not measured Chrome's language list for sw-KE.",
-    );
+    expect(() =>
+      httpIdentity({ display: undefined, locale: "sw-KE", timezone: undefined }),
+    ).toThrow("Xrio has not measured Chrome's language list for sw-KE.");
   });
 });

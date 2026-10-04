@@ -1,6 +1,7 @@
 import type { BlockReport } from "./blocks/classify.ts";
 import type { CacheDir } from "./cache-dir.ts";
 import type { Deadline } from "./deadline.ts";
+import type { DisplayTables } from "./humanizer/contracts.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
@@ -16,19 +17,52 @@ interface BrowserMode {
   browserPath: string;
 }
 
+export interface ScreenSize {
+  width: number;
+  height: number;
+}
+
+export interface Taskbar {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}
+
+export interface WindowSize {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+}
+
+type Weighted<Value> = Value & { weight: number };
+
+export interface DisplayOptions {
+  screen?: ScreenSize | readonly Weighted<ScreenSize>[];
+  taskbar?: Taskbar | readonly Weighted<Taskbar>[];
+  window?:
+    | "maximized"
+    | WindowSize
+    | readonly (Weighted<WindowSize> | { maximized: true; weight: number })[];
+}
+
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
+interface BrowserChoices {
+  timezone?: string;
+  display?: DisplayOptions;
+}
+
 type ModeOverride =
-  | (HttpMode & { timezone?: never })
-  | (BrowserMode & { timezone?: string })
-  | { mode?: never; browserPath?: never; timezone?: string };
+  | (HttpMode & { timezone?: never; display?: never })
+  | (BrowserMode & BrowserChoices)
+  | ({ mode?: never; browserPath?: never } & BrowserChoices);
 
 export type ClientOptions = (
-  | (HttpMode & { browserArgs?: never; timezone?: never })
-  | ((BrowserMode | { mode?: never; browserPath: string }) & {
-      browserArgs?: readonly string[];
-      timezone?: string;
-    })
+  | (HttpMode & { browserArgs?: never; timezone?: never; display?: never })
+  | ((BrowserMode | { mode?: never; browserPath: string }) &
+      BrowserChoices & { browserArgs?: readonly string[] })
 ) & { proxy?: string; maxBrowsers?: number; locale?: string; cacheDir?: string };
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
@@ -98,6 +132,7 @@ export interface ClientDefaults {
   maxBrowsers: number | undefined;
   locale: string | undefined;
   timezone: string | undefined;
+  display: DisplayTables | undefined;
 }
 
 type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[] })) & {

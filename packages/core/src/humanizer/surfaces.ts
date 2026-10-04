@@ -52,7 +52,7 @@ interface Size {
   readonly height: number;
 }
 
-type DeviceSource = "drawn" | "record";
+type DeviceSource = "drawn" | "display" | "record";
 
 export interface SurfaceChoices {
   readonly seed: { readonly source: DeviceChoice["kind"] };
@@ -120,9 +120,13 @@ const recordedDisplay = (record: DeviceRecord): DrawnDisplay => ({
   window: headlessWindowOf(record),
 });
 
-export const deviceOf = ({ device, mode }: Pick<IdentityContext, "device" | "mode">): Device => {
+export const deviceOf = ({
+  device,
+  mode,
+  pins,
+}: Pick<IdentityContext, "device" | "mode" | "pins">): Device => {
   if (device.kind === "fresh") {
-    const display = mode === "headed" ? null : drawDisplay(device.seed);
+    const display = mode === "headed" ? null : drawDisplay(device.seed, pins.display);
 
     return { display, seed: device.seed, source: "fresh" };
   }
@@ -144,11 +148,25 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
     ...context,
     followExit: timezone.kind === "exit",
     hostZone: timezone.kind === "host" ? timezone.zone : context.hostZone,
-    pins: { locale, timezone: timezone.kind === "pinned" ? timezone.zone : undefined },
+    pins: {
+      display: undefined,
+      locale,
+      timezone: timezone.kind === "pinned" ? timezone.zone : undefined,
+    },
   };
 };
 
-const sourceOf = ({ source }: Device): DeviceSource => (source === "record" ? "record" : "drawn");
+const sourceOf = ({ source }: Device, pinned: boolean): DeviceSource => {
+  if (source === "record") {
+    return "record";
+  }
+
+  return pinned ? "display" : "drawn";
+};
+
+const pinsDisplay = ({ display }: IdentityIntent): boolean =>
+  display !== undefined &&
+  [display.screens, display.taskbars, display.windows].some((table) => table !== undefined);
 
 const screenInfo = ({ height, width, workArea }: DrawnDisplay["screen"]): string =>
   `{0,0 ${width}x${height} colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 ` +
@@ -316,7 +334,10 @@ const resolveHeadedWindow = (): Resolutions["window"] => ({
   value: { size: { ...HEADED_WINDOW }, source: "fixed" },
 });
 
-const resolveWindow = (device: Device): Resolutions["window"] => {
+const resolveWindow = (
+  { pins }: Pick<IdentityContext, "pins">,
+  device: Device,
+): Resolutions["window"] => {
   const { display } = device;
 
   if (display === null) {
@@ -339,7 +360,7 @@ const resolveWindow = (device: Device): Resolutions["window"] => {
     value: {
       height: bounds.height,
       kind: display.window.kind,
-      source: sourceOf(device),
+      source: sourceOf(device, pins.display?.windows !== undefined),
       width: bounds.width,
       x: bounds.x,
       y: bounds.y,
@@ -363,20 +384,26 @@ const screenExpectations = (
   ];
 };
 
-const resolveHostScreen = ({ device }: Pick<IdentityContext, "device">): Resolutions["screen"] => ({
+const resolveHostScreen = ({
+  device,
+  pins,
+}: Pick<IdentityContext, "device" | "pins">): Resolutions["screen"] => ({
   expected: device.kind === "record" ? screenExpectations(device.record.device.screen, "note") : [],
   inputs: [],
+  tells: pinsDisplay(pins) ? ["display-pin-unhonored"] : [],
   value: { source: "host" },
 });
 
 const resolveScreen = (
-  context: Pick<IdentityContext, "device">,
+  context: Pick<IdentityContext, "device" | "pins">,
   device: Device,
 ): Resolutions["screen"] => {
   if (device.display === null) {
     return resolveHostScreen(context);
   }
 
+  const { display } = context.pins;
+  const pinned = display?.screens !== undefined || display?.taskbars !== undefined;
   const { layout, screen } = device.display;
 
   return {
@@ -385,7 +412,7 @@ const resolveScreen = (
     value: {
       layout,
       size: { height: screen.height, width: screen.width },
-      source: sourceOf(device),
+      source: sourceOf(device, pinned),
       workArea: { ...screen.workArea },
     },
   };
@@ -522,6 +549,6 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => {
     seed: { expected: [], inputs: [], value: { source: device.source } },
     speech: resolveSpeech(replayed),
     timezone: resolveTimezone(replayed),
-    window: resolveWindow(device),
+    window: resolveWindow(replayed, device),
   };
 };

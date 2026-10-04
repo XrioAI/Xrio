@@ -298,6 +298,36 @@ describe("the colour scheme", () => {
   });
 });
 
+describe("the no-taskbar tell", () => {
+  const screenOnly = {
+    ...linuxHeadless,
+    availHeight: 1080,
+    availLeft: 0,
+    availTop: 0,
+    availWidth: 1920,
+    screenHeight: 1080,
+    screenWidth: 1920,
+  };
+
+  it.each([
+    { name: "a screen with no inset", observation: screenOnly, tells: ["no-taskbar"] },
+    {
+      name: "a dock on the left only",
+      observation: { ...screenOnly, availLeft: 64, availWidth: 1856 },
+      tells: [],
+    },
+    {
+      name: "a panel on the right only",
+      observation: { ...screenOnly, availWidth: 1872 },
+      tells: [],
+    },
+  ])("fires only when no edge is inset, not for $name", ({ observation, tells }) => {
+    expect(
+      evaluate(planFor(), observation).report.tells.filter((tell) => tell === "no-taskbar"),
+    ).toStrictEqual(tells);
+  });
+});
+
 describe("the headed window", () => {
   it("notes a window wider than the observed work area and derives the display tells", () => {
     const smallXvfb = {

@@ -1,16 +1,22 @@
 import { CacheDir, defaultCacheDir } from "./cache-dir.ts";
 import { invalidOptions, redactUrl } from "./errors.ts";
+import type { DisplayTables, Insets, WindowPin } from "./humanizer/contracts.ts";
+import { displayMisfit } from "./humanizer/draws.ts";
 import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
 import { canonicalZone } from "./humanizer/zone-name.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientDefaults,
   ClientOptions,
+  DisplayOptions,
   ModeOptions,
   ProxyEndpoint,
   ResolvedMode,
   ScrapeOptions,
   ScrapeRequest,
+  ScreenSize,
+  Taskbar,
+  WindowSize,
 } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -212,6 +218,193 @@ const resolveTimezone = (
   return zone;
 };
 
+const DISPLAY_FIELDS = new Set(["screen", "taskbar", "window"]);
+
+const EDGES = ["top", "right", "bottom", "left"] as const;
+
+const TASKBAR_FIELDS = new Set<string>([...EDGES, "weight"]);
+
+const SCREEN_FIELDS = new Set(["width", "height", "weight"]);
+
+const WINDOW_FIELDS = new Set(["width", "height", "x", "y", "weight"]);
+
+type DisplayEntry = DisplayOptions | ScreenSize | Taskbar | WindowSize | { maximized: true };
+
+const isPlainObject = (value: DisplayEntry): boolean =>
+  Object.getPrototypeOf(value ?? 0) === Object.prototype;
+
+const holdsOnly = (value: DisplayEntry, fields: ReadonlySet<string>): boolean =>
+  Object.keys(value).every((key) => fields.has(key));
+
+const isWhole = (value: number | undefined, min: number): value is number =>
+  Number.isSafeInteger(value) && Number(value) >= min;
+
+type Weighted<Row> = Row & { weight: number };
+
+const isTable = <Row extends object>(
+  value: Row | readonly Weighted<Row>[],
+): value is readonly Weighted<Row>[] => Array.isArray(value);
+
+const tableOf = <Row extends object>(
+  value: Row | readonly Weighted<Row>[],
+  field: string,
+): readonly Weighted<Row>[] => {
+  if (!isTable(value)) {
+    if (!isPlainObject(value)) {
+      throw invalidOptions(`display.${field} must be a value or a non-empty weighted table.`);
+    }
+
+    return [{ ...value, weight: 1 }];
+  }
+
+  const rows = value;
+
+  if (rows.length === 0 || !rows.every(isPlainObject)) {
+    throw invalidOptions(`display.${field} must be a value or a non-empty weighted table.`);
+  }
+
+  if (!rows.every(({ weight }) => Number.isFinite(weight) && weight > 0)) {
+    throw invalidOptions(`display.${field} weights must be positive numbers.`);
+  }
+
+  if (!Number.isFinite(rows.reduce((total, { weight }) => total + weight, 0))) {
+    throw invalidOptions(`display.${field} weights must add up to a finite number.`);
+  }
+
+  return rows;
+};
+
+const parseScreen = (row: Weighted<ScreenSize>) => {
+  const { height, weight, width } = row;
+
+  if (!holdsOnly(row, SCREEN_FIELDS) || !isWhole(width, 1) || !isWhole(height, 1)) {
+    throw invalidOptions(
+      "display.screen takes a width and a height in whole pixels, such as { width: 1440, height: 900 }.",
+    );
+  }
+
+  return { height, weight, width };
+};
+
+const parseTaskbar = (row: Weighted<Taskbar>): Weighted<Insets> => {
+  const edges = EDGES.map((edge) => row[edge] ?? 0);
+
+  if (!holdsOnly(row, TASKBAR_FIELDS) || !edges.every((edge) => isWhole(edge, 0))) {
+    throw invalidOptions(
+      "display.taskbar takes top, right, bottom and left insets in whole pixels, such as { bottom: 48 }.",
+    );
+  }
+
+  const [top, right, bottom, left] = edges;
+
+  return { bottom, left, right, top, weight: row.weight };
+};
+
+type WindowRow = WindowSize | { maximized: true } | "maximized";
+
+const parseSize = (row: WindowSize): WindowPin => {
+  const { height, width, x, y } = row;
+
+  if (!holdsOnly(row, WINDOW_FIELDS) || !isWhole(width, 1) || !isWhole(height, 1)) {
+    throw invalidOptions(
+      "display.window takes a width and a height in whole pixels, with an optional x and y.",
+    );
+  }
+
+  if (x === undefined && y === undefined) {
+    return { height, kind: "sized", width };
+  }
+
+  if (!isWhole(x, 0) || !isWhole(y, 0)) {
+    throw invalidOptions("display.window x and y must be given together, as whole pixels.");
+  }
+
+  return { height, kind: "sized", position: { x, y }, width };
+};
+
+const MAXIMIZED_FIELDS = new Set(["maximized", "weight"]);
+
+const parseWindow = (row: WindowRow, weight: number): Weighted<WindowPin> => {
+  if (row === "maximized") {
+    return { kind: "maximized", weight };
+  }
+
+  if ("maximized" in row) {
+    if (!Object.is(row.maximized, true) || !holdsOnly(row, MAXIMIZED_FIELDS)) {
+      throw invalidOptions(
+        "display.window rows that maximize take only { maximized: true, weight }, with no size.",
+      );
+    }
+
+    return { kind: "maximized", weight };
+  }
+
+  if (!("width" in row)) {
+    throw invalidOptions(
+      'display.window must be "maximized" or a size such as { width: 1440, height: 860 }.',
+    );
+  }
+
+  return { ...parseSize(row), weight };
+};
+
+const parseWindows = (window: NonNullable<DisplayOptions["window"]>) =>
+  window === "maximized"
+    ? [parseWindow(window, 1)]
+    : tableOf<Exclude<WindowRow, "maximized">>(window, "window").map((row) =>
+        parseWindow(row, row.weight),
+      );
+
+const parseDisplay = (display: DisplayOptions): DisplayTables => {
+  if (!isPlainObject(display) || !holdsOnly(display, DISPLAY_FIELDS)) {
+    throw invalidOptions("display takes screen, taskbar and window.");
+  }
+
+  const { screen, taskbar, window } = display;
+
+  return {
+    screens: screen === undefined ? undefined : tableOf(screen, "screen").map(parseScreen),
+    taskbars: taskbar === undefined ? undefined : tableOf(taskbar, "taskbar").map(parseTaskbar),
+    windows: window === undefined ? undefined : parseWindows(window),
+  };
+};
+
+const fittedDisplay = (tables: DisplayTables): DisplayTables => {
+  const misfit = displayMisfit(tables);
+
+  if (misfit !== undefined) {
+    throw invalidOptions(misfit);
+  }
+
+  return tables;
+};
+
+const resolveDisplay = (
+  display: DisplayOptions | undefined,
+  { mode }: ResolvedMode,
+  defaults?: DisplayTables,
+): DisplayTables | undefined => {
+  if (mode === "http") {
+    if (display !== undefined) {
+      throw invalidOptions("display is only supported in browser modes.");
+    }
+
+    return undefined;
+  }
+
+  if (display === undefined) {
+    return defaults;
+  }
+
+  const { screens, taskbars, windows } = parseDisplay(display);
+
+  return fittedDisplay({
+    screens: screens ?? defaults?.screens,
+    taskbars: taskbars ?? defaults?.taskbars,
+    windows: windows ?? defaults?.windows,
+  });
+};
+
 export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
@@ -223,6 +416,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   const proxy = options.proxy === undefined ? undefined : parseProxy(options.proxy);
   const locale = resolveLocale(options.locale);
   const timezone = resolveTimezone(options.timezone, mode);
+  const display = resolveDisplay(options.display, mode);
 
   const cacheDir =
     options.cacheDir === undefined ? defaultCacheDir() : new CacheDir(options.cacheDir);
@@ -230,6 +424,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   return {
     browserArgs,
     cacheDir,
+    display,
     locale,
     maxBrowsers,
     mode,
@@ -269,7 +464,9 @@ export const resolveScrapeOptions = (
   const timezone =
     options.timezone === undefined ? defaults.timezone : resolveTimezone(options.timezone, mode);
 
-  const pins = { locale, timezone: mode.mode === "http" ? undefined : timezone };
+  const display = resolveDisplay(options.display, mode, defaults.display);
+
+  const pins = { display, locale, timezone: mode.mode === "http" ? undefined : timezone };
 
   const source =
     mode.mode === "http"

@@ -13,6 +13,30 @@ export interface Insets {
   readonly left: number;
 }
 
+interface Size {
+  readonly width: number;
+  readonly height: number;
+}
+
+interface Weighted {
+  readonly weight: number;
+}
+
+export type WindowPin =
+  | { readonly kind: "maximized" }
+  | {
+      readonly kind: "sized";
+      readonly width: number;
+      readonly height: number;
+      readonly position?: { readonly x: number; readonly y: number };
+    };
+
+export interface DisplayTables {
+  readonly screens?: readonly (Size & Weighted)[];
+  readonly taskbars?: readonly (Insets & Weighted)[];
+  readonly windows?: readonly (WindowPin & Weighted)[];
+}
+
 export type WindowState =
   | { readonly kind: "chrome-default" }
   | { readonly kind: "maximized" }
