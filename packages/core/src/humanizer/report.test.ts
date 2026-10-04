@@ -175,6 +175,7 @@ describe("the identity report", () => {
           gpu: { backend: "swiftshader", persona: null },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
+          media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
           screen: {
             size: { height: 1080, width: 1920 },
             source: "fixed",
@@ -236,6 +237,7 @@ describe("the identity report", () => {
           gpu: { backend: "native" },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
+          media: { source: "host" },
           screen: { source: "host" },
           timezone: { source: "host", zone: null },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },

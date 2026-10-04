@@ -23,6 +23,7 @@ const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   gpu: resolutions.gpu.value,
   leaks: resolutions.leaks.value,
   locale: resolutions.locale.value,
+  media: resolutions.media.value,
   screen: resolutions.screen.value,
   timezone: resolutions.timezone.value,
   window: resolutions.window.value,

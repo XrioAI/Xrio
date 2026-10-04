@@ -3,12 +3,17 @@ import { describe, expect, it } from "vite-plus/test";
 import { isOwnedSwitch } from "./owned-inputs.ts";
 
 describe(isOwnedSwitch, () => {
-  it.each(["--lang", "--accept-lang", "--use-gl", "--use-angle", "--window-size", "--screen-info"])(
-    "owns %s",
-    (name) => {
-      expect(isOwnedSwitch(name)).toBeTruthy();
-    },
-  );
+  it.each([
+    "--lang",
+    "--accept-lang",
+    "--use-gl",
+    "--use-angle",
+    "--window-size",
+    "--screen-info",
+    "--use-fake-device-for-media-stream",
+  ])("owns %s", (name) => {
+    expect(isOwnedSwitch(name)).toBeTruthy();
+  });
 
   it.each([
     "--force-device-scale-factor",
@@ -43,6 +48,15 @@ describe(isOwnedSwitch, () => {
     "--enable-unsafe-webgpu",
     "--disable-webgpu",
     "--js-flags",
+    "--use-fake-ui-for-media-stream",
+    "--use-file-for-fake-audio-capture",
+    "--use-file-for-fake-video-capture",
+    "--alsa-input-device",
+    "--alsa-output-device",
+    "--auto-accept-camera-and-microphone-capture",
+    "--deny-permission-prompts",
+    "--disable-audio-input",
+    "--disable-audio-output",
   ])("reserves %s for the Humanizer before any surface emits it", (name) => {
     expect(isOwnedSwitch(name)).toBeTruthy();
   });

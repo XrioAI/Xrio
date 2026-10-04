@@ -1,6 +1,6 @@
 import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
-import type { GpuChoice, HostCapabilities, Insets } from "./contracts.ts";
+import type { GpuChoice, HostCapabilities, Insets, MediaDeviceCounts } from "./contracts.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
 
@@ -40,6 +40,9 @@ export interface SurfaceChoices {
     | { readonly source: "fixed"; readonly size: Size; readonly workArea: Insets }
     | { readonly source: "host" };
   readonly leaks: { readonly networkPrediction: "off"; readonly dnsOverHttps: "off" };
+  readonly media:
+    | { readonly source: "fake"; readonly devices: MediaDeviceCounts }
+    | { readonly source: "host" };
   readonly automation: null;
 }
 
@@ -56,6 +59,7 @@ export const EMISSION_ORDER = [
   "window",
   "screen",
   "leaks",
+  "media",
   "automation",
 ] as const;
 
@@ -183,6 +187,19 @@ const resolveLeaks = (): Resolutions["leaks"] => ({
   value: { dnsOverHttps: "off", networkPrediction: "off" },
 });
 
+const resolveMedia = ({
+  capabilities,
+}: Pick<IdentityContext, "capabilities">): Resolutions["media"] =>
+  capabilities.platform === "linux"
+    ? {
+        expected: [],
+        inputs: [
+          { name: "--use-fake-device-for-media-stream", sink: "switch", value: "device-count=0" },
+        ],
+        value: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
+      }
+    : { expected: [], inputs: [], value: { source: "host" } };
+
 const resolveAutomation = ({
   capabilities,
 }: Pick<IdentityContext, "capabilities">): Resolutions["automation"] => ({
@@ -201,6 +218,7 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => ({
   gpu: resolveGpu(context),
   leaks: resolveLeaks(),
   locale: resolveLocale(context),
+  media: resolveMedia(context),
   screen: resolveScreen(context),
   timezone: resolveTimezone(context),
   window: resolveWindow(context),

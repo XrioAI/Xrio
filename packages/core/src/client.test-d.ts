@@ -181,7 +181,7 @@ describe("XrioClient types", () => {
       mismatches: readonly IdentityMismatch[];
     }>();
     expectTypeOf<IdentityMismatch["surface"]>().toEqualTypeOf<
-      "locale" | "timezone" | "gpu" | "window" | "screen" | "leaks" | "automation"
+      "locale" | "timezone" | "gpu" | "window" | "screen" | "leaks" | "media" | "automation"
     >();
   });
 

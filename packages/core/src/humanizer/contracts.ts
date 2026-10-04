@@ -54,6 +54,12 @@ export interface DeviceRecord {
 
 export type { Closed } from "../sources/browser/chrome-scope.ts";
 
+export interface MediaDeviceCounts {
+  readonly audioinput: number;
+  readonly audiooutput: number;
+  readonly videoinput: number;
+}
+
 export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
 }

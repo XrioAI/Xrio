@@ -228,6 +228,37 @@ describe("the leaks surface", () => {
   });
 });
 
+describe("the media surface", () => {
+  it("presents one microphone and one speaker and no camera on Linux", () => {
+    expect(resolveSurfaces(contextOf()).media).toStrictEqual({
+      expected: [],
+      inputs: [
+        { name: "--use-fake-device-for-media-stream", sink: "switch", value: "device-count=0" },
+      ],
+      value: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
+    });
+  });
+
+  it.each(["darwin", "win32"] as const)("leaves the host's own devices alone on %s", (platform) => {
+    expect(resolveSurfaces(contextOf({ capabilities: { platform } })).media).toStrictEqual({
+      expected: [],
+      inputs: [],
+      value: { source: "host" },
+    });
+  });
+
+  it("builds a fresh choice on every call, so no two plans share an object", () => {
+    const first = resolveSurfaces(contextOf()).media.value;
+    const second = resolveSurfaces(contextOf()).media.value;
+
+    expect(first).toStrictEqual(second);
+    expect([
+      first === second,
+      "devices" in first && "devices" in second && first.devices === second.devices,
+    ]).toStrictEqual([false, false]);
+  });
+});
+
 describe("the automation surface", () => {
   const noWebdriver = {
     compatibility: true,
@@ -286,6 +317,7 @@ describe("the chosen identity", () => {
         gpu: { backend: "native" },
         leaks: { dnsOverHttps: "off", networkPrediction: "off" },
         locale: { languages: ["en-US", "en"], tag: "en-US" },
+        media: { source: "host" },
         screen: { source: "host" },
         timezone: { source: "host", zone: "Europe/Berlin" },
         window: { size: { height: 900, width: 1600 }, source: "fixed" },

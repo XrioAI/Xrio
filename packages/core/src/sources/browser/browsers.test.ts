@@ -1115,10 +1115,17 @@ describe("the identity a visit launches Chrome with", () => {
   });
 
   it.each([
-    { platform: "linux" as const, switches: ["--use-gl=angle", "--use-angle=swiftshader"] },
+    {
+      platform: "linux" as const,
+      switches: [
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--use-fake-device-for-media-stream=device-count=0",
+      ],
+    },
     { platform: "darwin" as const, switches: [] },
   ])(
-    "selects the GL backend from the host's $platform capabilities",
+    "selects the GL backend and the media devices from the host's $platform capabilities",
     async ({ platform, switches }) => {
       const plan = await launchPlanOf({ hostCapabilities: () => ({ platform }) });
 
@@ -1439,6 +1446,7 @@ describe("the identity-chosen event", () => {
             gpu: { backend: "swiftshader", persona: null },
             leaks: { dnsOverHttps: "off", networkPrediction: "off" },
             locale: { languages: ["en-US", "en"], tag: "en-US" },
+            media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
             screen: {
               size: { height: 1080, width: 1920 },
               source: "fixed",

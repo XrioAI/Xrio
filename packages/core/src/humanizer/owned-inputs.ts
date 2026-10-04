@@ -5,6 +5,7 @@ export const OWNED_SWITCHES = [
   "--use-angle",
   "--window-size",
   "--screen-info",
+  "--use-fake-device-for-media-stream",
 ] as const;
 
 export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE"] as const;
@@ -55,6 +56,15 @@ const RESERVED_IDENTITY_SWITCHES = [
   "--enable-unsafe-webgpu",
   "--disable-webgpu",
   "--js-flags",
+  "--use-fake-ui-for-media-stream",
+  "--use-file-for-fake-audio-capture",
+  "--use-file-for-fake-video-capture",
+  "--alsa-input-device",
+  "--alsa-output-device",
+  "--auto-accept-camera-and-microphone-capture",
+  "--deny-permission-prompts",
+  "--disable-audio-input",
+  "--disable-audio-output",
 ] as const;
 
 export const isOwnedSwitch = (name: string): boolean =>

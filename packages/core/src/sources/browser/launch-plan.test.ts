@@ -81,6 +81,7 @@ describe(planLaunch, () => {
       "--use-angle=swiftshader",
       "--window-size=1600,900",
       "--screen-info={0,0 1920x1080 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=0 workAreaBottom=40}",
+      "--use-fake-device-for-media-stream=device-count=0",
       `--crash-dumps-dir=${scratchDir}/crashes`,
       ...tail,
     ]);
@@ -330,6 +331,26 @@ describe(parseBrowserArgs, () => {
         `browserArgs cannot include ${name}, which Xrio manages.`,
       );
     }
+  });
+
+  it.each([
+    "--use-fake-device-for-media-stream",
+    "--use-fake-device-for-media-stream=device-count=0",
+    "--use-fake-ui-for-media-stream",
+    "--auto-accept-camera-and-microphone-capture",
+    "--deny-permission-prompts",
+    "--disable-audio-input",
+    "--disable-audio-output",
+    "--use-file-for-fake-audio-capture=/tmp/silence.wav",
+    "--use-file-for-fake-video-capture=/tmp/clip.y4m",
+    "--alsa-input-device=default",
+    "--alsa-output-device=default",
+  ])("refuses the media switch %s, which would change the devices or grant permission", (arg) => {
+    const [name] = arg.split("=", 1);
+
+    expect(() => parseBrowserArgs([arg])).toThrow(
+      `browserArgs cannot include ${name}, which Xrio manages.`,
+    );
   });
 
   it("drops a valueless baseline switch, which Chrome already gets, and refuses it with a value", () => {
