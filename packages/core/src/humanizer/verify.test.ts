@@ -281,6 +281,20 @@ describe("tells", () => {
 
     expect(evaluate(planFor(), headless).report.tells).toStrictEqual(["headless-token"]);
   });
+
+  it("lists what the plan's facts show after what Chrome was observed to present", () => {
+    const headless = {
+      ...linuxHeadless,
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.0.0 Safari/537.36",
+    };
+
+    const proxied = planFor({ exit: { facts: { kind: "unknown" }, route: "proxy" } });
+
+    expect(evaluate(proxied, headless).report.tells).toStrictEqual([
+      "headless-token",
+      "exit-unknown",
+    ]);
+  });
 });
 
 describe(readObservation, () => {

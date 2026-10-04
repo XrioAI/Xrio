@@ -137,11 +137,63 @@ const zoneExpectations = [
   },
 ];
 
+const proxyRoute = { facts: { kind: "unknown" }, route: "proxy" } as const;
+
+const observedGermanExit = {
+  facts: {
+    address: "203.0.113.7",
+    country: "DE",
+    destination: "example.com",
+    generation: 0,
+    kind: "observed",
+    observedAt: 1_760_000_000_000,
+    provider: "fixture",
+    route: "7f3a",
+    zone: "Europe/Berlin",
+  },
+  route: "proxy",
+} as const satisfies IdentityContext["exit"];
+
 describe("the timezone surface", () => {
   it("sets TZ to the host zone, always explicitly", () => {
     expect(resolveSurfaces(contextOf({ hostZone: "America/Chicago" })).timezone).toStrictEqual({
       expected: zoneExpectations,
       inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
+      tells: [],
+      value: { source: "host", zone: "America/Chicago" },
+    });
+  });
+
+  it("tells a direct scrape that presents UTC from the host", () => {
+    expect(resolveSurfaces(contextOf({ hostZone: "UTC" })).timezone).toMatchObject({
+      inputs: [{ name: "TZ", sink: "environment", value: "UTC" }],
+      tells: ["host-zone-utc"],
+      value: { source: "host", zone: "UTC" },
+    });
+  });
+
+  it("tells a proxied scrape with unknown exit facts that the host zone stands in for the exit's", () => {
+    expect(
+      resolveSurfaces(contextOf({ exit: proxyRoute, hostZone: "America/Chicago" })).timezone,
+    ).toMatchObject({
+      inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
+      tells: ["exit-unknown"],
+    });
+  });
+
+  it("tells a proxied UTC host about its unknown exit only", () => {
+    expect(
+      resolveSurfaces(contextOf({ exit: proxyRoute, hostZone: "UTC" })).timezone.tells,
+    ).toStrictEqual(["exit-unknown"]);
+  });
+
+  it("keeps the host zone beside observed exit facts, with no tell", () => {
+    expect(
+      resolveSurfaces(contextOf({ exit: observedGermanExit, hostZone: "America/Chicago" }))
+        .timezone,
+    ).toMatchObject({
+      inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
+      tells: [],
       value: { source: "host", zone: "America/Chicago" },
     });
   });
@@ -346,6 +398,16 @@ describe("emission order", () => {
     expect([...EMISSION_ORDER].toSorted()).toStrictEqual(
       Object.keys(resolveSurfaces(contextOf())).toSorted(),
     );
+  });
+});
+
+describe("the planned tells", () => {
+  it("gathers what each surface's facts show", () => {
+    expect(
+      planIdentity(contextOf({ exit: proxyRoute, hostZone: "America/Chicago" })).tells,
+    ).toStrictEqual(["exit-unknown"]);
+    expect(planIdentity(contextOf({ hostZone: "UTC" })).tells).toStrictEqual(["host-zone-utc"]);
+    expect(planIdentity(contextOf({ hostZone: "America/Chicago" })).tells).toStrictEqual([]);
   });
 });
 

@@ -191,7 +191,7 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "UTC" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
-        tells: ["headless-token"],
+        tells: ["headless-token", "host-zone-utc"],
       },
     });
   });

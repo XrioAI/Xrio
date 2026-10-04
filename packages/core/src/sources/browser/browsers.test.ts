@@ -1239,7 +1239,7 @@ describe("the launch identity check", () => {
         window: { outerHeight: 900, outerWidth: 1600 },
       },
       surfaces: { timezone: { source: "host", zone: "UTC" } },
-      tells: ["headless-token"],
+      tells: ["headless-token", "host-zone-utc"],
     });
   });
 

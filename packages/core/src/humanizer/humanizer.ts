@@ -8,7 +8,7 @@ import type { HttpIdentityReport } from "./report.ts";
 import { EMISSION_ORDER, presentedLocale, resolveSurfaces } from "./surfaces.ts";
 import type { ExitChoice, IdentityContext, Resolutions, SurfaceChoices } from "./surfaces.ts";
 import { AFTER_CAPTURE_READ, identityRead } from "./verify.ts";
-import type { SurfaceExpectation } from "./verify.ts";
+import type { FactTell, SurfaceExpectation } from "./verify.ts";
 
 interface ChosenIdentity {
   readonly mode: IdentityContext["mode"];
@@ -20,6 +20,7 @@ export interface IdentityPlan {
   readonly inputs: BrowserInputs;
   readonly expected: readonly SurfaceExpectation[];
   readonly read: { readonly beforeNavigation: string; readonly afterCapture: string };
+  readonly tells: readonly FactTell[];
   readonly chosen: ChosenIdentity;
 }
 
@@ -44,6 +45,7 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
     ),
     inputs: mergeBrowserInputs(resolutions),
     read: { afterCapture: AFTER_CAPTURE_READ, beforeNavigation: identityRead(context.hostZone) },
+    tells: EMISSION_ORDER.flatMap((surface) => resolutions[surface].tells ?? []),
   };
 };
 

@@ -4,7 +4,7 @@ import type { GpuChoice, HostCapabilities, Insets, MediaDeviceCounts } from "./c
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
-import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
+import type { Expectation, FactTell, Matcher, Observed, ObservedField } from "./verify.ts";
 
 const DEFAULT_LOCALE = "en-US";
 
@@ -52,6 +52,7 @@ export interface SurfaceChoices {
 interface Resolution<Value> {
   readonly inputs: readonly LaunchInput[];
   readonly expected: readonly Expectation[];
+  readonly tells?: readonly FactTell[];
   readonly value: Value;
 }
 
@@ -130,26 +131,42 @@ const resolveLocale = ({
   };
 };
 
-const resolveTimezone = ({
+const hostZoneTell = ({
+  exit,
   hostZone,
-}: Pick<IdentityContext, "hostZone">): Resolutions["timezone"] => ({
-  expected: [
-    {
-      compatibility: false,
-      field: "zone",
-      matcher: { kind: "named-zone" },
-      severity: "fatal",
-    },
-    {
-      compatibility: false,
-      field: "zoneOffsets",
-      matcher: { kind: "zone-offsets" },
-      severity: "fatal",
-    },
-  ],
-  inputs: [{ name: "TZ", sink: "environment", value: hostZone }],
-  value: { source: "host", zone: hostZone },
-});
+}: Pick<IdentityContext, "exit" | "hostZone">): FactTell | undefined => {
+  if (exit.route === "direct") {
+    return hostZone === "UTC" ? "host-zone-utc" : undefined;
+  }
+
+  return exit.facts.kind === "unknown" ? "exit-unknown" : undefined;
+};
+
+const resolveTimezone = (
+  context: Pick<IdentityContext, "exit" | "hostZone">,
+): Resolutions["timezone"] => {
+  const tell = hostZoneTell(context);
+
+  return {
+    expected: [
+      {
+        compatibility: false,
+        field: "zone",
+        matcher: { kind: "named-zone" },
+        severity: "fatal",
+      },
+      {
+        compatibility: false,
+        field: "zoneOffsets",
+        matcher: { kind: "zone-offsets" },
+        severity: "fatal",
+      },
+    ],
+    inputs: [{ name: "TZ", sink: "environment", value: context.hostZone }],
+    tells: tell === undefined ? [] : [tell],
+    value: { source: "host", zone: context.hostZone },
+  };
+};
 
 const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] =>
   capabilities.platform === "linux"

@@ -44,12 +44,17 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
+export type FactTell = "host-zone-utc" | "exit-unknown";
+
 export type IdentityTell =
   | "no-taskbar"
   | "display-implausible"
   | "headless-token"
   | "unmeasured-chrome"
-  | "zone-unverified";
+  | "zone-unverified"
+  | FactTell;
+
+type ObservedTell = Exclude<IdentityTell, FactTell>;
 
 export interface Evaluation {
   readonly report: BrowserIdentityReport;
@@ -283,7 +288,7 @@ export const describeMismatch = (
 
 const isMeasured = (product: ChromeProduct): boolean => MEASURED_MAJORS.has(product.major);
 
-const TELLS: Readonly<Record<IdentityTell, (observation: Observation) => boolean>> = {
+const TELLS: Readonly<Record<ObservedTell, (observation: Observation) => boolean>> = {
   "display-implausible": ({ colorDepth, screenWidth }) =>
     screenWidth < PLAUSIBLE_MIN_WIDTH || colorDepth !== PLAUSIBLE_COLOR_DEPTH,
   "headless-token": ({ userAgent }) => userAgent.includes("HeadlessChrome"),
@@ -293,7 +298,7 @@ const TELLS: Readonly<Record<IdentityTell, (observation: Observation) => boolean
     requestedZone !== null && requestedOffsets === null && namesZone(zone),
 };
 
-const TELL_ORDER: readonly IdentityTell[] = [
+const TELL_ORDER: readonly ObservedTell[] = [
   "no-taskbar",
   "display-implausible",
   "headless-token",
@@ -302,7 +307,7 @@ const TELL_ORDER: readonly IdentityTell[] = [
 ];
 
 export const evaluate = (
-  { chosen, expected }: Pick<IdentityPlan, "chosen" | "expected">,
+  { chosen, expected, tells }: Pick<IdentityPlan, "chosen" | "expected" | "tells">,
   observation: Observation,
 ): Evaluation => {
   const measured = isMeasured(observation.product);
@@ -332,7 +337,7 @@ export const evaluate = (
       notes: structuredClone(notes),
       observed: observedOf(observation),
       surfaces: chosen.surfaces,
-      tells: TELL_ORDER.filter((tell) => TELLS[tell](observation)),
+      tells: [...TELL_ORDER.filter((tell) => TELLS[tell](observation)), ...tells],
     },
   };
 };
