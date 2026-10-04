@@ -21,7 +21,7 @@ result.cookies;
 result.url;
 ```
 
-`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format, block }`:
+`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format, block, identity }`:
 
 - `data`: an HTML or Markdown string, or `StructuredContent` for `json`.
 - `url`: the final response URL after redirects.
@@ -30,6 +30,7 @@ result.url;
 - `cookies`: each `Set-Cookie` header value of the final response, in order and unparsed. Empty when the response set none.
 - `format`: the requested format. Checking this field narrows the type of `data` in TypeScript.
 - `block`: the block report described below. Detection never throws, and a challenge served as a 200 still reports a block.
+- `identity`: the identity report described below. It says what Xrio configured and how much of it was observed.
 
 For `json`, `data` retains the existing `StructuredContent` fields:
 
@@ -88,6 +89,22 @@ result.data;
 When the caller aborts, the scrape rejects with `signal.reason`, as native APIs do.
 
 HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded with the same charset rules as HTML, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
+
+### Identity report
+
+`identity` says what Xrio configured for the scrape and how much of it was observed. It is not evidence that a site accepted the browser. Checking `identity.mode` narrows its type in TypeScript. A scrape that rejects carries no report, and the `identity-chosen` event (see the diagnostics channels above) names the identity its browser was launched with.
+
+In http mode it is `{ mode: "http", locale, profile, coverage, tells }`. `profile` names the Chrome major and platform of the wreq profile, `{ chromeMajor: 149, platform: "linux" }`, and `locale` is the language its `Accept-Language` header names. `coverage.requestHeaders` is `unchecked`, because Xrio does not record the headers it sends.
+
+In browser modes it is `{ mode, binary, exit, surfaces, observed, coverage, notes, tells }`:
+
+- `binary.version`: the version Chrome reported at launch.
+- `exit`: `{ route, facts }`. `route` is `direct` or `proxy`, and `facts` is `{ kind: "unknown" }` until Xrio observes proxy exits. It never holds a credential.
+- `surfaces`: what each identity surface chose. `locale` holds the `tag` and Chrome's `languages`. `timezone` is `{ source: "host", zone }`, where `zone` is the `TZ` Xrio forwarded, or `null` when `TZ` was unset. `gpu` is `{ backend: "swiftshader", persona: null }` on Linux and `{ backend: "native" }` elsewhere. `window` is `{ source: "fixed", size }`. `screen` is `{ source: "fixed", size, workArea }` in headless mode and `{ source: "host" }` in headed mode, where the real display decides. `leaks` turns DNS-over-HTTPS and network prediction off, and `automation` is `null`, because it chooses nothing.
+- `observed`: what Chrome presented on its first `about:blank` before navigation: `timeZone` and its January and July `offsets`, `intlLocale`, `languages`, `userAgent`, `webdriver`, `screen`, `window`, the media features `colorScheme`, `reducedMotion`, `pointer`, `hover` and `anyPointer`, and `maxTouchPoints`.
+- `coverage`: one entry per identity surface, such as `timezone`, `screen`, `clientHints`, `deviceMemory`, `webglStrings`, `fonts`, `requestHeaders` and `webrtc`. Each is `{ state: "observed" }` when this launch read it, `{ state: "cached", key, ageMs }` for compatibility evidence from an earlier probe, or `{ state: "unchecked", reason }`. The reasons are `not-observed` (no read covers it), `lanes-only` (only Xrio's own test runs check it, as for WebGL pixels) and `no-request-log`.
+- `notes`: expectations that did not hold but do not fail the launch, each `{ surface, field, expected, observed }`. `field` here, and in `BROWSER_LAUNCH_FAILED.details.mismatches[].field`, is the name the read uses, such as `screenWidth`, `outerWidth`, `zone` or `zoneOffsets`, which differs from the nesting of `observed` (`screen.width`, `window.outerWidth`, `timeZone`, `offsets`).
+- `tells`: weaknesses the facts show, such as `headless-token` for stock headless Chrome's user agent, `no-taskbar`, `display-implausible`, `unmeasured-chrome` and `zone-unverified`.
 
 ### Block report
 

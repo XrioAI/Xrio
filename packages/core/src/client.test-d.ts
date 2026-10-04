@@ -5,12 +5,18 @@ import type {
   BlockEvidence,
   BlockReport,
   BlockVerdict,
+  BrowserIdentityReport,
   ChallengeOutcome,
   ChallengeReport,
   ChallengeRound,
   ClientOptions,
+  Coverage,
+  CoverageReason,
+  CoveredSurface,
   ErrorCode,
+  HttpIdentityReport,
   IdentityMismatch,
+  IdentityReport,
   InvalidOptionsError,
   ScrapeFormat,
   ScrapeResult,
@@ -124,6 +130,40 @@ describe("XrioClient types", () => {
     expectTypeOf<
       XrioError<"UNSUPPORTED_CONTENT_TYPE">["details"]["block"]
     >().toEqualTypeOf<BlockReport>();
+  });
+
+  it("reports the identity on every result, narrowed by its mode", () => {
+    const client = new XrioClient({ mode: "http" });
+
+    const identityOf = async () => {
+      const { identity } = await client.scrape({ format: "html", url: "https://example.com" });
+
+      if (identity.mode === "http") {
+        expectTypeOf(identity).toEqualTypeOf<HttpIdentityReport>();
+        expectTypeOf(identity.profile.chromeMajor).toEqualTypeOf<number>();
+      } else {
+        expectTypeOf(identity).toEqualTypeOf<BrowserIdentityReport>();
+        expectTypeOf(identity.mode).toEqualTypeOf<"headless" | "headed">();
+        expectTypeOf(identity.coverage.webglStrings).toEqualTypeOf<Coverage>();
+      }
+
+      return identity;
+    };
+
+    expectTypeOf(identityOf).returns.toEqualTypeOf<Promise<IdentityReport>>();
+    expectTypeOf<ScrapeResult<"json">["identity"]>().toEqualTypeOf<IdentityReport>();
+    expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
+    expectTypeOf<CoverageReason>().toEqualTypeOf<
+      "no-request-log" | "lanes-only" | "not-observed"
+    >();
+    expectTypeOf<Extract<Coverage, { state: "cached" }>>().toEqualTypeOf<{
+      readonly state: "cached";
+      readonly key: string;
+      readonly ageMs: number;
+    }>();
+    expectTypeOf<HttpIdentityReport["coverage"]>().toEqualTypeOf<{
+      readonly requestHeaders: Coverage;
+    }>();
   });
 
   it("limits concurrent browsers and closes like a disposable resource", () => {

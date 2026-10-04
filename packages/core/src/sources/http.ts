@@ -4,14 +4,17 @@ import type { CreateSessionOptions, Response as ClientResponse, Session } from "
 import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
+import { httpIdentity } from "../humanizer/report.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
 import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";
 
+const HTTP_PROFILE = { chromeMajor: 149, platform: "linux" } as const;
+
 const chromeProfile = {
-  browser: "chrome_149",
+  browser: `chrome_${HTTP_PROFILE.chromeMajor}`,
   defaultHeaders: { Connection: "keep-alive" },
   emulation: {
     http2Options: {
@@ -43,7 +46,7 @@ const chromeProfile = {
       "Cookie",
     ],
   },
-  os: "linux",
+  os: HTTP_PROFILE.platform,
 } satisfies CreateSessionOptions;
 
 const MAX_REDIRECTS = 20;
@@ -161,6 +164,7 @@ const readDocument = async (
     ...details,
     block: classifyResponse({ html, requestUrls, response: details }),
     html,
+    identity: httpIdentity(HTTP_PROFILE),
     requestUrls,
   };
 };

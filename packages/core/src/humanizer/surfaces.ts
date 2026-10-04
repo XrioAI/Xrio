@@ -4,7 +4,7 @@ import type { GpuChoice, HostCapabilities, Insets } from "./contracts.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
 
-const LOCALE = "en-US";
+export const DEFAULT_LOCALE = "en-US";
 
 const ACCEPT_LANGUAGES = "en-US,en";
 
@@ -86,18 +86,18 @@ const resolveLocale = ({
     compatible("languages", equals(ACCEPT_LANGUAGES.split(",")), "fatal"),
     compatible(
       "intlLocale",
-      { kind: "same-language", locale: LOCALE },
+      { kind: "same-language", locale: DEFAULT_LOCALE },
       capabilities.platform === "linux" ? "fatal" : "note",
     ),
   ],
   inputs: [
-    { name: "--lang", sink: "switch", value: LOCALE },
+    { name: "--lang", sink: "switch", value: DEFAULT_LOCALE },
     { name: "--accept-lang", sink: "switch", value: ACCEPT_LANGUAGES },
     { name: "LANG", sink: "environment", value: "C.UTF-8" },
-    { name: "LANGUAGE", sink: "environment", value: LOCALE.replace("-", "_") },
+    { name: "LANGUAGE", sink: "environment", value: DEFAULT_LOCALE.replace("-", "_") },
     { name: "intl.accept_languages", sink: "preference", value: ACCEPT_LANGUAGES },
   ],
-  value: { languages: ACCEPT_LANGUAGES.split(","), tag: LOCALE },
+  value: { languages: ACCEPT_LANGUAGES.split(","), tag: DEFAULT_LOCALE },
 });
 
 const resolveTimezone = ({

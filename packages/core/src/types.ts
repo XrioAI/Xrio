@@ -1,5 +1,6 @@
 import type { BlockReport } from "./blocks/classify.ts";
 import type { Deadline } from "./deadline.ts";
+import type { IdentityReport } from "./humanizer/report.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
 
@@ -59,6 +60,7 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
     data: Selected extends "json" ? StructuredContent : string;
     format: Selected;
     block: BlockReport;
+    identity: IdentityReport;
   };
 }[Format];
 
@@ -66,6 +68,7 @@ export interface SourceDocument extends ResponseDetails {
   html: string;
   block: BlockReport;
   requestUrls: readonly string[];
+  identity: IdentityReport;
 }
 
 export type RenderedDocument = Pick<SourceDocument, "html" | "url">;

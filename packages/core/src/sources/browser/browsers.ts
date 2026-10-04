@@ -10,6 +10,7 @@ import type { Observation } from "../../humanizer/contracts.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
+import type { BrowserIdentityReport } from "../../humanizer/report.ts";
 import { describeMismatch, evaluate, readObservation } from "../../humanizer/verify.ts";
 import { exitFactsFor, routeFor } from "../../proxy/route.ts";
 import { sessionFor } from "../../sessions/session.ts";
@@ -216,9 +217,9 @@ const verifyLaunch = async (
   identity: IdentityPlan,
   deadline: Deadline,
   steps: VisitSteps,
-): Promise<void> => {
+): Promise<BrowserIdentityReport> => {
   const observation = await observeLaunch(browser, identity.read, deadline);
-  const { mismatches } = steps.evaluate(identity.expected, observation);
+  const { mismatches, report } = steps.evaluate(identity, observation);
 
   if (mismatches.length > 0) {
     const fields = mismatches.map((mismatch) => describeMismatch(mismatch, observation)).join(", ");
@@ -229,6 +230,8 @@ const verifyLaunch = async (
       { details: { mismatches, stderr: "" } },
     );
   }
+
+  return report;
 };
 
 const renderInScope = async (
@@ -246,10 +249,16 @@ const renderInScope = async (
 
     const browser = await startBrowser(driver, scope, launch, deadline);
     assertSupported(browser.product);
-    await timeStage("verify", async () => {
-      await verifyLaunch(browser, identity, deadline, steps);
+
+    const report = await timeStage(
+      "verify",
+      async () => await verifyLaunch(browser, identity, deadline, steps),
+    );
+
+    document.resolve({
+      ...(await renderDocument(browser, request.url, deadline)),
+      identity: report,
     });
-    document.resolve(await renderDocument(browser, request.url, deadline));
   } catch (error) {
     document.reject(error);
   }

@@ -2,6 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
 import type { Observation } from "./contracts.ts";
+import type { IdentityPlan } from "./humanizer.ts";
+import { coverageOf, observedOf } from "./report.ts";
+import type { BrowserIdentityReport } from "./report.ts";
 import type { SurfaceName } from "./surfaces.ts";
 
 const MEASURED_MAJORS: ReadonlySet<number> = new Set([154]);
@@ -41,20 +44,15 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
-type Tell =
+export type IdentityTell =
   | "no-taskbar"
   | "display-implausible"
   | "headless-token"
   | "unmeasured-chrome"
   | "zone-unverified";
 
-interface IdentityReport {
-  readonly notes: readonly IdentityMismatch[];
-  readonly tells: readonly Tell[];
-}
-
 export interface Evaluation {
-  readonly report: IdentityReport;
+  readonly report: BrowserIdentityReport;
   readonly mismatches: readonly IdentityMismatch[];
 }
 
@@ -218,7 +216,7 @@ export const describeMismatch = (
 
 const isMeasured = (product: ChromeProduct): boolean => MEASURED_MAJORS.has(product.major);
 
-const TELLS: Readonly<Record<Tell, (observation: Observation) => boolean>> = {
+const TELLS: Readonly<Record<IdentityTell, (observation: Observation) => boolean>> = {
   "display-implausible": ({ colorDepth, screenWidth }) =>
     screenWidth < PLAUSIBLE_MIN_WIDTH || colorDepth !== PLAUSIBLE_COLOR_DEPTH,
   "headless-token": ({ userAgent }) => userAgent.includes("HeadlessChrome"),
@@ -228,7 +226,7 @@ const TELLS: Readonly<Record<Tell, (observation: Observation) => boolean>> = {
     requestedZone !== null && requestedOffsets === null && namesZone(zone),
 };
 
-const TELL_ORDER: readonly Tell[] = [
+const TELL_ORDER: readonly IdentityTell[] = [
   "no-taskbar",
   "display-implausible",
   "headless-token",
@@ -237,7 +235,7 @@ const TELL_ORDER: readonly Tell[] = [
 ];
 
 export const evaluate = (
-  expected: readonly SurfaceExpectation[],
+  { chosen, expected }: Pick<IdentityPlan, "chosen" | "expected">,
   observation: Observation,
 ): Evaluation => {
   const measured = isMeasured(observation.product);
@@ -259,7 +257,16 @@ export const evaluate = (
 
   return {
     mismatches,
-    report: { notes, tells: TELL_ORDER.filter((tell) => TELLS[tell](observation)) },
+    report: {
+      binary: { version: observation.product.version },
+      coverage: coverageOf(observation),
+      exit: chosen.exit,
+      mode: chosen.mode,
+      notes: structuredClone(notes),
+      observed: observedOf(observation),
+      surfaces: chosen.surfaces,
+      tells: TELL_ORDER.filter((tell) => TELLS[tell](observation)),
+    },
   };
 };
 

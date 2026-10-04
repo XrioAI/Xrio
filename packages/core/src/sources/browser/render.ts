@@ -388,7 +388,7 @@ export const renderDocument = async (
   browser: DriverBrowser,
   url: URL,
   deadline: Deadline,
-): Promise<SourceDocument> => {
+): Promise<Omit<SourceDocument, "identity">> => {
   const tracker = new PageTracker(browser);
 
   try {

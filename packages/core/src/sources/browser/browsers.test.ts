@@ -1174,6 +1174,34 @@ describe("the launch identity check", () => {
     ]);
   });
 
+  it("resolves the document with the report of what the launch read", async () => {
+    vi.stubEnv("TZ", "UTC");
+
+    const browsers = createBrowsers(cdpDriver, 1, {
+      hostCapabilities: () => ({ platform: "linux" }),
+    });
+
+    using deadline = startDeadline(10_000);
+    const document = await browsers.load(await normalRequest(deadline));
+
+    await browsers.close();
+    expect(document.identity).toMatchObject({
+      binary: { version: "154.0.8037.57" },
+      coverage: { screen: { state: "observed" }, timezone: { state: "observed" } },
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      mode: "headless",
+      notes: [],
+      observed: {
+        offsets: ["GMT+00:00", "GMT+00:00"],
+        screen: { availHeight: 1040, height: 1080, width: 1920 },
+        timeZone: "UTC",
+        window: { outerHeight: 900, outerWidth: 1600 },
+      },
+      surfaces: { timezone: { source: "host", zone: "UTC" } },
+      tells: ["headless-token"],
+    });
+  });
+
   it("rejects a drifted zone before navigation, names it, and still tears Chrome down", async () => {
     vi.stubEnv("TZ", "America/Chicago");
 

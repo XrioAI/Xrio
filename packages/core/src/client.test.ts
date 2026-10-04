@@ -1,10 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { inspect } from "node:util";
 
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { isXrioError, XrioClient, XrioError } from "./client.ts";
+import type { IdentityReport } from "./client.ts";
+import { scratchRoot } from "./sources/browser/browser-process.ts";
 import { fakeChromePath } from "./testing/fake-chrome-path.ts";
+import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
 import { stageTimeline } from "./testing/stage-timeline.ts";
@@ -173,6 +176,7 @@ describe(XrioClient, () => {
         "data",
         "format",
         "headers",
+        "identity",
         "status",
         "url",
       ]);
@@ -182,6 +186,13 @@ describe(XrioClient, () => {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "x-source": "document",
+        },
+        identity: {
+          coverage: { requestHeaders: { reason: "no-request-log", state: "unchecked" } },
+          locale: "en-US",
+          mode: "http",
+          profile: { chromeMajor: 149, platform: "linux" },
+          tells: [],
         },
         status: 200,
         url: `${origin}/pages/document`,
@@ -476,6 +487,65 @@ describe("XrioClient errors", () => {
     );
     await expect(client.scrape({ format: "html", url: "ftp://xrio.invalid" })).rejects.toSatisfy(
       (error) => isXrioError(error, "INVALID_OPTIONS"),
+    );
+  });
+});
+
+const fullDepth = (value: IdentityReport | XrioError): string =>
+  inspect(value, { depth: Number.POSITIVE_INFINITY });
+
+describe("the identity report's secrets", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("holds no proxy credential or relay token in an http scrape through a proxy", async () => {
+    await using fixture = await startFixtureServer(routes);
+    const fixturePort = Number(new URL(fixture.origin).port);
+
+    await using proxy = await startFakeHttpProxy({
+      requireCredentials: "user:secret",
+      tunnelTo: fixturePort,
+    });
+
+    const client = new XrioClient({
+      mode: "http",
+      proxy: proxy.url.replace("://", "://user:secret@"),
+    });
+
+    const { identity } = await client.scrape({ format: "html", url: "http://origin.test/" });
+
+    expect(fullDepth(identity)).not.toMatch(/secret|xrio:|127\.0\.0\.1/u);
+  });
+
+  it("holds no scratch path in a browser report or a launch error", async () => {
+    const root = scratchRoot();
+
+    vi.stubEnv("TZ", "America/Chicago");
+
+    await using client = new XrioClient({
+      browserPath: await fakeChromePath("normal"),
+      mode: "headless",
+    });
+
+    const { identity } = await client.scrape({ format: "html", url: "https://fake.test/page" });
+
+    await using drifted = new XrioClient({
+      browserPath: await fakeChromePath("identity-drift"),
+      mode: "headless",
+    });
+
+    expect({ leaked: fullDepth(identity).includes(root), mode: identity.mode }).toStrictEqual({
+      leaked: false,
+      mode: "headless",
+    });
+    await expect(
+      drifted.scrape({ format: "html", url: "https://fake.test/page" }),
+    ).rejects.toSatisfy(
+      (error) =>
+        isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
+        error.details.mismatches.length === 1 &&
+        !fullDepth(error).includes(root),
     );
   });
 });

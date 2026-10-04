@@ -47,8 +47,9 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
   ...overrides,
 });
 
-const expectedFor = (overrides: Partial<IdentityContext> = {}) =>
-  planIdentity(contextOf(overrides)).expected;
+const planFor = (overrides: Partial<IdentityContext> = {}) => planIdentity(contextOf(overrides));
+
+const planWith = (expected: readonly SurfaceExpectation[]) => ({ ...planFor(), expected });
 
 const expectation = (overrides: Partial<SurfaceExpectation>): SurfaceExpectation => ({
   compatibility: false,
@@ -101,8 +102,8 @@ describe("each matcher kind", () => {
       wanted: 1920,
     },
   ] as const)("$kind holds or names the field it missed", ({ held, missed, rule, wanted }) => {
-    expect(evaluate([rule], held).mismatches).toStrictEqual([]);
-    expect(evaluate([rule], missed).mismatches).toStrictEqual([
+    expect(evaluate(planWith([rule]), held).mismatches).toStrictEqual([]);
+    expect(evaluate(planWith([rule]), missed).mismatches).toStrictEqual([
       {
         expected: wanted,
         field: rule.field,
@@ -117,7 +118,7 @@ describe("severity", () => {
   const germanLinux = { ...linuxHeadless, intlLocale: "de", languages: ["de-DE", "de"] };
 
   it("fails a compatibility expectation on a measured Chrome major", () => {
-    expect(evaluate(expectedFor(), germanLinux)).toStrictEqual({
+    expect(evaluate(planFor(), germanLinux)).toMatchObject({
       mismatches: [
         {
           expected: ["en-US", "en"],
@@ -132,7 +133,7 @@ describe("severity", () => {
   });
 
   it("only notes a compatibility expectation on an unmeasured Chrome major", () => {
-    expect(evaluate(expectedFor(), { ...germanLinux, product: UNMEASURED })).toStrictEqual({
+    expect(evaluate(planFor(), { ...germanLinux, product: UNMEASURED })).toMatchObject({
       mismatches: [],
       report: {
         notes: [
@@ -152,7 +153,7 @@ describe("severity", () => {
   it("keeps the zone offsets fatal on an unmeasured Chrome major", () => {
     const utc = { ...linuxHeadless, product: UNMEASURED, zoneOffsets: ["GMT+00:00", "GMT+00:00"] };
 
-    expect(evaluate(expectedFor(), utc).mismatches).toStrictEqual([
+    expect(evaluate(planFor(), utc).mismatches).toStrictEqual([
       {
         expected: ["GMT+05:30", "GMT+05:30"],
         field: "zoneOffsets",
@@ -164,14 +165,14 @@ describe("severity", () => {
 
   it("only notes a TZ Intl cannot name while Chrome names a zone, reporting that zone", () => {
     expect(
-      evaluate(expectedFor({ hostZone: ":/etc/localtime" }), {
+      evaluate(planFor({ hostZone: ":/etc/localtime" }), {
         ...linuxHeadless,
         requestedOffsets: null,
         requestedZone: ":/etc/localtime",
         zone: "UTC",
         zoneOffsets: ["GMT+00:00", "GMT+00:00"],
       }),
-    ).toStrictEqual({
+    ).toMatchObject({
       mismatches: [],
       report: {
         notes: [
@@ -191,7 +192,7 @@ describe("severity", () => {
     "fails a TZ for which Chrome reports the zone %j, on an unmeasured major too",
     (zone) => {
       expect(
-        evaluate(expectedFor({ hostZone: "UTC0" }), {
+        evaluate(planFor({ hostZone: "UTC0" }), {
           ...linuxHeadless,
           product: UNMEASURED,
           requestedOffsets: null,
@@ -199,7 +200,7 @@ describe("severity", () => {
           zone,
           zoneOffsets: ["GMT+00:00", "GMT+00:00"],
         }),
-      ).toStrictEqual({
+      ).toMatchObject({
         mismatches: [{ expected: "UTC0", field: "zone", observed: zone, surface: "timezone" }],
         report: { notes: [], tells: ["unmeasured-chrome"] },
       });
@@ -208,12 +209,12 @@ describe("severity", () => {
 
   it("only notes an Intl language off the plan on macOS", () => {
     expect(
-      evaluate(expectedFor({ capabilities: { platform: "darwin" } }), {
+      evaluate(planFor({ capabilities: { platform: "darwin" } }), {
         ...linuxHeadless,
         colorScheme: "dark",
         intlLocale: "fr-CA",
       }),
-    ).toStrictEqual({
+    ).toMatchObject({
       mismatches: [],
       report: {
         notes: [{ expected: "en", field: "intlLocale", observed: "fr-CA", surface: "locale" }],
@@ -225,7 +226,7 @@ describe("severity", () => {
 
 describe("the colour scheme", () => {
   it("is a note on Linux when Chrome reports dark", () => {
-    expect(evaluate(expectedFor(), { ...linuxHeadless, colorScheme: "dark" })).toStrictEqual({
+    expect(evaluate(planFor(), { ...linuxHeadless, colorScheme: "dark" })).toMatchObject({
       mismatches: [],
       report: {
         notes: [
@@ -248,7 +249,7 @@ describe("the headed window", () => {
       screenWidth: 1024,
     };
 
-    expect(evaluate(expectedFor({ mode: "headed" }), smallXvfb)).toStrictEqual({
+    expect(evaluate(planFor({ mode: "headed" }), smallXvfb)).toMatchObject({
       mismatches: [],
       report: {
         notes: [
@@ -268,7 +269,7 @@ describe("tells", () => {
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.0.0 Safari/537.36",
     };
 
-    expect(evaluate(expectedFor(), headless).report.tells).toStrictEqual(["headless-token"]);
+    expect(evaluate(planFor(), headless).report.tells).toStrictEqual(["headless-token"]);
   });
 });
 
@@ -363,11 +364,11 @@ const zoneCheckUnder = (hostZone: string, requestedZone = hostZone) => {
 
   const observation = readObservation(MEASURED, readInPage(requestedZone, new Set()));
 
-  const zoneExpectations = expectedFor({ hostZone: requestedZone }).filter(
+  const zoneExpectations = planFor({ hostZone: requestedZone }).expected.filter(
     ({ surface }) => surface === "timezone",
   );
 
-  return { observation, ...evaluate(zoneExpectations, observation) };
+  return { observation, ...evaluate(planWith(zoneExpectations), observation) };
 };
 
 describe("the zone check run against the host's Intl", () => {
@@ -399,7 +400,7 @@ describe("the zone check run against the host's Intl", () => {
         described: mismatches.map((mismatch) => describeMismatch(mismatch, observation)),
         mismatches,
         report,
-      }).toStrictEqual({
+      }).toMatchObject({
         described: [`timezone zone (TZ=${zone}; Chrome named no zone)`],
         mismatches: [{ expected: zone, field: "zone", observed: null, surface: "timezone" }],
         report: { notes: [], tells: [] },

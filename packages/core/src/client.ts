@@ -27,7 +27,20 @@ export type {
 
 export { isXrioError, XrioError } from "./errors.ts";
 
-export type { IdentityMismatch } from "./humanizer/verify.ts";
+export type {
+  BrowserIdentityReport,
+  Coverage,
+  CoverageReason,
+  CoveredSurface,
+  HttpIdentityReport,
+  IdentityCoverage,
+  IdentityReport,
+  ObservedIdentity,
+} from "./humanizer/report.ts";
+
+export type { SurfaceChoices } from "./humanizer/surfaces.ts";
+
+export type { IdentityMismatch, IdentityTell } from "./humanizer/verify.ts";
 
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
 
@@ -83,6 +96,7 @@ export class XrioClient {
       block: document.block,
       cookies: document.cookies,
       headers: document.headers,
+      identity: document.identity,
       status: document.status,
       url: document.url,
     };
