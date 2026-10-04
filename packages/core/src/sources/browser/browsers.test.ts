@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { startDeadline, untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
+import type { Observation } from "../../humanizer/contracts.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import { evaluate } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
@@ -1146,7 +1147,13 @@ const readingWith = (read: (deadline: Deadline) => Promise<string>): BrowserDriv
   },
 });
 
+const FAKE_PRODUCT = { headless: true, major: 154, version: "154.0.8037.57" } as const;
+
 describe("the launch identity check", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("runs as the verify stage after launch and before navigation", async () => {
     const browsers = createBrowsers(cdpDriver, 1);
     using deadline = startDeadline(10_000);
@@ -1164,6 +1171,70 @@ describe("the launch identity check", () => {
       "capture",
       "teardown",
     ]);
+  });
+
+  it("rejects a drifted zone before navigation, names it, and still tears Chrome down", async () => {
+    vi.stubEnv("TZ", "America/Chicago");
+
+    const observed: Observation[] = [];
+
+    const recordingEvaluate: typeof evaluate = (expected, observation) => {
+      observed.push(observation);
+
+      return evaluate(expected, observation);
+    };
+
+    const browsers = createBrowsers(cdpDriver, 1, { evaluate: recordingEvaluate });
+    using deadline = startDeadline(10_000);
+
+    using stages = stageTimeline(
+      new Set(["launch", "verify", "navigation", "capture", "teardown"]),
+    );
+
+    const visit = stages.recording(async () =>
+      browsers.start({
+        ...(await normalRequest(deadline)),
+        browserPath: await fakeChromePath("identity-drift"),
+      }),
+    );
+
+    const { closed: closing, document: rendering } = await visit;
+    const document = await settledValue(rendering);
+    const closed = await closing;
+    const leftAtClose = await leftovers();
+
+    await browsers.close();
+    expect({ closed, document, leftAtClose, observed, timeline: stages.timeline }).toMatchObject({
+      closed: { exited: true },
+      document: {
+        error: {
+          code: "BROWSER_LAUNCH_FAILED",
+          details: {
+            mismatches: [
+              {
+                expected: ["GMT-06:00", "GMT-05:00"],
+                field: "zoneOffsets",
+                observed: ["GMT+00:00", "GMT+00:00"],
+                surface: "timezone",
+              },
+            ],
+            stderr: "",
+          },
+          message:
+            "Chrome's launch identity does not match Xrio's plan: timezone zoneOffsets (TZ=America/Chicago).",
+        },
+      },
+      leftAtClose: nothingLeft,
+      observed: [
+        {
+          product: FAKE_PRODUCT,
+          requestedOffsets: ["GMT-06:00", "GMT-05:00"],
+          zone: "UTC",
+          zoneOffsets: ["GMT+00:00", "GMT+00:00"],
+        },
+      ],
+      timeline: ["launch", "verify", "teardown"],
+    });
   });
 
   it("reads again once when Chrome reports an unsized window, then evaluates the sized one", async () => {

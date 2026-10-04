@@ -19,6 +19,7 @@ const SCENARIOS = [
   "evaluate-throws",
   "hang-on-navigate",
   "navigate-error",
+  "identity-drift",
   "unsized-window",
 ] as const;
 
@@ -264,8 +265,8 @@ const OBSERVATION = {
   outerWidth: 1600,
   pointer: "fine",
   reducedMotion: "no-preference",
-  requestedOffsets: UTC_OFFSETS,
-  requestedZone: "UTC",
+  requestedOffsets: scenario === "identity-drift" ? ["GMT-06:00", "GMT-05:00"] : UTC_OFFSETS,
+  requestedZone: scenario === "identity-drift" ? "America/Chicago" : "UTC",
   screenHeight: 1080,
   screenWidth: 1920,
   userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${PRODUCT} Safari/537.36`,
