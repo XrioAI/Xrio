@@ -3,6 +3,7 @@ export const OWNED_SWITCHES = [
   "--accept-lang",
   "--use-gl",
   "--use-angle",
+  "--enable-unsafe-swiftshader",
   "--window-size",
   "--screen-info",
   "--use-fake-device-for-media-stream",
@@ -113,7 +114,6 @@ const RESERVED_IDENTITY_SWITCHES = [
   "--start-fullscreen",
   "--user-agent",
   "--disable-gpu",
-  "--enable-unsafe-swiftshader",
   "--disable-software-rasterizer",
   "--disable-webgl",
   "--disable-3d-apis",
@@ -157,7 +157,7 @@ export type LaunchInput =
   | {
       readonly sink: "switch";
       readonly name: (typeof OWNED_SWITCHES)[number];
-      readonly value: string;
+      readonly value?: string;
     }
   | {
       readonly sink: "environment";

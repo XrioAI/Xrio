@@ -1224,8 +1224,7 @@ describe("the identity a visit launches Chrome with", () => {
     {
       platform: "linux" as const,
       switches: [
-        "--use-gl=angle",
-        "--use-angle=swiftshader",
+        "--enable-unsafe-swiftshader",
         "--use-fake-device-for-media-stream=device-count=0",
       ],
     },
@@ -1238,7 +1237,11 @@ describe("the identity a visit launches Chrome with", () => {
       });
 
       expect(
-        plan?.args.filter((value) => value.startsWith("--use-") && value !== BASELINE_USE_SWITCH),
+        plan?.args.filter(
+          (value) =>
+            (value.startsWith("--use-") && value !== BASELINE_USE_SWITCH) ||
+            value === "--enable-unsafe-swiftshader",
+        ),
       ).toStrictEqual(switches);
     },
   );

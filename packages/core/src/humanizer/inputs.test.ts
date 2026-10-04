@@ -48,6 +48,17 @@ describe(mergeBrowserInputs, () => {
     ]);
   });
 
+  it("emits a switch with no value as its bare name", () => {
+    const { switches } = mergeBrowserInputs(
+      resolutionsOf({
+        gpu: [{ name: "--enable-unsafe-swiftshader", sink: "switch" }],
+        locale: [{ name: "--lang", sink: "switch", value: "" }],
+      }),
+    );
+
+    expect(switches).toStrictEqual(["--lang=", "--enable-unsafe-swiftshader"]);
+  });
+
   it("keeps each sink apart, nesting dotted names", () => {
     const inputs = mergeBrowserInputs(
       resolutionsOf({

@@ -60,7 +60,7 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
   const place = (input: LaunchInput): void => {
     switch (input.sink) {
       case "switch": {
-        switches.push(`${input.name}=${input.value}`);
+        switches.push(input.value === undefined ? input.name : `${input.name}=${input.value}`);
         break;
       }
 

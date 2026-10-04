@@ -201,10 +201,7 @@ const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Re
   capabilities.platform === "linux"
     ? {
         expected: [],
-        inputs: [
-          { name: "--use-gl", sink: "switch", value: "angle" },
-          { name: "--use-angle", sink: "switch", value: "swiftshader" },
-        ],
+        inputs: [{ name: "--enable-unsafe-swiftshader", sink: "switch" }],
         value: { backend: "swiftshader", persona: null },
       }
     : { expected: [], inputs: [], value: { backend: "native" } };
