@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { AFTER_CAPTURE_READ } from "../humanizer/verify.ts";
 import { closedLoopbackPort } from "./fixture-server.ts";
 import type { FixtureHandler, FixtureOrigins } from "./fixture-server.ts";
 
@@ -103,6 +104,27 @@ const IDENTITY_REPORT_SCRIPT = `<script>
 })();
 </script>`;
 
+const WATCH_SCRIPT = `<script>
+(() => {
+  const seen = () => {
+    fetch("/watch-seen");
+  };
+  const original = NavigatorUAData.prototype.getHighEntropyValues;
+  NavigatorUAData.prototype.getHighEntropyValues = function (...args) {
+    seen();
+    return original.apply(this, args);
+  };
+  const memory = Object.getOwnPropertyDescriptor(Navigator.prototype, "deviceMemory");
+  Object.defineProperty(Navigator.prototype, "deviceMemory", {
+    ...memory,
+    get() {
+      seen();
+      return memory.get.call(this);
+    },
+  });
+})();
+</script>`;
+
 const IDENTITY_REALM_SCRIPT = `const report = () => ({
   hardwareConcurrency: navigator.hardwareConcurrency,
   deviceMemory: navigator.deviceMemory ?? null,
@@ -188,6 +210,8 @@ const holdScriptUntilRequested =
 
     heldScripts.set(awaited, [...(heldScripts.get(awaited) ?? []), response]);
   };
+
+export const wasRequested = (pathname: string): boolean => requestedPaths.has(pathname);
 
 const recordRequest = (pathname: string): void => {
   requestedPaths.add(pathname);
@@ -500,6 +524,27 @@ const routes = new Map<
         "identity",
         `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${IDENTITY_REPORT_SCRIPT}`,
       );
+    },
+  ],
+  [
+    "/watch",
+    (response) => {
+      requestedPaths.delete("/watch-seen");
+      sendPage(response, "watch", "", WATCH_SCRIPT);
+    },
+  ],
+  [
+    "/watch-control",
+    (response) => {
+      requestedPaths.delete("/watch-seen");
+      sendPage(response, "watch-control", `<script>${AFTER_CAPTURE_READ}</script>`, WATCH_SCRIPT);
+    },
+  ],
+  [
+    "/watch-seen",
+    (response) => {
+      response.writeHead(204);
+      response.end();
     },
   ],
   ["/identity-settled.js", holdScriptUntilRequested("/identity-sized")],

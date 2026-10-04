@@ -7,14 +7,18 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
-import { busyPageStarted, conformancePages } from "../../testing/conformance-pages.ts";
+import {
+  busyPageStarted,
+  conformancePages,
+  wasRequested,
+} from "../../testing/conformance-pages.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
@@ -47,6 +51,8 @@ const ABANDONED_LONG_AGO_MS = 2 * 60 * 60 * 1000;
 const BUSY_TIMEOUT_MS = 5000;
 
 const DOWNLOAD_TEARDOWN_BOUND_MS = 1000;
+
+const WATCH_SETTLE_MS = 300;
 
 const MARKER = /<meta name="xrio-page" content="(?<marker>[^"]+)"/u;
 
@@ -565,6 +571,24 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
       },
     });
     expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
+  });
+
+  it("reads after capture in an isolated world, out of reach of the page's own wrappers", async () => {
+    const { identity } = await load(mode, "/watch");
+
+    await delay(WATCH_SETTLE_MS);
+    expect({ identity, seen: wasRequested("/watch-seen") }).toMatchObject({
+      identity: { coverage: { clientHints: { state: "observed" } } },
+      seen: false,
+    });
+  });
+
+  it("lets the same wrappers see the production read when it runs in the main world", async () => {
+    await load(mode, "/watch-control");
+
+    await vi.waitFor(() => {
+      expect(wasRequested("/watch-seen")).toBeTruthy();
+    });
   });
 });
 
