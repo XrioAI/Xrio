@@ -197,6 +197,8 @@ const resolveTimezone = (
   };
 };
 
+const WEBGL_CONTEXT: Expectation = compatible("webgl", equals(true), "fatal");
+
 const chooseGpu = ({
   platform,
   readableRenderNode,
@@ -222,7 +224,7 @@ const chooseGpu = ({
 const resolveGpu = ({
   capabilities,
 }: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] => ({
-  expected: [],
+  expected: [WEBGL_CONTEXT],
   ...chooseGpu(capabilities),
 });
 

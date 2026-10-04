@@ -20,6 +20,7 @@ const SCENARIOS = [
   "hang-on-navigate",
   "navigate-error",
   "identity-drift",
+  "no-webgl",
   "unsized-window",
   "fork",
 ] as const;
@@ -276,6 +277,7 @@ const OBSERVATION = {
   screenWidth: 1920,
   userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
   webdriver: false,
+  webgl: scenario !== "no-webgl",
   zone: "UTC",
   zoneOffsets: UTC_OFFSETS,
 };

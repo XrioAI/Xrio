@@ -53,6 +53,7 @@ const headlessLinux: Observation = {
   screenWidth: 1920,
   userAgent: linuxUserAgent,
   webdriver: false,
+  webgl: true,
   zone: "UTC",
   zoneOffsets: ["GMT+00:00", "GMT+00:00"],
 };

@@ -350,10 +350,17 @@ describe("the timezone surface", () => {
   });
 });
 
+const webglContext = {
+  compatibility: true,
+  field: "webgl",
+  matcher: { kind: "equals", value: true },
+  severity: "fatal",
+};
+
 describe("the gpu surface", () => {
   it("selects SwiftShader through its unsafe switch on Linux", () => {
     expect(resolveSurfaces(contextOf()).gpu).toStrictEqual({
-      expected: [],
+      expected: [webglContext],
       inputs: [{ name: "--enable-unsafe-swiftshader", sink: "switch" }],
       value: { backend: "swiftshader", persona: null },
     });
@@ -364,7 +371,7 @@ describe("the gpu surface", () => {
       resolveSurfaces(contextOf({ capabilities: { platform: "linux", readableRenderNode: true } }))
         .gpu,
     ).toStrictEqual({
-      expected: [],
+      expected: [webglContext],
       inputs: [
         { name: "--use-gl", sink: "switch", value: "angle" },
         { name: "--use-angle", sink: "switch", value: "vulkan" },
@@ -375,7 +382,7 @@ describe("the gpu surface", () => {
 
   it.each(["darwin", "win32"] as const)("leaves the system's backend alone on %s", (platform) => {
     expect(resolveSurfaces(contextOf({ capabilities: { platform } })).gpu).toStrictEqual({
-      expected: [],
+      expected: [webglContext],
       inputs: [],
       value: { backend: "native" },
     });

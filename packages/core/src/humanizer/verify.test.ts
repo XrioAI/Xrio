@@ -44,6 +44,7 @@ const linuxHeadless: Observation = {
   userAgent:
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
   webdriver: false,
+  webgl: true,
   zone: "Asia/Calcutta",
   zoneOffsets: ["GMT+05:30", "GMT+05:30"],
 };
@@ -173,6 +174,17 @@ describe("severity", () => {
         ],
         tells: ["unmeasured-chrome"],
       },
+    });
+  });
+
+  it("fails a page with no WebGL context on a measured Chrome major and only notes it on another", () => {
+    const noWebgl = { ...linuxHeadless, webgl: false };
+    const mismatch = { expected: true, field: "webgl", observed: false, surface: "gpu" };
+
+    expect(evaluate(planFor(), noWebgl).mismatches).toStrictEqual([mismatch]);
+    expect(evaluate(planFor(), { ...noWebgl, product: UNMEASURED })).toMatchObject({
+      mismatches: [],
+      report: { notes: [mismatch] },
     });
   });
 
@@ -366,6 +378,7 @@ describe(readObservation, () => {
 
   it.each([
     { read: JSON.stringify({ ...reading, webdriver: "false" }), refusal: "webdriver" },
+    { read: JSON.stringify({ ...reading, webgl: undefined }), refusal: "webgl" },
     { read: JSON.stringify({ ...reading, languages: undefined }), refusal: "languages" },
     { read: JSON.stringify({ ...reading, zoneOffsets: [0, 0] }), refusal: "zoneOffsets" },
     { read: "null", refusal: "anyPointer, availHeight" },
@@ -383,8 +396,9 @@ describe(readObservation, () => {
   });
 });
 
-const pageGlobals = (matching: ReadonlySet<string>) => ({
+const pageGlobals = (matching: ReadonlySet<string>, canCreateWebgl: boolean) => ({
   devicePixelRatio: 1,
+  document: { createElement: () => ({ getContext: () => (canCreateWebgl ? {} : null) }) },
   matchMedia: (query: string) => ({ matches: matching.has(query) }),
   navigator: {
     languages: ["en-US", "en"],
@@ -397,8 +411,8 @@ const pageGlobals = (matching: ReadonlySet<string>) => ({
   screen: { availHeight: 1040, availWidth: 1920, colorDepth: 24, height: 1080, width: 1920 },
 });
 
-const runRead = (read: string, matching: ReadonlySet<string>): string =>
-  String(runInNewContext(read, pageGlobals(matching)));
+const runRead = (read: string, matching: ReadonlySet<string>, canCreateWebgl = true): string =>
+  String(runInNewContext(read, pageGlobals(matching, canCreateWebgl)));
 
 const readInPage = (hostZone: string, matching: ReadonlySet<string>): string =>
   runRead(planIdentity(contextOf({ hostZone })).read.beforeNavigation, matching);
@@ -424,7 +438,14 @@ describe(identityRead, () => {
       requestedOffsets: ["GMT+05:30", "GMT+05:30"],
       screenHeight: 1080,
       webdriver: false,
+      webgl: true,
     });
+  });
+
+  it.each([true, false])("reads webgl %s as the page's canvas gives it", (webgl) => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, webgl))).toMatchObject({ webgl });
   });
 
   it("requests the pinned zone, not the host's", () => {

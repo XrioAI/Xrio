@@ -1425,6 +1425,39 @@ describe("the launch identity check", () => {
     });
   });
 
+  it("rejects a page with no WebGL context before navigation", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+
+    using stages = stageTimeline(
+      new Set(["launch", "verify", "navigation", "capture", "teardown"]),
+    );
+
+    const document = await stages.recording(
+      async () =>
+        await settledValue(
+          browsers.load({
+            ...(await normalRequest(deadline)),
+            browserPath: await fakeChromePath("no-webgl"),
+          }),
+        ),
+    );
+
+    await browsers.close();
+    expect({ document, timeline: stages.timeline }).toMatchObject({
+      document: {
+        error: {
+          code: "BROWSER_LAUNCH_FAILED",
+          details: {
+            mismatches: [{ expected: true, field: "webgl", observed: false, surface: "gpu" }],
+          },
+          message: "Chrome's launch identity does not match Xrio's plan: gpu webgl.",
+        },
+      },
+      timeline: ["launch", "verify", "teardown"],
+    });
+  });
+
   it("rejects a Chrome that ignores the pinned locale before navigation", async () => {
     const browsers = createBrowsers(cdpDriver, 1, {
       hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),

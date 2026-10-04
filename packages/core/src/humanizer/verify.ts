@@ -105,6 +105,7 @@ const READING = {
   screenWidth: isNumber,
   userAgent: isText,
   webdriver: isFlag,
+  webgl: isFlag,
   zone: isTextOrNull,
   zoneOffsets: isTexts,
 } satisfies { readonly [Field in ObservedField]: (value: unknown) => value is Reading[Field] };
@@ -396,6 +397,7 @@ const READ_SOURCE = `(requested) => {
     anyPointer: media("any-pointer", ["fine", "coarse", "none"]),
     maxTouchPoints: navigator.maxTouchPoints,
     webdriver: navigator.webdriver,
+    webgl: document.createElement("canvas").getContext("webgl") !== null,
     userAgent: navigator.userAgent,
   });
 }`;

@@ -150,6 +150,7 @@ export interface Observation {
   readonly anyPointer: string | null;
   readonly maxTouchPoints: number;
   readonly webdriver: boolean;
+  readonly webgl: boolean;
   readonly userAgent: string;
 }
 
