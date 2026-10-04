@@ -187,6 +187,130 @@ describe("the timezone surface", () => {
     ).toStrictEqual(["exit-unknown"]);
   });
 
+  it("sets TZ to a pinned zone, whatever the host's zone is", () => {
+    expect(
+      resolveSurfaces(
+        contextOf({
+          hostZone: "America/Chicago",
+          pins: { ...noPins, timezone: "America/New_York" },
+        }),
+      ).timezone,
+    ).toStrictEqual({
+      expected: zoneExpectations,
+      inputs: [{ name: "TZ", sink: "environment", value: "America/New_York" }],
+      tells: [],
+      value: { source: "pin", zone: "America/New_York" },
+    });
+  });
+
+  it.each([
+    ["europe/berlin", "Europe/Berlin"],
+    ["Europe/Kyiv", "Europe/Kiev"],
+    ["asia/kolkata", "Asia/Calcutta"],
+    ["Etc/UTC", "UTC"],
+  ])("sets TZ to the spelling Chrome uses for a pin of %s, which is %s", (pin, zone) => {
+    expect(
+      resolveSurfaces(contextOf({ pins: { ...noPins, timezone: pin } })).timezone,
+    ).toMatchObject({
+      inputs: [{ name: "TZ", sink: "environment", value: zone }],
+      value: { source: "pin", zone },
+    });
+  });
+
+  it.each(["Mars/Olympus", "+05:30", ""])(
+    "falls back to the host zone when a pin of %j names no zone",
+    (pin) => {
+      expect(
+        resolveSurfaces(
+          contextOf({ hostZone: "America/Chicago", pins: { ...noPins, timezone: pin } }),
+        ).timezone,
+      ).toMatchObject({
+        inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
+        value: { source: "host", zone: "America/Chicago" },
+      });
+    },
+  );
+
+  it("tells nothing about a pinned UTC, because the caller chose it", () => {
+    expect(
+      resolveSurfaces(contextOf({ hostZone: "UTC", pins: { ...noPins, timezone: "UTC" } }))
+        .timezone,
+    ).toMatchObject({ tells: [], value: { source: "pin", zone: "UTC" } });
+  });
+
+  it("prefers a pin to observed exit facts, with or without an exit policy", () => {
+    const pinned = { exit: observedGermanExit, pins: { ...noPins, timezone: "America/New_York" } };
+
+    expect(
+      [false, true].map(
+        (followExit) => resolveSurfaces(contextOf({ ...pinned, followExit })).timezone,
+      ),
+    ).toMatchObject([
+      {
+        inputs: [{ name: "TZ", sink: "environment", value: "America/New_York" }],
+        tells: [],
+        value: { source: "pin", zone: "America/New_York" },
+      },
+      {
+        inputs: [{ name: "TZ", sink: "environment", value: "America/New_York" }],
+        tells: [],
+        value: { source: "pin", zone: "America/New_York" },
+      },
+    ]);
+  });
+
+  it("sets TZ to an observed exit's zone under an exit policy", () => {
+    expect(
+      resolveSurfaces(
+        contextOf({ exit: observedGermanExit, followExit: true, hostZone: "America/Chicago" }),
+      ).timezone,
+    ).toStrictEqual({
+      expected: zoneExpectations,
+      inputs: [{ name: "TZ", sink: "environment", value: "Europe/Berlin" }],
+      tells: [],
+      value: { source: "exit", zone: "Europe/Berlin" },
+    });
+  });
+
+  it("sets TZ to the spelling Chrome uses for an exit's zone", () => {
+    const kyivExit = {
+      ...observedGermanExit,
+      facts: { ...observedGermanExit.facts, zone: "Europe/Kyiv" },
+    };
+
+    expect(resolveSurfaces(contextOf({ exit: kyivExit, followExit: true })).timezone).toMatchObject(
+      {
+        inputs: [{ name: "TZ", sink: "environment", value: "Europe/Kiev" }],
+        value: { source: "exit", zone: "Europe/Kiev" },
+      },
+    );
+  });
+
+  it.each(["Mars/Olympus", "+02:00", ""])(
+    "falls back to the host zone when an exit's zone %j names no zone",
+    (zone) => {
+      const badExit = { ...observedGermanExit, facts: { ...observedGermanExit.facts, zone } };
+
+      expect(
+        resolveSurfaces(contextOf({ exit: badExit, followExit: true, hostZone: "America/Chicago" }))
+          .timezone,
+      ).toMatchObject({
+        inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
+        value: { source: "host", zone: "America/Chicago" },
+      });
+    },
+  );
+
+  it("falls back to the host zone, with its tell, when an exit policy has no exit facts", () => {
+    expect(
+      resolveSurfaces(contextOf({ exit: proxyRoute, followExit: true, hostZone: "UTC" })).timezone,
+    ).toMatchObject({
+      inputs: [{ name: "TZ", sink: "environment", value: "UTC" }],
+      tells: ["exit-unknown"],
+      value: { source: "host", zone: "UTC" },
+    });
+  });
+
   it("keeps the host zone beside observed exit facts, with no tell", () => {
     expect(
       resolveSurfaces(contextOf({ exit: observedGermanExit, hostZone: "America/Chicago" }))

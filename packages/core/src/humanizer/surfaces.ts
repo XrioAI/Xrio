@@ -5,6 +5,7 @@ import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, FactTell, Matcher, Observed, ObservedField } from "./verify.ts";
+import { canonicalZone } from "./zone-name.ts";
 
 const DEFAULT_LOCALE = "en-US";
 
@@ -27,6 +28,7 @@ export interface IdentityContext {
   readonly pins: IdentityIntent;
   readonly hostZone: string;
   readonly exit: ExitChoice;
+  readonly followExit?: boolean;
 }
 
 interface Size {
@@ -36,7 +38,7 @@ interface Size {
 
 export interface SurfaceChoices {
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
-  readonly timezone: { readonly source: "host"; readonly zone: string };
+  readonly timezone: { readonly source: "pin" | "exit" | "host"; readonly zone: string };
   readonly gpu: GpuChoice;
   readonly window: { readonly source: "fixed"; readonly size: Size };
   readonly screen:
@@ -131,6 +133,29 @@ const resolveLocale = ({
   };
 };
 
+const exitZone = ({ facts }: ExitChoice): string | undefined =>
+  facts.kind === "observed" ? canonicalZone(facts.zone) : undefined;
+
+const chooseZone = ({
+  exit,
+  followExit = false,
+  hostZone,
+  pins,
+}: Pick<
+  IdentityContext,
+  "exit" | "followExit" | "hostZone" | "pins"
+>): SurfaceChoices["timezone"] => {
+  const pin = canonicalZone(pins.timezone);
+
+  if (pin !== undefined) {
+    return { source: "pin", zone: pin };
+  }
+
+  const zone = followExit ? exitZone(exit) : undefined;
+
+  return zone === undefined ? { source: "host", zone: hostZone } : { source: "exit", zone };
+};
+
 const hostZoneTell = ({
   exit,
   hostZone,
@@ -143,9 +168,10 @@ const hostZoneTell = ({
 };
 
 const resolveTimezone = (
-  context: Pick<IdentityContext, "exit" | "hostZone">,
+  context: Pick<IdentityContext, "exit" | "followExit" | "hostZone" | "pins">,
 ): Resolutions["timezone"] => {
-  const tell = hostZoneTell(context);
+  const choice = chooseZone(context);
+  const tell = choice.source === "host" ? hostZoneTell(context) : undefined;
 
   return {
     expected: [
@@ -162,9 +188,9 @@ const resolveTimezone = (
         severity: "fatal",
       },
     ],
-    inputs: [{ name: "TZ", sink: "environment", value: context.hostZone }],
+    inputs: [{ name: "TZ", sink: "environment", value: choice.zone }],
     tells: tell === undefined ? [] : [tell],
-    value: { source: "host", zone: context.hostZone },
+    value: choice,
   };
 };
 

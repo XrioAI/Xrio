@@ -272,6 +272,50 @@ describe("the headed window", () => {
   });
 });
 
+describe("a pinned alias", () => {
+  it("passes on the zone Chrome names, which the report names as well", () => {
+    const kyiv = {
+      ...linuxHeadless,
+      requestedOffsets: ["GMT+02:00", "GMT+03:00"],
+      requestedZone: "Europe/Kiev",
+      zone: "Europe/Kiev",
+      zoneOffsets: ["GMT+02:00", "GMT+03:00"],
+    };
+
+    expect(evaluate(planFor({ pins: { ...noPins, timezone: "Europe/Kyiv" } }), kyiv)).toMatchObject(
+      {
+        mismatches: [],
+        report: {
+          notes: [],
+          observed: { timeZone: "Europe/Kiev" },
+          surfaces: { timezone: { source: "pin", zone: "Europe/Kiev" } },
+          tells: [],
+        },
+      },
+    );
+  });
+
+  it("fails when Chrome presents other offsets than the pinned zone's", () => {
+    const hostLeak = {
+      ...linuxHeadless,
+      requestedOffsets: ["GMT+02:00", "GMT+03:00"],
+      requestedZone: "Europe/Kiev",
+      zone: "Asia/Calcutta",
+    };
+
+    expect(
+      evaluate(planFor({ pins: { ...noPins, timezone: "Europe/Kyiv" } }), hostLeak).mismatches,
+    ).toStrictEqual([
+      {
+        expected: ["GMT+02:00", "GMT+03:00"],
+        field: "zoneOffsets",
+        observed: ["GMT+05:30", "GMT+05:30"],
+        surface: "timezone",
+      },
+    ]);
+  });
+});
+
 describe("tells", () => {
   it("names stock headless Chrome's user agent token", () => {
     const headless = {
@@ -364,6 +408,19 @@ describe(identityRead, () => {
       requestedOffsets: ["GMT+05:30", "GMT+05:30"],
       screenHeight: 1080,
       webdriver: false,
+    });
+  });
+
+  it("requests the pinned zone, not the host's", () => {
+    const pinned = planIdentity(
+      contextOf({ hostZone: "America/Chicago", pins: { ...noPins, timezone: "Asia/Kolkata" } }),
+    );
+
+    expect(
+      readObservation(MEASURED, runRead(pinned.read.beforeNavigation, lightDesktop)),
+    ).toMatchObject({
+      requestedOffsets: ["GMT+05:30", "GMT+05:30"],
+      requestedZone: "Asia/Calcutta",
     });
   });
 

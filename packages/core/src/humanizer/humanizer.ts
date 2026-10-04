@@ -44,7 +44,10 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
       resolutions[surface].expected.map((expectation) => ({ ...expectation, surface })),
     ),
     inputs: mergeBrowserInputs(resolutions),
-    read: { afterCapture: AFTER_CAPTURE_READ, beforeNavigation: identityRead(context.hostZone) },
+    read: {
+      afterCapture: AFTER_CAPTURE_READ,
+      beforeNavigation: identityRead(resolutions.timezone.value.zone),
+    },
     tells: EMISSION_ORDER.flatMap((surface) => resolutions[surface].tells ?? []),
   };
 };
