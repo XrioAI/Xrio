@@ -28,6 +28,7 @@ import {
   scratchRoot,
   writeAtomically,
 } from "./browser-process.ts";
+import { createFontStackCheck, fontStackBeside } from "./font-stack.ts";
 import { killProcessGroup } from "./group-lifetime.ts";
 import { TEARDOWN_BUDGET_MS } from "./port.ts";
 
@@ -114,8 +115,11 @@ interface RawArtifact {
 
 interface ProbeOptions {
   readonly budgetMs: number;
+  readonly budgetSignal: (budgetMs: number) => AbortSignal;
+  readonly fcList: string;
   readonly now: () => number;
   readonly renderNodeDirectory: string;
+  readonly platform: NodeJS.Platform;
   readonly root: string;
   readonly scratchRoot: string;
   readonly signal: AbortSignal;
@@ -677,13 +681,18 @@ export const createCapabilityProbe = (
 ): HostCapabilityProbe => {
   const options: ProbeOptions = {
     budgetMs: PROBE_BUDGET_MS,
+    budgetSignal: (budgetMs) => AbortSignal.timeout(budgetMs),
+    fcList: "fc-list",
     now: Date.now,
+    platform: process.platform,
     renderNodeDirectory: RENDER_NODE_DIRECTORY,
     root: hostCacheRoot(),
     scratchRoot: overrides.root ?? scratchRoot(),
     signal: new AbortController().signal,
     ...overrides,
   };
+
+  const checkFontStack = createFontStackCheck(options);
 
   const entries = new Map<string, ProbeEntry>();
 
@@ -779,10 +788,10 @@ export const createCapabilityProbe = (
     }
   };
 
-  return async (browserPath, deadline) => {
+  const probeFork: HostCapabilityProbe = async (browserPath, deadline) => {
     const host: HostCapabilities = (await hasReadableRenderNode(options.renderNodeDirectory))
-      ? { platform: process.platform, readableRenderNode: true }
-      : { platform: process.platform };
+      ? { platform: options.platform, readableRenderNode: true }
+      : { platform: options.platform };
 
     const fork = browserPath === undefined ? undefined : await forkPackageOf(browserPath);
 
@@ -796,5 +805,33 @@ export const createCapabilityProbe = (
         : await untilDeadline(async () => await forkFactsOf(fork), deadline);
 
     return { ...host, fork: facts };
+  };
+
+  const probeFontStack = async (
+    browserPath: string | undefined,
+    deadline: Deadline | undefined,
+  ) => {
+    if (options.platform !== "linux" || browserPath === undefined) {
+      return null;
+    }
+
+    const directory = await fontStackBeside(browserPath);
+
+    if (directory === null) {
+      return null;
+    }
+
+    return deadline === undefined
+      ? await checkFontStack(directory)
+      : await untilDeadline(async () => await checkFontStack(directory), deadline);
+  };
+
+  return async (browserPath, deadline) => {
+    const [capabilities, fontStack] = await Promise.all([
+      probeFork(browserPath, deadline),
+      probeFontStack(browserPath, deadline),
+    ]);
+
+    return fontStack === null ? capabilities : { ...capabilities, fontStack };
   };
 };

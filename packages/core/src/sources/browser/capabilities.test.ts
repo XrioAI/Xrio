@@ -20,10 +20,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
+import {
+  configSeenByFcList,
+  fakeFontStack,
+  fcListRuns,
+  FIXTURE_PAYLOAD,
+  hangFcListFor,
+  setFcListOutput,
+  writeDuringScan,
+} from "../../testing/fake-font-stack.ts";
+import type { FakeFontStack } from "../../testing/fake-font-stack.ts";
 import {
   dumpsRun,
   fakeForkPath,
@@ -588,5 +598,499 @@ describe("hostCapabilities", () => {
         expect([existsSync(probeScratch), existsSync(browserScratch)]).toStrictEqual([false, true]);
       },
     );
+  });
+});
+
+const isFontStackChecked = (message: unknown): message is { event: string; detail: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  message.event === "font-stack-checked" &&
+  "detail" in message &&
+  typeof message.detail === "string";
+
+const CHECKED_LISTING = "Fixture Sans,Fixture Sans Bold\nFixture Serif\nFixture Mono\n";
+
+interface StackProbeOverrides {
+  readonly now?: () => number;
+  readonly budgetMs?: number;
+  readonly budgetSignal?: (budgetMs: number) => AbortSignal;
+  readonly platform?: NodeJS.Platform;
+  readonly signal?: AbortSignal;
+}
+
+const useFontStack = () => {
+  let checks: string[] = [];
+  let root = "";
+  let stack: FakeFontStack | undefined;
+
+  const recordCheck: ChannelListener = (message) => {
+    if (isFontStackChecked(message)) {
+      checks.push(message.detail);
+    }
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-font-stack-"));
+    checks = [];
+    stack = await fakeFontStack(path.join(root, "stack"));
+    subscribe("xrio:event", recordCheck);
+  });
+
+  afterEach(async () => {
+    unsubscribe("xrio:event", recordCheck);
+    await rm(root, { force: true, recursive: true });
+  });
+
+  const fixture = (): FakeFontStack => {
+    if (stack === undefined) {
+      throw new Error("The font stack fixture is not built.");
+    }
+
+    return stack;
+  };
+
+  const scratch = () => path.join(root, "scratch");
+
+  const probeOn = (overrides: StackProbeOverrides = {}) =>
+    createCapabilityProbe({
+      fcList: fixture().fcList,
+      platform: "linux",
+      root: scratch(),
+      ...overrides,
+    });
+
+  const factsOf = async (probe = probeOn()) => {
+    const capabilities = await probe(fixture().binary);
+
+    return capabilities.fontStack;
+  };
+
+  const stackFiles = async () => {
+    const entries = await readdir(scratch());
+
+    return entries.filter((entry) => entry.startsWith("host-fonts-"));
+  };
+
+  const stackDirectory = async () =>
+    path.join(await realpath(path.dirname(fixture().binary)), "fontstack");
+
+  return {
+    checks: () => checks,
+    factsOf,
+    fixture,
+    probeOn,
+    root: () => root,
+    scratch,
+    stackDirectory,
+    stackFiles,
+  };
+};
+
+const refusalOf = (facts: { readonly kind: string; readonly reason?: string } | undefined) =>
+  facts?.kind === "refused" ? facts.reason : undefined;
+
+describe("hostCapabilities font stack", () => {
+  const { checks, factsOf, fixture, probeOn, scratch, stackDirectory, stackFiles } = useFontStack();
+
+  it("ignores the .uuid files fontconfig writes into a writable stack, before and during a scan", async () => {
+    await writeFile(path.join(fixture().directory, "share", ".uuid"), "before\n");
+    await writeDuringScan(fixture(), ["share/truetype/.uuid"]);
+
+    const first = await factsOf();
+    const later = new Date(Date.now() + HOUR_MS);
+
+    await utimes(path.join(fixture().directory, "stack.json"), later, later);
+
+    const second = await factsOf(probeOn());
+
+    expect([first, second]).toMatchObject([
+      { kind: "checked", payload: FIXTURE_PAYLOAD },
+      { kind: "checked", payload: FIXTURE_PAYLOAD },
+    ]);
+
+    const written = await readFile(
+      path.join(fixture().directory, "share", "truetype", ".uuid"),
+      "utf-8",
+    );
+
+    expect(written).toBe("scanned\n");
+  });
+
+  it("hashes the payload before the scan, so a file the scan leaves behind cannot race the digest", async () => {
+    await writeDuringScan(fixture(), ["share/truetype/Scanned.ttf"]);
+
+    const first = await factsOf();
+    const later = new Date(Date.now() + HOUR_MS);
+
+    await utimes(path.join(fixture().directory, "stack.json"), later, later);
+
+    const second = await factsOf(probeOn());
+
+    expect([first?.kind, second?.kind]).toStrictEqual(["checked", "refused"]);
+  });
+
+  it("returns the checked stack with its rules and family count", async () => {
+    await expect(factsOf()).resolves.toMatchObject({
+      directory: await stackDirectory(),
+      families: 4,
+      kind: "checked",
+      payload: FIXTURE_PAYLOAD,
+      rules: ["10-fixture.conf", "50-user.conf", "51-local.conf", "60-fixture.conf"],
+    });
+  });
+
+  it("keeps the per-host font cache beside the facts, named by the stack", async () => {
+    const facts = await factsOf();
+
+    expect(facts?.kind === "checked" ? facts.cacheDir : "").toMatch(
+      new RegExp(`^${scratch()}/fontcache-[\\da-f]{16}$`, "u"),
+    );
+  });
+
+  it("runs fc-list with the environment Chrome will get", async () => {
+    const directory = await stackDirectory();
+
+    await factsOf();
+
+    const [run = ""] = await fcListRuns(fixture());
+    const [file = "", fontsPath = "", home = "", args = ""] = run.split("|");
+
+    expect({ args, fontsPath }).toStrictEqual({
+      args: ": family",
+      fontsPath: `${directory}/fonts`,
+    });
+    expect([file.startsWith(scratch()), home.startsWith(scratch())]).toStrictEqual([true, true]);
+  });
+
+  it("gives fc-list the pinned configuration without the user's rules", async () => {
+    const directory = await stackDirectory();
+
+    await factsOf();
+
+    const config = await configSeenByFcList(fixture());
+
+    expect(config).toContain(`<dir>${directory}/share</dir>`);
+    expect(config).toContain(
+      `<include ignore_missing="no">${directory}/fonts/conf.d/60-fixture.conf</include>`,
+    );
+    expect(config).not.toContain("50-user.conf");
+    expect(config).not.toContain("51-local.conf");
+  });
+
+  it("records a passing check once per host, for every later process", async () => {
+    await factsOf();
+    await factsOf(probeOn());
+
+    const [file = ""] = await stackFiles();
+
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+    expect(checks()).toHaveLength(1);
+    expect(JSON.parse(checks()[0] ?? "")).toMatchObject({ families: 4, reason: null });
+    expect(file).toMatch(/^host-fonts-[\da-f]{64}\.json$/u);
+    expect(JSON.parse(await readFile(path.join(scratch(), file), "utf-8"))).toMatchObject({
+      format: 1,
+      outputs: { payload: FIXTURE_PAYLOAD },
+    });
+  });
+
+  it("checks again once the stack's manifest changes", async () => {
+    const later = new Date(Date.now() + HOUR_MS);
+
+    await factsOf();
+    await utimes(path.join(fixture().directory, "stack.json"), later, later);
+    await factsOf(probeOn());
+
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(2);
+    await expect(stackFiles()).resolves.toHaveLength(2);
+  });
+
+  it("keeps the verdict when fontconfig resets a font directory's mtime to whole seconds", async () => {
+    const share = path.join(fixture().directory, "share");
+    const exact = new Date(1_700_000_000_500);
+    const whole = new Date(1_700_000_000_000);
+
+    await utimes(share, exact, exact);
+    await factsOf();
+    await utimes(share, whole, whole);
+    await factsOf(probeOn());
+
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+    await expect(stackFiles()).resolves.toHaveLength(1);
+  });
+
+  it("checks again once a font directory changes by a whole second", async () => {
+    const share = path.join(fixture().directory, "share");
+    const before = new Date(1_700_000_000_000);
+    const after = new Date(1_700_000_001_000);
+
+    await utimes(share, before, before);
+    await factsOf();
+    await utimes(share, after, after);
+    await factsOf(probeOn());
+
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(2);
+  });
+
+  it("reports no stack, and runs nothing, beside a binary without one", async () => {
+    await rm(path.join(fixture().directory, "stack.json"));
+
+    await expect(probeOn()(fixture().binary)).resolves.toStrictEqual({
+      platform: "linux",
+    });
+    await expect(fcListRuns(fixture())).resolves.toStrictEqual([]);
+  });
+
+  it("looks for no stack off Linux", async () => {
+    await expect(probeOn({ platform: "darwin" })(fixture().binary)).resolves.toStrictEqual({
+      platform: "darwin",
+    });
+    await expect(fcListRuns(fixture())).resolves.toStrictEqual([]);
+  });
+});
+
+describe("hostCapabilities font stack refusals", () => {
+  const { factsOf, fixture, probeOn, stackFiles } = useFontStack();
+
+  it("refuses a stack whose fc-list prints zero families with an empty stderr", async () => {
+    await setFcListOutput(fixture(), { listing: "" });
+
+    await expect(factsOf()).resolves.toStrictEqual({
+      kind: "refused",
+      reason: "fc-list printed 0 families, the manifest lists 4",
+    });
+  });
+
+  it("refuses a stack whose payload digest differs from its manifest", async () => {
+    await writeFile(
+      path.join(fixture().directory, "share", "truetype", "Fixture.ttf"),
+      "changed\n",
+    );
+
+    expect(refusalOf(await factsOf())).toMatch(
+      new RegExp(
+        `^the payload digest [\\da-f]{64} differs from the manifest's ${FIXTURE_PAYLOAD}$`,
+        "u",
+      ),
+    );
+  });
+
+  it("refuses a stack whose fc-list writes to stderr", async () => {
+    await setFcListOutput(fixture(), {
+      stderr: "Fontconfig error: cannot load default config file\n",
+    });
+
+    await expect(factsOf()).resolves.toStrictEqual({
+      kind: "refused",
+      reason: "fc-list wrote to stderr: Fontconfig error: cannot load default config file",
+    });
+  });
+
+  it("refuses a stack whose manifest holds no payload digest, without running fc-list", async () => {
+    await writeFile(
+      path.join(fixture().directory, "stack.json"),
+      JSON.stringify({ families: ["A"] }),
+    );
+
+    await expect(factsOf()).resolves.toStrictEqual({
+      kind: "refused",
+      reason: "stack.json has no sha256 payload or family list",
+    });
+    await expect(fcListRuns(fixture())).resolves.toStrictEqual([]);
+  });
+
+  it("refuses a stack whose fc-list cannot run", async () => {
+    const probe = createCapabilityProbe({
+      fcList: path.join(fixture().directory, "missing-fc-list"),
+      platform: "linux",
+      root: path.join(path.dirname(fixture().directory), "scratch"),
+    });
+
+    const { fontStack } = await probe(fixture().binary);
+
+    expect(refusalOf(fontStack)).toMatch(/^fc-list wrote to stderr: fc-list could not run: /u);
+  });
+
+  it("keeps a refusal for 60 s, in this process and in the next", async () => {
+    const clock = clockAt(1_000_000);
+    const probe = probeOn({ now: clock.now });
+
+    await setFcListOutput(fixture(), { listing: "" });
+    await expect(factsOf(probe)).resolves.toMatchObject({ kind: "refused" });
+    await setFcListOutput(fixture(), { listing: CHECKED_LISTING });
+
+    clock.advance(FAILED_PROBE_TTL_MS - 1);
+    await expect(factsOf(probe)).resolves.toMatchObject({ kind: "refused" });
+    await expect(factsOf(probeOn({ now: clock.now }))).resolves.toMatchObject({ kind: "refused" });
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+  });
+
+  it("checks the stack again once a refusal is 60 s old", async () => {
+    const clock = clockAt(1_000_000);
+    const probe = probeOn({ now: clock.now });
+
+    await setFcListOutput(fixture(), { listing: "" });
+    await expect(factsOf(probe)).resolves.toMatchObject({ kind: "refused" });
+    await setFcListOutput(fixture(), { listing: CHECKED_LISTING });
+
+    clock.advance(FAILED_PROBE_TTL_MS);
+    await expect(factsOf(probe)).resolves.toMatchObject({ kind: "checked" });
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(2);
+  });
+
+  it("stops a check when its client closes, and keeps nothing", async () => {
+    const closing = new AbortController();
+
+    await hangFcListFor(fixture(), 30);
+
+    const checking = factsOf(probeOn({ signal: closing.signal }));
+
+    closing.abort();
+
+    await expect(checking).resolves.toStrictEqual({
+      kind: "refused",
+      reason: "the font stack check was stopped because its client closed",
+    });
+    await expect(stackFiles()).resolves.toStrictEqual([]);
+  });
+
+  it("gives every concurrent caller the refusal, never a rejection, when the check runs out of its budget", async () => {
+    const probe = probeOn({ budgetMs: 300 });
+
+    await hangFcListFor(fixture(), 30);
+
+    const results = await Promise.allSettled([probe(fixture().binary), probe(fixture().binary)]);
+
+    expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
+    expect(
+      results.map((result) => (result.status === "fulfilled" ? result.value.fontStack : null)),
+    ).toStrictEqual(
+      Array.from({ length: 2 }, () => ({
+        kind: "refused",
+        reason: "the font stack check did not finish within 300 ms",
+      })),
+    );
+  });
+
+  it("gives every concurrent caller the refusal when the manifest is malformed", async () => {
+    const probe = probeOn();
+
+    await writeFile(path.join(fixture().directory, "stack.json"), "{not json");
+
+    const results = await Promise.allSettled([probe(fixture().binary), probe(fixture().binary)]);
+
+    expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
+
+    const reasons = results.map((result) =>
+      result.status === "fulfilled" ? (refusalOf(result.value.fontStack) ?? "") : "",
+    );
+
+    expect(reasons.map((reason) => reason.startsWith("stack.json cannot be read"))).toStrictEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it("gives every concurrent caller the refusal when its client closes mid-check", async () => {
+    const closing = new AbortController();
+    const probe = probeOn({ signal: closing.signal });
+
+    await hangFcListFor(fixture(), 30);
+
+    const checking = Promise.allSettled([probe(fixture().binary), probe(fixture().binary)]);
+
+    closing.abort();
+
+    const results = await checking;
+
+    expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
+  });
+
+  it("keeps a check that ran out of its budget for 60 s in memory, so scrapes do not each pay the budget", async () => {
+    const clock = clockAt(1_000_000);
+    const budget = new AbortController();
+    const probe = probeOn({ budgetMs: 300, budgetSignal: () => budget.signal, now: clock.now });
+
+    await hangFcListFor(fixture(), 30);
+
+    const pending = factsOf(probe);
+
+    await vi.waitFor(async () => {
+      await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+    });
+    budget.abort();
+
+    const first = await pending;
+    const second = await factsOf(probe);
+    const third = await factsOf(probe);
+
+    expect([first, second, third]).toStrictEqual(
+      Array.from({ length: 3 }, () => ({
+        kind: "refused",
+        reason: "the font stack check did not finish within 300 ms",
+      })),
+    );
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+    await expect(stackFiles()).resolves.toStrictEqual([]);
+  });
+
+  it("runs a check that ran out of its budget again once the refusal is 60 s old", async () => {
+    const clock = clockAt(1_000_000);
+    let budget = new AbortController();
+    const probe = probeOn({ budgetMs: 300, budgetSignal: () => budget.signal, now: clock.now });
+
+    await hangFcListFor(fixture(), 30);
+    const pending = factsOf(probe);
+
+    await vi.waitFor(async () => {
+      await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+    });
+    budget.abort();
+    await expect(pending).resolves.toMatchObject({ kind: "refused" });
+    clock.advance(FAILED_PROBE_TTL_MS - 1);
+    await factsOf(probe);
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(1);
+    await hangFcListFor(fixture(), null);
+    budget = new AbortController();
+    clock.advance(1);
+
+    await expect(factsOf(probe)).resolves.toMatchObject({ kind: "checked" });
+    await expect(fcListRuns(fixture())).resolves.toHaveLength(2);
+  });
+
+  it("does not keep a check that its client stopped", async () => {
+    const closing = new AbortController();
+    const probe = probeOn({ signal: closing.signal });
+
+    await hangFcListFor(fixture(), 30);
+
+    const checking = factsOf(probe);
+
+    closing.abort();
+    await checking;
+    await hangFcListFor(fixture(), null);
+
+    await expect(factsOf(probeOn())).resolves.toMatchObject({ kind: "checked" });
+  });
+});
+
+describe("hostCapabilities font stack on a fork", () => {
+  const { fixture, root, scratch } = useFontStack();
+
+  it("checks the stack beside a fork's binary next to the fork's own facts", async () => {
+    const executable = await fakeForkPath("kit", { root: root() });
+
+    await rename(fixture().directory, path.join(path.dirname(executable), "fontstack"));
+
+    const capabilities = await createCapabilityProbe({
+      fcList: fixture().fcList,
+      platform: "linux",
+      root: scratch(),
+    })(executable);
+
+    expect([capabilities.fork?.dialect, capabilities.fontStack?.kind]).toStrictEqual([
+      "xrio",
+      "checked",
+    ]);
   });
 });

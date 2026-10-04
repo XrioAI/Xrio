@@ -19,6 +19,7 @@ export interface InternalEvent {
   event:
     | "identity-chosen"
     | "fork-probed"
+    | "font-stack-checked"
     | "browser-launched"
     | "cdp-message-dropped"
     | "document-rebind"

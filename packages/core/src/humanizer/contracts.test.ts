@@ -6,7 +6,7 @@ import {
   readDeviceRecord,
   DeviceRecordRefusedError,
 } from "./contracts.ts";
-import type { DeviceRecord, PresentedDevice } from "./contracts.ts";
+import type { DeviceRecord, FontStackFacts, PresentedDevice } from "./contracts.ts";
 
 const DEVICE_DIGEST = "1f6fdd787bc7b99c54582d49976c95d3011f4f912126968816c30dc7c6946ed6";
 
@@ -58,11 +58,34 @@ describe(deviceDigest, () => {
   });
 });
 
+const STACK: FontStackFacts = {
+  cacheDir: "/tmp/xrio-501/fontcache-0123456789abcdef",
+  directory: "/opt/xrio-chrome/fontstack",
+  families: 175,
+  kind: "checked",
+  payload: "62bbc5617946311ab21ed9ec8ef22f68a15e4ccf06cebf01aca807fedb1def3d",
+  rules: ["10-antialias.conf", "60-latin.conf"],
+};
+
+const HOST_WITH_STACK = "b23631b565ac1284e141281ef6c93ec583d27f47f9bcfabfad7a64cad11d1dd5";
+
 describe(hostDigest, () => {
   it("hashes the canonical JSON of the host capabilities", () => {
     expect(hostDigest({ platform: "linux" })).toBe(
       "a0bda0c198f101a78089a967aeea62b5b2250dc77f0f96a254078494e9af9831",
     );
+  });
+
+  it("names a checked font stack by its content, wherever it and its cache live", () => {
+    const moved = {
+      ...STACK,
+      cacheDir: "/tmp/xrio-1002/fontcache-fedcba9876543210",
+      directory: "/home/b/xrio-chrome/fontstack",
+    };
+
+    expect(
+      [STACK, moved].map((fontStack) => hostDigest({ fontStack, platform: "linux" })),
+    ).toStrictEqual([HOST_WITH_STACK, HOST_WITH_STACK]);
   });
 });
 

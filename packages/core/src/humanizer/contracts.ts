@@ -85,10 +85,23 @@ export interface ForkFacts {
   };
 }
 
+export interface FontStack {
+  readonly directory: string;
+  readonly payload: string;
+  readonly families: number;
+  readonly rules: readonly string[];
+  readonly cacheDir: string;
+}
+
+export type FontStackFacts =
+  | ({ readonly kind: "checked" } & FontStack)
+  | { readonly kind: "refused"; readonly reason: string };
+
 export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
   readonly readableRenderNode?: true;
   readonly fork?: ForkFacts;
+  readonly fontStack?: FontStackFacts;
 }
 
 export const knobOf = (capabilities: HostCapabilities, key: string): string | null =>
@@ -359,7 +372,18 @@ export const readDeviceRecord = (stored: string): DeviceRecord => {
   return { device, policy, schema: DEVICE_SCHEMA, seed };
 };
 
-type Digested = PresentedDevice | HostCapabilities;
+type StackContent =
+  | ({ readonly kind: "checked" } & Pick<FontStack, "families" | "payload" | "rules">)
+  | { readonly kind: "refused" };
+
+interface DigestedHost {
+  readonly platform: NodeJS.Platform;
+  readonly readableRenderNode: true | undefined;
+  readonly fork: ForkFacts | undefined;
+  readonly fontStack: StackContent | undefined;
+}
+
+type Digested = PresentedDevice | DigestedHost;
 
 const canonicalJson = (value: Digested): string => {
   const keys = new Set<string>();
@@ -378,4 +402,20 @@ const sha256Of = (value: Digested): string =>
 
 export const deviceDigest = (record: DeviceRecord): string => sha256Of(record.device);
 
-export const hostDigest = (capabilities: HostCapabilities): string => sha256Of(capabilities);
+const stackContentOf = (stack: FontStackFacts): StackContent =>
+  stack.kind === "checked"
+    ? { families: stack.families, kind: stack.kind, payload: stack.payload, rules: stack.rules }
+    : { kind: stack.kind };
+
+export const hostDigest = ({
+  fontStack,
+  fork,
+  platform,
+  readableRenderNode,
+}: HostCapabilities): string =>
+  sha256Of({
+    fontStack: fontStack === undefined ? undefined : stackContentOf(fontStack),
+    fork,
+    platform,
+    readableRenderNode,
+  });
