@@ -176,6 +176,118 @@ describe("proxy option", () => {
   });
 });
 
+describe("timezone option", () => {
+  const browser = { browserPath: "/browser", mode: "headless" } as const;
+
+  const invalidZone = {
+    code: "INVALID_OPTIONS",
+    message: "timezone must be an IANA zone name such as America/New_York.",
+    name: "TypeError",
+  };
+
+  const notInHttp = {
+    code: "INVALID_OPTIONS",
+    message: "timezone is only supported in browser modes.",
+    name: "TypeError",
+  };
+
+  it.each([
+    ["UTC", "UTC"],
+    ["Europe/Kyiv", "Europe/Kiev"],
+    ["Asia/Kolkata", "Asia/Calcutta"],
+    ["america/chicago", "America/Chicago"],
+  ])("accepts %s as a client default and resolves it to %s", (timezone, zone) => {
+    expect(resolveClientOptions({ ...browser, timezone }).timezone).toBe(zone);
+  });
+
+  it("defaults to no zone", () => {
+    expect(resolveClientOptions(browser).timezone).toBeUndefined();
+    expect(resolveClientOptions({ mode: "http" }).timezone).toBeUndefined();
+    expect(resolveScrapeOptions(page, resolveClientOptions(browser)).source).toMatchObject({
+      mode: "headless",
+      pins: { timezone: undefined },
+    });
+  });
+
+  it.each(["Mars/Olympus", "", " UTC", "Etc/Unknown", "+05:30", "-08:00", "GMT+5"])(
+    "rejects the zone %j",
+    (timezone) => {
+      expect(() => resolveClientOptions({ ...browser, timezone })).toThrow(
+        expect.objectContaining(invalidZone),
+      );
+      expect(() =>
+        resolveScrapeOptions({ ...page, timezone }, resolveClientOptions(browser)),
+      ).toThrow(expect.objectContaining(invalidZone));
+    },
+  );
+
+  it.each([5, null, {}])("rejects the non-string zone %j", (timezone) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, timezone })).toThrow(
+      expect.objectContaining(invalidZone),
+    );
+  });
+
+  it("reaches every browser scrape of the client, and a scrape's own zone replaces it", () => {
+    const defaults = resolveClientOptions({ ...browser, timezone: "Europe/Berlin" });
+
+    expect(resolveScrapeOptions(page, defaults).source).toMatchObject({
+      pins: { timezone: "Europe/Berlin" },
+    });
+    expect(
+      resolveScrapeOptions({ ...page, timezone: "America/New_York" }, defaults).source,
+    ).toMatchObject({ pins: { timezone: "America/New_York" } });
+    expect(
+      resolveScrapeOptions({ ...page, browserPath: "/other", mode: "headed" }, defaults).source,
+    ).toMatchObject({ mode: "headed", pins: { timezone: "Europe/Berlin" } });
+    expect(resolveClientOptions({ ...browser, timezone: "Europe/Berlin" }).timezone).toBe(
+      "Europe/Berlin",
+    );
+  });
+
+  it("gives an http scrape no zone, even when the client has one", () => {
+    const defaults = resolveClientOptions({ ...browser, timezone: "Europe/Berlin" });
+
+    expect(resolveScrapeOptions({ ...page, mode: "http" }, defaults).source).toMatchObject({
+      pins: { timezone: undefined },
+    });
+  });
+
+  it("gives a browser override of an http client a zone of its own", () => {
+    const defaults = resolveClientOptions({ mode: "http" });
+
+    expect(
+      resolveScrapeOptions(
+        { ...page, browserPath: "/browser", mode: "headless", timezone: "Asia/Kolkata" },
+        defaults,
+      ).source,
+    ).toMatchObject({ mode: "headless", pins: { timezone: "Asia/Calcutta" } });
+  });
+
+  it("refuses a zone in an inherited http mode", () => {
+    expect(() =>
+      resolveScrapeOptions({ ...page, timezone: "UTC" }, resolveClientOptions({ mode: "http" })),
+    ).toThrow(expect.objectContaining(notInHttp));
+  });
+
+  it("refuses a zone beside an explicit http mode, even from an options object the types did not check", () => {
+    const defaults = resolveClientOptions(browser);
+    const explicit = { ...page, mode: "http", timezone: "UTC" } as const;
+
+    // @ts-expect-error JavaScript callers can pass a zone with mode http.
+    expect(() => resolveScrapeOptions(explicit, defaults)).toThrow(
+      expect.objectContaining(notInHttp),
+    );
+  });
+
+  it("refuses a zone on an http client", () => {
+    // @ts-expect-error JavaScript callers can pass a zone to an http client.
+    expect(() => resolveClientOptions({ mode: "http", timezone: "UTC" })).toThrow(
+      expect.objectContaining(notInHttp),
+    );
+  });
+});
+
 describe("browserArgs option", () => {
   const browser = { browserPath: "/browser", mode: "headless" } as const;
 

@@ -17,12 +17,16 @@ interface BrowserMode {
 
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
-type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
+type ModeOverride =
+  | (HttpMode & { timezone?: never })
+  | (BrowserMode & { timezone?: string })
+  | { mode?: never; browserPath?: never; timezone?: string };
 
 export type ClientOptions = (
-  | (HttpMode & { browserArgs?: never })
+  | (HttpMode & { browserArgs?: never; timezone?: never })
   | ((BrowserMode | { mode?: never; browserPath: string }) & {
       browserArgs?: readonly string[];
+      timezone?: string;
     })
 ) & { proxy?: string; maxBrowsers?: number; locale?: string };
 
@@ -91,6 +95,7 @@ export interface ClientDefaults {
   proxy: ProxyEndpoint | undefined;
   maxBrowsers: number | undefined;
   locale: string | undefined;
+  timezone: string | undefined;
 }
 
 type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[] })) & {

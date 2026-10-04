@@ -1042,6 +1042,7 @@ const launchPlanOf = async (
   steps: PlanningOverrides,
   mode: "headless" | "headed" = "headless",
   browserArgs: readonly string[] = [],
+  timezone?: string,
 ): Promise<LaunchPlan | undefined> => {
   const launched: LaunchPlan[] = [];
 
@@ -1056,7 +1057,12 @@ const launchPlanOf = async (
   const browsers = createBrowsers(recordingDriver, 1, steps);
   using deadline = startDeadline(10_000);
 
-  await browsers.load({ ...(await normalRequest(deadline)), browserArgs, mode });
+  await browsers.load({
+    ...(await normalRequest(deadline)),
+    browserArgs,
+    mode,
+    pins: { ...noPins, timezone },
+  });
   await browsers.close();
 
   return launched[0];
@@ -1106,6 +1112,14 @@ describe("the identity a visit launches Chrome with", () => {
       await expect(launchPlanOf({})).resolves.toMatchObject({ env: { TZ: zone } });
     },
   );
+
+  it("launches Chrome with a pinned zone instead of the host's", async () => {
+    vi.stubEnv("TZ", "Asia/Kolkata");
+
+    await expect(launchPlanOf({}, "headless", [], "America/New_York")).resolves.toMatchObject({
+      env: { TZ: "America/New_York" },
+    });
+  });
 
   it("launches Chrome with a TZ of its own when the host exports none", async () => {
     vi.stubEnv("TZ", "Asia/Tokyo");
@@ -1240,6 +1254,27 @@ describe("the launch identity check", () => {
       },
       surfaces: { timezone: { source: "host", zone: "UTC" } },
       tells: ["headless-token", "host-zone-utc"],
+    });
+  });
+
+  it("reports a pinned UTC as the caller's choice, not as the host's", async () => {
+    vi.stubEnv("TZ", "UTC");
+
+    const browsers = createBrowsers(cdpDriver, 1, {
+      hostCapabilities: () => ({ platform: "linux" }),
+    });
+
+    using deadline = startDeadline(10_000);
+
+    const document = await browsers.load({
+      ...(await normalRequest(deadline)),
+      pins: { ...noPins, timezone: "UTC" },
+    });
+
+    await browsers.close();
+    expect(document.identity).toMatchObject({
+      surfaces: { timezone: { source: "pin", zone: "UTC" } },
+      tells: ["headless-token"],
     });
   });
 

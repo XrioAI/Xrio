@@ -125,6 +125,32 @@ describe("XrioClient types", () => {
     void new XrioClient({ locale: ["de-DE"], mode: "http" });
   });
 
+  it("takes timezone in browser modes only, as a client default and per scrape", () => {
+    const url = "https://example.com";
+    const browser = new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });
+    const http = new XrioClient({ mode: "http" });
+
+    expectTypeOf<ClientOptions["timezone"]>().toEqualTypeOf<string | undefined>();
+    void new XrioClient({ browserPath: "/browser", mode: "headless", timezone: "UTC" });
+    void browser.scrape({ format: "html", timezone: "America/New_York", url });
+    void http.scrape({
+      browserPath: "/browser",
+      format: "html",
+      mode: "headless",
+      timezone: "America/New_York",
+      url,
+    });
+    void http.scrape({ format: "html", timezone: "America/New_York", url });
+    // @ts-expect-error An http client has no browser to present a zone from.
+    void new XrioClient({ mode: "http", timezone: "UTC" });
+    // @ts-expect-error timezone needs a browser path, like every browser client option.
+    void new XrioClient({ timezone: "UTC" });
+    // @ts-expect-error An explicit http mode takes no timezone.
+    void browser.scrape({ format: "html", mode: "http", timezone: "UTC", url });
+    // @ts-expect-error A timezone is a zone name, not an offset.
+    void browser.scrape({ format: "html", timezone: 120, url });
+  });
+
   it("exposes each response header as an optional string and cookies separately", () => {
     expectTypeOf<ScrapeResult["headers"]["content-type"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ScrapeResult["cookies"]>().toEqualTypeOf<string[]>();

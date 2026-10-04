@@ -652,6 +652,32 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
       expect(wasRequested("/watch-seen")).toBeTruthy();
     });
   });
+
+  it("presents a pinned timezone on /identity, whatever the host's zone", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(20_000);
+
+    try {
+      const { html } = await browsers.load({
+        browserArgs: [],
+        browserPath: chromePath(),
+        deadline,
+        mode,
+        pins: { ...noPins, timezone: "Australia/Adelaide" },
+        proxy: undefined,
+        url: new URL("/identity", server.origin),
+      });
+
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toMatchObject({
+        offsets: { january: 630, july: 570 },
+        timeZone: "Australia/Adelaide",
+      });
+    } finally {
+      await browsers.close();
+    }
+  });
 });
 
 describe.each(MODES)("browser lifecycle, %s", (mode) => {

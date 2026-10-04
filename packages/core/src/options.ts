@@ -1,5 +1,6 @@
 import { invalidOptions, redactUrl } from "./errors.ts";
 import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
+import { canonicalZone } from "./humanizer/zone-name.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientDefaults,
@@ -189,6 +190,27 @@ const resolveBrowserArgs = (
   return parseBrowserArgs(browserArgs);
 };
 
+const resolveTimezone = (
+  timezone: string | undefined,
+  { mode }: ResolvedMode,
+): string | undefined => {
+  if (timezone === undefined) {
+    return undefined;
+  }
+
+  if (mode === "http") {
+    throw invalidOptions("timezone is only supported in browser modes.");
+  }
+
+  const zone = canonicalZone(timezone);
+
+  if (zone === undefined) {
+    throw invalidOptions("timezone must be an IANA zone name such as America/New_York.");
+  }
+
+  return zone;
+};
+
 export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
@@ -199,6 +221,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   const browserArgs = resolveBrowserArgs(options.browserArgs, mode);
   const proxy = options.proxy === undefined ? undefined : parseProxy(options.proxy);
   const locale = resolveLocale(options.locale);
+  const timezone = resolveTimezone(options.timezone, mode);
 
   return {
     browserArgs,
@@ -206,6 +229,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
     maxBrowsers,
     mode,
     proxy,
+    timezone,
   };
 };
 
@@ -236,7 +260,11 @@ export const resolveScrapeOptions = (
   }
 
   const locale = options.locale === undefined ? defaults.locale : resolveLocale(options.locale);
-  const pins = { locale, timezone: undefined };
+
+  const timezone =
+    options.timezone === undefined ? defaults.timezone : resolveTimezone(options.timezone, mode);
+
+  const pins = { locale, timezone: mode.mode === "http" ? undefined : timezone };
 
   const source =
     mode.mode === "http"
