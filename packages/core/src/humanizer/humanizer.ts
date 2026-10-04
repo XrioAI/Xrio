@@ -1,6 +1,6 @@
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 
-import type { ForkFacts, HostCapabilities } from "./contracts.ts";
+import type { FontEvidence, ForkFacts, HostCapabilities } from "./contracts.ts";
 import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
 import type { IdentityIntent } from "./intent.ts";
@@ -24,6 +24,7 @@ export interface IdentityPlan {
   readonly read: { readonly beforeNavigation: string; readonly afterCapture: string };
   readonly tells: readonly FactTell[];
   readonly chosen: ChosenIdentity;
+  readonly fontEvidence: FontEvidence | undefined;
 }
 
 const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
@@ -52,10 +53,14 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
     expected: EMISSION_ORDER.flatMap((surface) =>
       resolutions[surface].expected.map((expectation) => ({ ...expectation, surface })),
     ),
+    fontEvidence: context.capabilities.fontEvidence,
     inputs: mergeBrowserInputs(resolutions),
     read: {
       afterCapture: AFTER_CAPTURE_READ,
-      beforeNavigation: identityRead(resolutions.timezone.value.zone),
+      beforeNavigation: identityRead(
+        resolutions.timezone.value.zone,
+        context.capabilities.fontEvidence === undefined ? "full" : "sentinel",
+      ),
     },
     tells: EMISSION_ORDER.flatMap((surface) => resolutions[surface].tells ?? []),
   };

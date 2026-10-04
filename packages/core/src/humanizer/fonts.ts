@@ -5,6 +5,53 @@ import type { FontStack } from "./contracts.ts";
 
 export const FONT_CONFIG_NAME = "fonts.conf";
 
+export type FontRead = "full" | "sentinel";
+
+export const FONT_SENTINEL_FAMILIES = ["Ubuntu", "KACSTOffice"] as const;
+
+export const FONT_PROBE_FAMILIES = [
+  "DejaVu Sans",
+  "DejaVu Sans Mono",
+  "DejaVu Serif",
+  "Liberation Sans",
+  "Liberation Serif",
+  "Liberation Mono",
+  "Liberation Sans Narrow",
+  "Abyssinica SIL",
+  "Lohit Tamil",
+  "Padauk",
+  "Noto Color Emoji",
+  "KACSTOffice",
+  "OpenSymbol",
+  "Ubuntu",
+  "Arimo",
+  "Cousine",
+  "Chilanka",
+  "PMingLiU",
+  "Arial Unicode MS",
+  "Bitstream Vera Sans Mono",
+  "Calibri",
+  "Century Gothic",
+  "Gill Sans",
+  "Helvetica Neue",
+  "Lucida Bright",
+  "Menlo",
+  "MS Mincho",
+  "Monotype Corsiva",
+  "SimHei",
+  "Batang",
+  "Franklin Gothic",
+  "Minion Pro",
+  "Geneva",
+  "Cambria Math",
+  "Lucida Console",
+  "Segoe UI Emoji",
+  "Droid Sans Mono",
+  "Roboto",
+  "Source Code Pro",
+  "Amiri",
+] as const;
+
 const USER_RULES: ReadonlySet<string> = new Set(["50-user.conf", "51-local.conf"]);
 
 const escaped = (text: string): string =>

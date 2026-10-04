@@ -209,6 +209,7 @@ describe("XrioClient types", () => {
     expectTypeOf<ScrapeResult<"json">["identity"]>().toEqualTypeOf<IdentityReport>();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
+      | "fonts-drift"
       | "insecure-origin"
       | "lanes-only"
       | "no-request-log"

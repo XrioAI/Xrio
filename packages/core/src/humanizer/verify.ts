@@ -1,7 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
-import type { AfterCapture, ClientHints, Observation, SecureContextReading } from "./contracts.ts";
+import type {
+  AfterCapture,
+  ClientHints,
+  FontEvidence,
+  Observation,
+  SecureContextReading,
+} from "./contracts.ts";
+import { FONT_PROBE_FAMILIES, FONT_SENTINEL_FAMILIES } from "./fonts.ts";
+import type { FontRead } from "./fonts.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import { coverageOf, observedOf } from "./report.ts";
 import type { BrowserIdentityReport } from "./report.ts";
@@ -64,9 +72,16 @@ export type IdentityTell =
 
 type ObservedTell = Exclude<IdentityTell, FactTell | "fonts-drift">;
 
+type FontEvidenceOutcome =
+  | { readonly kind: "gathered"; readonly digest: string; readonly sentinel: string }
+  | { readonly kind: "confirmed" }
+  | { readonly kind: "drifted" }
+  | { readonly kind: "unproven" };
+
 export interface Evaluation {
   readonly report: BrowserIdentityReport;
   readonly mismatches: readonly IdentityMismatch[];
+  readonly fontEvidence: FontEvidenceOutcome;
 }
 
 type Reading = Omit<Observation, "product" | "afterCapture">;
@@ -93,6 +108,9 @@ const READING = {
   colorDepth: isNumber,
   colorScheme: isTextOrNull,
   devicePixelRatio: isNumber,
+  fontsDigest: isTextOrNull,
+  fontsSentinel: isText,
+  fontsSentinelResolved: isFlag,
   hover: isTextOrNull,
   intlLocale: isText,
   languages: isTexts,
@@ -320,8 +338,31 @@ const TELL_ORDER: readonly ObservedTell[] = [
   "unmeasured-chrome",
 ];
 
+const fontEvidenceOutcome = (
+  evidence: FontEvidence | undefined,
+  { fontsDigest, fontsSentinel }: Observation,
+  { drifted, unresolved }: { readonly drifted: boolean; readonly unresolved: boolean },
+): FontEvidenceOutcome => {
+  if (evidence !== undefined) {
+    return drifted ? { kind: "drifted" } : { kind: "confirmed" };
+  }
+
+  if (unresolved) {
+    return { kind: "unproven" };
+  }
+
+  return fontsDigest === null
+    ? { kind: "confirmed" }
+    : { digest: fontsDigest, kind: "gathered", sentinel: fontsSentinel };
+};
+
 export const evaluate = (
-  { chosen, expected, tells }: Pick<IdentityPlan, "chosen" | "expected" | "tells">,
+  {
+    chosen,
+    expected,
+    fontEvidence,
+    tells,
+  }: Pick<IdentityPlan, "chosen" | "expected" | "fontEvidence" | "tells">,
   observation: Observation,
 ): Evaluation => {
   const measured = isMeasured(observation.product);
@@ -341,22 +382,30 @@ export const evaluate = (
     }
   }
 
+  const drifted = notes.some(({ surface }) => surface === "fonts");
+  const unresolved = notes.some(({ field }) => field === "fontsSentinelResolved");
+
   return {
+    fontEvidence: fontEvidenceOutcome(fontEvidence, observation, { drifted, unresolved }),
     mismatches,
     report: {
       binary: { fork: chosen.fork, version: observation.product.version },
-      coverage: coverageOf(observation),
+      coverage: coverageOf({ fonts: fontEvidence, fontsDrifted: drifted }, observation),
       exit: chosen.exit,
       mode: chosen.mode,
       notes: structuredClone(notes),
-      observed: observedOf(observation),
+      observed: observedOf(observation, drifted ? undefined : fontEvidence),
       surfaces: chosen.surfaces,
-      tells: [...TELL_ORDER.filter((tell) => TELLS[tell](observation)), ...tells],
+      tells: [
+        ...TELL_ORDER.filter((tell) => TELLS[tell](observation)),
+        ...tells,
+        ...(drifted ? ["fonts-drift" as const] : []),
+      ],
     },
   };
 };
 
-const READ_SOURCE = `(requested) => {
+const READ_SOURCE = `(requested, fonts) => {
   const year = new Date().getFullYear();
   const instants = [Date.UTC(year, 0, 15, 12), Date.UTC(year, 6, 15, 12)];
   const offsetsIn = (timeZone) =>
@@ -376,6 +425,31 @@ const READ_SOURCE = `(requested) => {
   const media = (feature, values) =>
     values.find((value) => matchMedia("(" + feature + ": " + value + ")").matches) ?? null;
   const resolved = Intl.DateTimeFormat().resolvedOptions();
+  const generics = ["monospace", "sans-serif", "serif"];
+  const measureFont = (() => {
+    const context = document.createElement("canvas").getContext("2d");
+
+    return (font) => {
+      context.font = "72px " + font;
+
+      return context.measureText("mmmmmmmmmmlli WwEe@#0123456789").width;
+    };
+  })();
+  const fallbackWidths = generics.map((generic) => measureFont(generic));
+  const fontRows = (families) =>
+    families.map((family) =>
+      generics.map((generic) => measureFont(JSON.stringify(family) + ", " + generic)),
+    );
+  const fontsHash = (rows) => {
+    let hash = 0x811c9dc5;
+
+    for (const character of rows.flat().map((width) => width.toFixed(3)).join(",")) {
+      hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193);
+    }
+
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  };
+  const sentinelRows = fontRows(${JSON.stringify(FONT_SENTINEL_FAMILIES)});
 
   return JSON.stringify({
     zone: resolved.timeZone ?? null,
@@ -392,6 +466,9 @@ const READ_SOURCE = `(requested) => {
     outerWidth,
     outerHeight,
     devicePixelRatio,
+    fontsSentinel: fontsHash(sentinelRows),
+    fontsSentinelResolved: sentinelRows.every((row) => row.some((width, index) => width !== fallbackWidths[index])),
+    fontsDigest: fonts === "full" ? fontsHash(fontRows(${JSON.stringify(FONT_PROBE_FAMILIES)})) : null,
     colorScheme: media("prefers-color-scheme", ["dark", "light"]),
     reducedMotion: media("prefers-reduced-motion", ["reduce", "no-preference"]),
     pointer: media("pointer", ["fine", "coarse", "none"]),
@@ -456,5 +533,5 @@ const AFTER_CAPTURE_SOURCE = `async () => {
 
 export const AFTER_CAPTURE_READ = `(${AFTER_CAPTURE_SOURCE})()`;
 
-export const identityRead = (requestedZone: string): string =>
-  `(${READ_SOURCE})(${JSON.stringify(requestedZone)})`;
+export const identityRead = (requestedZone: string, fonts: FontRead): string =>
+  `(${READ_SOURCE})(${JSON.stringify(requestedZone)}, ${JSON.stringify(fonts)})`;

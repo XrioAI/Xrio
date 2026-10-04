@@ -87,6 +87,23 @@ describe(hostDigest, () => {
       [STACK, moved].map((fontStack) => hostDigest({ fontStack, platform: "linux" })),
     ).toStrictEqual([HOST_WITH_STACK, HOST_WITH_STACK]);
   });
+
+  it("leaves font evidence out, so the gathering scrape and later ones share the digest", () => {
+    expect(
+      [1000, 2000].map((ageMs) =>
+        hostDigest({
+          fontEvidence: {
+            ageMs,
+            digest: "c41f09a2",
+            key: "0123456789abcdef",
+            sentinel: "5e17a1b2",
+          },
+          fontStack: STACK,
+          platform: "linux",
+        }),
+      ),
+    ).toStrictEqual([HOST_WITH_STACK, HOST_WITH_STACK]);
+  });
 });
 
 const refusalOf = (stored: string) => {

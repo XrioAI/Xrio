@@ -38,6 +38,9 @@ const headlessLinux: Observation = {
   colorDepth: 24,
   colorScheme: "light",
   devicePixelRatio: 1,
+  fontsDigest: "c41f09a2",
+  fontsSentinel: "5e17a1b2",
+  fontsSentinelResolved: true,
   hover: "hover",
   intlLocale: "en-US",
   languages: ["en-US", "en"],
@@ -65,6 +68,9 @@ const headedMac: Observation = {
   availWidth: 1728,
   colorScheme: "dark",
   devicePixelRatio: 2,
+  fontsDigest: "0aa1b2c3",
+  fontsSentinel: "9c0ffee1",
+  fontsSentinelResolved: true,
   outerHeight: 900,
   outerWidth: 1600,
   product: { headless: false, major: 154, version: "154.0.8037.57" },
@@ -87,7 +93,7 @@ const secureCoverage = {
   deviceMemory: { state: "observed" },
   devicePixelRatio: { state: "observed" },
   dns: { reason: "not-observed", state: "unchecked" },
-  fonts: { reason: "not-observed", state: "unchecked" },
+  fonts: { state: "observed" },
   languages: { state: "observed" },
   mediaDevices: { reason: "not-observed", state: "unchecked" },
   permissions: { reason: "not-observed", state: "unchecked" },
@@ -174,6 +180,7 @@ describe("the identity report", () => {
     });
 
     expect(evaluate(plan, headlessLinux)).toStrictEqual({
+      fontEvidence: { digest: "c41f09a2", kind: "gathered", sentinel: "5e17a1b2" },
       mismatches: [],
       report: {
         binary: { fork: null, version: "154.0.8037.57" },
@@ -187,6 +194,7 @@ describe("the identity report", () => {
           clientHints: linuxClientHints,
           colorScheme: "light",
           deviceMemory: 8,
+          fontsDigest: "c41f09a2",
           hover: "hover",
           intlLocale: "en-US",
           languages: ["en-US", "en"],
@@ -270,6 +278,7 @@ describe("the identity report", () => {
     });
 
     expect(evaluate(plan, headedMac)).toStrictEqual({
+      fontEvidence: { digest: "0aa1b2c3", kind: "gathered", sentinel: "9c0ffee1" },
       mismatches: [],
       report: {
         binary: { fork: null, version: "154.0.8037.57" },
@@ -283,6 +292,7 @@ describe("the identity report", () => {
           clientHints: null,
           colorScheme: "dark",
           deviceMemory: null,
+          fontsDigest: "0aa1b2c3",
           hover: "hover",
           intlLocale: "en-US",
           languages: ["en-US", "en"],

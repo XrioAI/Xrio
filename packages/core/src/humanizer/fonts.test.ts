@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { FontStack } from "./contracts.ts";
-import { fontCheckEnvironment, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
+import {
+  FONT_PROBE_FAMILIES,
+  FONT_SENTINEL_FAMILIES,
+  fontCheckEnvironment,
+  fontConfigOf,
+  fontConfigPathOf,
+} from "./fonts.ts";
 
 const stack: FontStack = {
   cacheDir: "/tmp/xrio-501/fontcache-0123456789abcdef",
@@ -49,5 +55,21 @@ describe(fontCheckEnvironment, () => {
       XDG_DATA_HOME: "/tmp/b1/.local/share",
     });
     expect(fontConfigPathOf(stack)).toBe("/opt/xrio/fontstack/fonts");
+  });
+});
+
+describe("the sentinel the identity read measures", () => {
+  it("names two families, so the launch probe stays cheap", () => {
+    expect(FONT_SENTINEL_FAMILIES).toStrictEqual(["Ubuntu", "KACSTOffice"]);
+  });
+});
+
+describe("the fonts the identity read measures", () => {
+  it("lists 40 distinct families, none holding a quote that would break the CSS font string", () => {
+    expect([
+      FONT_PROBE_FAMILIES.length,
+      new Set(FONT_PROBE_FAMILIES).size,
+      FONT_PROBE_FAMILIES.some((family) => /["\\]/u.test(family)),
+    ]).toStrictEqual([40, 40, false]);
   });
 });

@@ -23,6 +23,7 @@ const SCENARIOS = [
   "no-webgl",
   "unsized-window",
   "fork",
+  "fonts-drift",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -263,6 +264,9 @@ const OBSERVATION = {
   colorDepth: 24,
   colorScheme: "light",
   devicePixelRatio: 1,
+  fontsDigest: "c41f09a2",
+  fontsSentinel: scenario === "fonts-drift" ? "dead0000" : "5e17a1b2",
+  fontsSentinelResolved: true,
   hover: "hover",
   intlLocale: "en-US",
   languages: ["en-US", "en"],
@@ -282,7 +286,7 @@ const OBSERVATION = {
   zoneOffsets: UTC_OFFSETS,
 };
 
-const identityReply = (observation: typeof OBSERVATION): Json => ({
+const identityReply = (observation: { [key: string]: Json }): Json => ({
   result: { type: "string", value: JSON.stringify(observation) },
 });
 
@@ -308,20 +312,29 @@ const AFTER_CAPTURE_READ: Json = {
   result: { type: "string", value: JSON.stringify(SECURE_CONTEXT_READING) },
 };
 
-const isAfterCaptureRead = (params: unknown): params is { arguments: readonly unknown[] } =>
+const readCarries = (
+  params: unknown,
+  marker: string,
+): params is { arguments: readonly unknown[] } =>
   typeof params === "object" &&
   params !== null &&
   "arguments" in params &&
-  JSON.stringify(params.arguments).includes(AFTER_CAPTURE_MARKER);
+  JSON.stringify(params.arguments).includes(marker);
+
+const SENTINEL_READ = String.raw`, \"sentinel\")`;
+
+const SENTINEL_EXPRESSION = ', "sentinel")';
 
 let identityReads = 0;
 
-const observedIdentity = (): Json => {
+const observedIdentity = (sentinelOnly: boolean): Json => {
   identityReads += 1;
 
+  const observation = sentinelOnly ? { ...OBSERVATION, fontsDigest: null } : OBSERVATION;
+
   return scenario === "unsized-window" && identityReads === 1
-    ? identityReply({ ...OBSERVATION, outerHeight: 0, outerWidth: 0 })
-    : identityReply(OBSERVATION);
+    ? identityReply({ ...observation, outerHeight: 0, outerWidth: 0 })
+    : identityReply(observation);
 };
 
 const fixedResults = new Map<string, Json>([
@@ -488,7 +501,7 @@ const answerEvaluate = async (
   }
 
   if (currentUrl === "about:blank" && expressionCarries(params, IDENTITY_READ_MARKER)) {
-    await write([reply(observedIdentity())]);
+    await write([reply(observedIdentity(params.expression.includes(SENTINEL_EXPRESSION)))]);
 
     return;
   }
@@ -543,12 +556,18 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Runtime.callFunctionOn": {
-      if (isAfterCaptureRead(params)) {
+      if (readCarries(params, "isSecureContext")) {
         await write([reply(AFTER_CAPTURE_READ)]);
         break;
       }
 
-      await write([reply(currentUrl === "about:blank" ? observedIdentity() : CAPTURED_PAGE)]);
+      await write([
+        reply(
+          currentUrl === "about:blank"
+            ? observedIdentity(readCarries(params, SENTINEL_READ))
+            : CAPTURED_PAGE,
+        ),
+      ]);
       break;
     }
 

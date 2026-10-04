@@ -547,6 +547,9 @@ describe("the media surface", () => {
   });
 });
 
+const expectedFontFields = (capabilities: HostCapabilities) =>
+  resolveSurfaces(contextOf({ capabilities })).fonts.expected.map(({ field }) => field);
+
 describe("the fonts surface", () => {
   it("writes a per-profile fonts.conf from the checked stack and points both fontconfig variables at it", () => {
     const { fonts } = resolveSurfaces(contextOf({ capabilities: withStack() }));
@@ -584,7 +587,6 @@ describe("the fonts surface", () => {
 
     expect(fonts).not.toHaveProperty("tells");
     expect(fonts).toMatchObject({
-      expected: [],
       value: {
         config: "af5559ed3284a8ae0b81fab350523bb7110e8017285701dd499fbadfcbadbd32",
         payload: PAYLOAD,
@@ -654,6 +656,39 @@ describe("the fonts surface", () => {
       tells: ["host-fonts"],
       value: { reason: "fc-list printed 0 families, the manifest lists 175", source: "host" },
     });
+  });
+
+  it.each([
+    { capabilities: withStack(), name: "with a checked stack on Linux" },
+    { capabilities: { platform: "linux" as const }, name: "with no stack on Linux" },
+    { capabilities: { platform: "darwin" as const }, name: "on macOS" },
+  ])(
+    "expects a note on the stored sentinel $name, and none without evidence",
+    ({ capabilities }) => {
+      const evidence = { ageMs: 1, digest: "2eeb6d13", key: "5be0c7d2", sentinel: "c6755abb" };
+
+      expect([
+        expectedFontFields(capabilities).filter((field) => field === "fontsSentinel"),
+        expectedFontFields({ ...capabilities, fontEvidence: evidence }).filter(
+          (field) => field === "fontsSentinel",
+        ),
+      ]).toStrictEqual([[], ["fontsSentinel"]]);
+    },
+  );
+
+  it("expects the sentinel families to resolve, as a note, only under a pinned stack", () => {
+    const resolves = {
+      compatibility: false,
+      field: "fontsSentinelResolved",
+      matcher: { kind: "equals", value: true },
+      severity: "note",
+    };
+
+    expect([
+      resolveSurfaces(contextOf({ capabilities: withStack() })).fonts.expected,
+      resolveSurfaces(contextOf({ capabilities: { platform: "linux" } })).fonts.expected,
+      resolveSurfaces(contextOf({ capabilities: withStack("darwin") })).fonts.expected,
+    ]).toStrictEqual([[resolves], [], []]);
   });
 
   it("sets no variable and tells nothing on macOS, whatever stack the capabilities carry", () => {

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { noPins } from "../testing/no-pins.ts";
-import type { Observation } from "./contracts.ts";
+import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import {
@@ -29,6 +29,9 @@ const linuxHeadless: Observation = {
   colorDepth: 24,
   colorScheme: "light",
   devicePixelRatio: 1,
+  fontsDigest: "c41f09a2",
+  fontsSentinel: "5e17a1b2",
+  fontsSentinelResolved: true,
   hover: "hover",
   intlLocale: "en-US",
   languages: ["en-US", "en"],
@@ -59,7 +62,19 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
   ...overrides,
 });
 
+const EVIDENCE: FontEvidence = {
+  ageMs: 5_400_000,
+  digest: "2eeb6d13",
+  key: "5be0c7d2",
+  sentinel: "c6755abb",
+};
+
 const planFor = (overrides: Partial<IdentityContext> = {}) => planIdentity(contextOf(overrides));
+
+const planWithEvidence = () =>
+  planFor({
+    capabilities: { fontEvidence: EVIDENCE, fontStack: CHECKED_FONT_STACK, platform: "linux" },
+  });
 
 const planWith = (expected: readonly SurfaceExpectation[]) => ({ ...planFor(), expected });
 
@@ -370,6 +385,114 @@ describe("tells", () => {
   });
 });
 
+describe("the fonts evidence", () => {
+  const sentinelOnly: Observation = {
+    ...linuxHeadless,
+    fontsDigest: null,
+    fontsSentinel: "c6755abb",
+  };
+
+  it("hands the digest and sentinel of a launch with no evidence to the store, as observed", () => {
+    const { fontEvidence, report } = evaluate(planFor(), linuxHeadless);
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+    }).toStrictEqual({
+      coverage: { state: "observed" },
+      digest: "c41f09a2",
+      fontEvidence: { digest: "c41f09a2", kind: "gathered", sentinel: "5e17a1b2" },
+    });
+  });
+
+  it("reports the stored digest as cached with its key and age when the sentinel agrees", () => {
+    const { fontEvidence, mismatches, report } = evaluate(planWithEvidence(), sentinelOnly);
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+      mismatches,
+      notes: report.notes,
+      tells: report.tells,
+    }).toStrictEqual({
+      coverage: { ageMs: 5_400_000, key: "5be0c7d2", state: "cached" },
+      digest: "2eeb6d13",
+      fontEvidence: { kind: "confirmed" },
+      mismatches: [],
+      notes: [],
+      tells: [],
+    });
+  });
+
+  it("notes a sentinel off the evidence and tells fonts-drift, never failing the launch, and reports no digest", () => {
+    const { fontEvidence, mismatches, report } = evaluate(planWithEvidence(), {
+      ...sentinelOnly,
+      fontsSentinel: "deadbeef",
+    });
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+      mismatches,
+      notes: report.notes,
+      tells: report.tells,
+    }).toStrictEqual({
+      coverage: { reason: "fonts-drift", state: "unchecked" },
+      digest: null,
+      fontEvidence: { kind: "drifted" },
+      mismatches: [],
+      notes: [
+        { expected: "c6755abb", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
+      ],
+      tells: ["fonts-drift"],
+    });
+  });
+
+  it("does not store the evidence of a gathering launch whose pinned stack's sentinel resolved nothing", () => {
+    const { fontEvidence, mismatches, report } = evaluate(planFor(), {
+      ...linuxHeadless,
+      fontsSentinelResolved: false,
+    });
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+      mismatches,
+      notes: report.notes,
+      tells: report.tells,
+    }).toStrictEqual({
+      coverage: { state: "observed" },
+      digest: "c41f09a2",
+      fontEvidence: { kind: "unproven" },
+      mismatches: [],
+      notes: [
+        { expected: true, field: "fontsSentinelResolved", observed: false, surface: "fonts" },
+      ],
+      tells: ["fonts-drift"],
+    });
+  });
+
+  it("expects the sentinel to resolve only where the stack is pinned", () => {
+    const hostFonts = planFor({ capabilities: { platform: "linux" } });
+    const unresolved = { ...linuxHeadless, fontsSentinelResolved: false };
+
+    expect([
+      evaluate(hostFonts, unresolved).report.notes,
+      evaluate(planFor({ capabilities: { platform: "darwin" } }), unresolved).report.notes,
+    ]).toStrictEqual([[], []]);
+  });
+
+  it("does not compare a sentinel when there is no evidence", () => {
+    expect(
+      evaluate(planFor(), { ...linuxHeadless, fontsSentinel: "deadbeef" }).report.notes,
+    ).toStrictEqual([]);
+  });
+});
+
 describe(readObservation, () => {
   const { afterCapture: _afterCapture, product: _product, ...reading } = linuxHeadless;
 
@@ -380,6 +503,8 @@ describe(readObservation, () => {
   it.each([
     { read: JSON.stringify({ ...reading, webdriver: "false" }), refusal: "webdriver" },
     { read: JSON.stringify({ ...reading, webgl: undefined }), refusal: "webgl" },
+    { read: JSON.stringify({ ...reading, fontsDigest: 7 }), refusal: "fontsDigest" },
+    { read: JSON.stringify({ ...reading, fontsSentinel: null }), refusal: "fontsSentinel" },
     { read: JSON.stringify({ ...reading, languages: undefined }), refusal: "languages" },
     { read: JSON.stringify({ ...reading, zoneOffsets: [0, 0] }), refusal: "zoneOffsets" },
     { read: "null", refusal: "anyPointer, availHeight" },
@@ -397,9 +522,49 @@ describe(readObservation, () => {
   });
 });
 
-const pageGlobals = (matching: ReadonlySet<string>, canCreateWebgl: boolean) => ({
+const SENTINEL_MEASURES = 9;
+
+const FULL_MEASURES = 120;
+
+interface PageOptions {
+  readonly canCreateWebgl?: boolean;
+  readonly fallsBack?: boolean;
+  readonly measured?: string[];
+}
+
+const widthOf = (font: string): number =>
+  (font.split("").reduce((sum, character) => sum + (character.codePointAt(0) ?? 0), 0) % 977) / 8;
+
+const genericOf = (font: string): string => `72px ${font.slice(font.lastIndexOf(" ") + 1)}`;
+
+const canvasDocument = ({
+  canCreateWebgl = true,
+  fallsBack = false,
+  measured = [],
+}: PageOptions) => ({
+  createElement: () => ({
+    getContext: (kind: string) => {
+      if (kind === "webgl") {
+        return canCreateWebgl ? {} : null;
+      }
+
+      const context = {
+        font: "",
+        measureText: () => {
+          measured.push(context.font);
+
+          return { width: widthOf(fallsBack ? genericOf(context.font) : context.font) };
+        },
+      };
+
+      return context;
+    },
+  }),
+});
+
+const pageGlobals = (matching: ReadonlySet<string>, options: PageOptions) => ({
   devicePixelRatio: 1,
-  document: { createElement: () => ({ getContext: () => (canCreateWebgl ? {} : null) }) },
+  document: canvasDocument(options),
   matchMedia: (query: string) => ({ matches: matching.has(query) }),
   navigator: {
     languages: ["en-US", "en"],
@@ -412,11 +577,24 @@ const pageGlobals = (matching: ReadonlySet<string>, canCreateWebgl: boolean) => 
   screen: { availHeight: 1040, availWidth: 1920, colorDepth: 24, height: 1080, width: 1920 },
 });
 
-const runRead = (read: string, matching: ReadonlySet<string>, canCreateWebgl = true): string =>
-  String(runInNewContext(read, pageGlobals(matching, canCreateWebgl)));
+const runRead = (read: string, matching: ReadonlySet<string>, options: PageOptions = {}): string =>
+  String(runInNewContext(read, pageGlobals(matching, options)));
 
-const readInPage = (hostZone: string, matching: ReadonlySet<string>): string =>
-  runRead(planIdentity(contextOf({ hostZone })).read.beforeNavigation, matching);
+const readInPage = (
+  hostZone: string,
+  matching: ReadonlySet<string>,
+  measured: string[] = [],
+  fontEvidence?: FontEvidence,
+): string => {
+  const capabilities: HostCapabilities =
+    fontEvidence === undefined ? { platform: "linux" } : { fontEvidence, platform: "linux" };
+
+  return runRead(
+    planIdentity(contextOf({ capabilities, hostZone })).read.beforeNavigation,
+    matching,
+    { measured },
+  );
+};
 
 describe(identityRead, () => {
   const lightDesktop = new Set([
@@ -446,7 +624,58 @@ describe(identityRead, () => {
   it.each([true, false])("reads webgl %s as the page's canvas gives it", (webgl) => {
     const read = planIdentity(contextOf()).read.beforeNavigation;
 
-    expect(readObservation(MEASURED, runRead(read, lightDesktop, webgl))).toMatchObject({ webgl });
+    expect(
+      readObservation(MEASURED, runRead(read, lightDesktop, { canCreateWebgl: webgl })),
+    ).toMatchObject({ webgl });
+  });
+
+  it("without evidence, measures the sentinel and 40 families against each generic and reports both digests", () => {
+    const measured: string[] = [];
+    const reading = readObservation(MEASURED, readInPage("UTC", new Set(), measured));
+
+    expect({
+      count: measured.length,
+      digest: reading.fontsDigest,
+      first: measured.slice(0, 4),
+      last: measured.at(-1),
+      resolved: reading.fontsSentinelResolved,
+      sentinel: reading.fontsSentinel,
+    }).toStrictEqual({
+      count: SENTINEL_MEASURES + FULL_MEASURES,
+      digest: "2eeb6d13",
+      first: ["72px monospace", "72px sans-serif", "72px serif", '72px "Ubuntu", monospace'],
+      last: '72px "Amiri", serif',
+      resolved: true,
+      sentinel: "c6755abb",
+    });
+  });
+
+  it("reports a sentinel that no family resolves, because every width equals the generic fallback", () => {
+    const pinned = planIdentity(contextOf());
+
+    const reading = readObservation(
+      MEASURED,
+      runRead(pinned.read.beforeNavigation, new Set(), { fallsBack: true }),
+    );
+
+    expect([reading.fontsSentinelResolved, reading.fontsDigest]).toStrictEqual([false, "046bc60b"]);
+  });
+
+  it("with evidence, measures only the sentinel and reports no digest", () => {
+    const measured: string[] = [];
+    const reading = readObservation(MEASURED, readInPage("UTC", new Set(), measured, EVIDENCE));
+
+    expect({
+      count: measured.length,
+      digest: reading.fontsDigest,
+      last: measured.at(-1),
+      sentinel: reading.fontsSentinel,
+    }).toStrictEqual({
+      count: SENTINEL_MEASURES,
+      digest: null,
+      last: '72px "KACSTOffice", serif',
+      sentinel: "c6755abb",
+    });
   });
 
   it("requests the pinned zone, not the host's", () => {
@@ -464,7 +693,7 @@ describe(identityRead, () => {
 
   it("reads no requested offsets for a zone Intl refuses", () => {
     expect(
-      readObservation(MEASURED, runRead(identityRead("Mars/Olympus"), new Set())),
+      readObservation(MEASURED, runRead(identityRead("Mars/Olympus", "full"), new Set())),
     ).toMatchObject({ colorScheme: null, requestedOffsets: null, requestedZone: "Mars/Olympus" });
   });
 });

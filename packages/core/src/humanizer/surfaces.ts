@@ -268,18 +268,37 @@ const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["sc
       }
     : { expected: [], inputs: [], value: { source: "host" } };
 
+const fontNote = (field: ObservedField, value: Observed): Expectation => ({
+  compatibility: false,
+  field,
+  matcher: equals(value),
+  severity: "note",
+});
+
+const sentinelOf = (
+  evidence: HostCapabilities["fontEvidence"],
+  pinned: boolean,
+): readonly Expectation[] => [
+  ...(evidence === undefined ? [] : [fontNote("fontsSentinel", evidence.sentinel)]),
+  ...(pinned ? [fontNote("fontsSentinelResolved", true)] : []),
+];
+
 const resolveFonts = ({
   capabilities,
 }: Pick<IdentityContext, "capabilities">): Resolutions["fonts"] => {
-  const { fontStack } = capabilities;
+  const { fontEvidence, fontStack } = capabilities;
 
   if (capabilities.platform !== "linux") {
-    return { expected: [], inputs: [], value: { reason: null, source: "host" } };
+    return {
+      expected: sentinelOf(fontEvidence, false),
+      inputs: [],
+      value: { reason: null, source: "host" },
+    };
   }
 
   if (fontStack?.kind !== "checked") {
     return {
-      expected: [],
+      expected: sentinelOf(fontEvidence, false),
       inputs: [],
       tells: ["host-fonts"],
       value: { reason: fontStack?.reason ?? NO_FONT_STACK, source: "host" },
@@ -289,7 +308,7 @@ const resolveFonts = ({
   const config = fontConfigOf(fontStack);
 
   return {
-    expected: [],
+    expected: sentinelOf(fontEvidence, true),
     inputs: [
       {
         contents: config,

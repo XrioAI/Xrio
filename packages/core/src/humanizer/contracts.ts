@@ -97,11 +97,19 @@ export type FontStackFacts =
   | ({ readonly kind: "checked" } & FontStack)
   | { readonly kind: "refused"; readonly reason: string };
 
+export interface FontEvidence {
+  readonly key: string;
+  readonly ageMs: number;
+  readonly digest: string;
+  readonly sentinel: string;
+}
+
 export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
   readonly readableRenderNode?: true;
   readonly fork?: ForkFacts;
   readonly fontStack?: FontStackFacts;
+  readonly fontEvidence?: FontEvidence;
 }
 
 export const knobOf = (capabilities: HostCapabilities, key: string): string | null =>
@@ -165,6 +173,9 @@ export interface Observation {
   readonly webdriver: boolean;
   readonly webgl: boolean;
   readonly userAgent: string;
+  readonly fontsSentinel: string;
+  readonly fontsSentinelResolved: boolean;
+  readonly fontsDigest: string | null;
 }
 
 export type DeviceRecordRefusal =

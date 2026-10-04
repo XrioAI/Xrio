@@ -1,8 +1,15 @@
-import type { AfterCapture, ClientHints, HostCapabilities, Observation } from "./contracts.ts";
+import type {
+  AfterCapture,
+  ClientHints,
+  FontEvidence,
+  HostCapabilities,
+  Observation,
+} from "./contracts.ts";
 import type { ExitChoice, IdentityContext, SurfaceChoices } from "./surfaces.ts";
 import type { IdentityMismatch, IdentityTell } from "./verify.ts";
 
 export type CoverageReason =
+  | "fonts-drift"
   | "insecure-origin"
   | "read-failed"
   | "no-time"
@@ -54,6 +61,7 @@ export interface ObservedIdentity {
   readonly languages: readonly string[];
   readonly userAgent: string;
   readonly webdriver: boolean;
+  readonly fontsDigest: string | null;
   readonly screen: {
     readonly width: number;
     readonly height: number;
@@ -132,7 +140,27 @@ const readCoverage = (afterCapture: AfterCapture, gotValue: boolean): Coverage =
 const timezoneCoverage = ({ requestedOffsets, zone }: Observation): Coverage =>
   zone === null || requestedOffsets === null ? unchecked("read-failed") : observedCoverage();
 
-export const coverageOf = (observation: Observation): IdentityCoverage => {
+const fontsCoverage = (
+  evidence: FontEvidence | undefined,
+  drifted: boolean,
+  { fontsDigest }: Observation,
+): Coverage => {
+  if (evidence === undefined || fontsDigest !== null) {
+    return observedCoverage();
+  }
+
+  return drifted
+    ? unchecked("fonts-drift")
+    : { ageMs: evidence.ageMs, key: evidence.key, state: "cached" };
+};
+
+export const coverageOf = (
+  evidence: {
+    readonly fonts: FontEvidence | undefined;
+    readonly fontsDrifted: boolean;
+  },
+  observation: Observation,
+): IdentityCoverage => {
   const { afterCapture } = observation;
   const { clientHints, deviceMemory } = secureContextOf(afterCapture);
 
@@ -146,7 +174,7 @@ export const coverageOf = (observation: Observation): IdentityCoverage => {
     deviceMemory: readCoverage(afterCapture, deviceMemory !== null),
     devicePixelRatio: observedCoverage(),
     dns: unchecked("not-observed"),
-    fonts: unchecked("not-observed"),
+    fonts: fontsCoverage(evidence.fonts, evidence.fontsDrifted, observation),
     languages: observedCoverage(),
     mediaDevices: unchecked("not-observed"),
     permissions: unchecked("not-observed"),
@@ -168,7 +196,10 @@ export const coverageOf = (observation: Observation): IdentityCoverage => {
   };
 };
 
-export const observedOf = (observation: Observation): ObservedIdentity => {
+export const observedOf = (
+  observation: Observation,
+  fonts: FontEvidence | undefined,
+): ObservedIdentity => {
   const { battery, clientHints, deviceMemory, webgpu } = secureContextOf(observation.afterCapture);
 
   return {
@@ -177,6 +208,7 @@ export const observedOf = (observation: Observation): ObservedIdentity => {
     clientHints,
     colorScheme: observation.colorScheme,
     deviceMemory,
+    fontsDigest: observation.fontsDigest ?? fonts?.digest ?? null,
     hover: observation.hover,
     intlLocale: observation.intlLocale,
     languages: [...observation.languages],
