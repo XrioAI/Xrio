@@ -48,3 +48,4 @@ ui-base-x-x11_display_util.cc.patch
 ui-ozone-platform-headless-headless_screen.cc.patch
 ui-native_theme-native_theme.cc.patch
 build-config-compiler-BUILD.gn.patch
+chrome-browser-ui-startup-startup_browser_creator_impl.cc.patch

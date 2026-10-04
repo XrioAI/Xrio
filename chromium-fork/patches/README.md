@@ -54,3 +54,4 @@ Applied to Chromium in `series` order by `scripts/apply.sh`, against the tag in 
 | `ui-ozone-platform-headless-headless_screen.cc.patch` | Same work-area panel for headless screens. |
 | `ui-native_theme-native_theme.cc.patch` | Overrides `prefers-color-scheme`. |
 | `build-config-compiler-BUILD.gn.patch` | Adds the `thin_lto_jobs` gn arg (default `all`) so a build can cap the ThinLTO link threads; `build.sh` sets it from `JOBS`. |
+| `chrome-browser-ui-startup-startup_browser_creator_impl.cc.patch` | Backport of upstream `7870c32` (crbug 547894779): quits the browser when a headless command such as `--dump-dom` finishes; without it the process never exits on macOS. |
