@@ -9,7 +9,7 @@ import type { IdentityContext } from "./surfaces.ts";
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
   capabilities: { platform: "linux" },
   exit: { facts: { kind: "unknown" }, route: "direct" },
-  hostZone: undefined,
+  hostZone: "America/Chicago",
   mode: "headless",
   pins: noPins,
   ...overrides,
@@ -122,41 +122,27 @@ describe("the locale surface", () => {
   });
 });
 
+const zoneExpectations = [
+  {
+    compatibility: false,
+    field: "zone",
+    matcher: { kind: "named-zone" },
+    severity: "fatal",
+  },
+  {
+    compatibility: false,
+    field: "zoneOffsets",
+    matcher: { kind: "zone-offsets" },
+    severity: "fatal",
+  },
+];
+
 describe("the timezone surface", () => {
-  it("forwards the host zone to Chrome", () => {
+  it("sets TZ to the host zone, always explicitly", () => {
     expect(resolveSurfaces(contextOf({ hostZone: "America/Chicago" })).timezone).toStrictEqual({
-      expected: [
-        {
-          compatibility: false,
-          field: "zone",
-          matcher: { kind: "named-zone" },
-          severity: "fatal",
-        },
-        {
-          compatibility: false,
-          field: "zoneOffsets",
-          matcher: { kind: "zone-offsets" },
-          severity: "fatal",
-        },
-      ],
+      expected: zoneExpectations,
       inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
       value: { source: "host", zone: "America/Chicago" },
-    });
-  });
-
-  it("emits and expects nothing when there is no host zone, so Chrome keeps the system zone", () => {
-    expect(resolveSurfaces(contextOf()).timezone).toStrictEqual({
-      expected: [],
-      inputs: [],
-      value: { source: "host", zone: null },
-    });
-  });
-
-  it("forwards an empty host zone as it always has, with no zone to expect", () => {
-    expect(resolveSurfaces(contextOf({ hostZone: "" })).timezone).toStrictEqual({
-      expected: [],
-      inputs: [{ name: "TZ", sink: "environment", value: "" }],
-      value: { source: "host", zone: "" },
     });
   });
 });

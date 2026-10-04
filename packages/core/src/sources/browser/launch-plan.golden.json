@@ -1,5 +1,5 @@
 {
-  "headless linux timezone=unset display=unset xauthority=unset": {
+  "headless linux timezone=UTC display=unset xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -46,6 +46,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -62,7 +63,7 @@
       }
     ]
   },
-  "headless linux timezone=unset display=unset xauthority=/tmp/xvfb-run.Xauthority": {
+  "headless linux timezone=UTC display=unset xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -109,6 +110,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -125,7 +127,7 @@
       }
     ]
   },
-  "headless linux timezone=unset display=:7 xauthority=unset": {
+  "headless linux timezone=UTC display=:7 xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -172,6 +174,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -188,7 +191,7 @@
       }
     ]
   },
-  "headless linux timezone=unset display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
+  "headless linux timezone=UTC display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -235,6 +238,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -507,7 +511,7 @@
       }
     ]
   },
-  "headless darwin timezone=unset display=unset xauthority=unset": {
+  "headless darwin timezone=UTC display=unset xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -551,6 +555,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -567,7 +572,7 @@
       }
     ]
   },
-  "headless darwin timezone=unset display=unset xauthority=/tmp/xvfb-run.Xauthority": {
+  "headless darwin timezone=UTC display=unset xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -611,6 +616,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -627,7 +633,7 @@
       }
     ]
   },
-  "headless darwin timezone=unset display=:7 xauthority=unset": {
+  "headless darwin timezone=UTC display=:7 xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -671,6 +677,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -687,7 +694,7 @@
       }
     ]
   },
-  "headless darwin timezone=unset display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
+  "headless darwin timezone=UTC display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -731,6 +738,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -991,7 +999,7 @@
       }
     ]
   },
-  "headed linux timezone=unset display=unset xauthority=unset": {
+  "headed linux timezone=UTC display=unset xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1034,6 +1042,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1050,7 +1059,7 @@
       }
     ]
   },
-  "headed linux timezone=unset display=unset xauthority=/tmp/xvfb-run.Xauthority": {
+  "headed linux timezone=UTC display=unset xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1093,6 +1102,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1110,7 +1120,7 @@
       }
     ]
   },
-  "headed linux timezone=unset display=:7 xauthority=unset": {
+  "headed linux timezone=UTC display=:7 xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1153,6 +1163,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1170,7 +1181,7 @@
       }
     ]
   },
-  "headed linux timezone=unset display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
+  "headed linux timezone=UTC display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1213,6 +1224,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1475,7 +1487,7 @@
       }
     ]
   },
-  "headed darwin timezone=unset display=unset xauthority=unset": {
+  "headed darwin timezone=UTC display=unset xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1515,6 +1527,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1531,7 +1544,7 @@
       }
     ]
   },
-  "headed darwin timezone=unset display=unset xauthority=/tmp/xvfb-run.Xauthority": {
+  "headed darwin timezone=UTC display=unset xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1571,6 +1584,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1588,7 +1602,7 @@
       }
     ]
   },
-  "headed darwin timezone=unset display=:7 xauthority=unset": {
+  "headed darwin timezone=UTC display=:7 xauthority=unset": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1628,6 +1642,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",
@@ -1645,7 +1660,7 @@
       }
     ]
   },
-  "headed darwin timezone=unset display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
+  "headed darwin timezone=UTC display=:7 xauthority=/tmp/xvfb-run.Xauthority": {
     "args": [
       "--disable-field-trial-config",
       "--disable-background-networking",
@@ -1685,6 +1700,7 @@
       "HOME": "/tmp/xrio-501/bAbC123/home",
       "LANG": "C.UTF-8",
       "LANGUAGE": "en_US",
+      "TZ": "UTC",
       "TMPDIR": "/tmp/xrio-501/bAbC123/tmp",
       "XDG_CACHE_HOME": "/tmp/xrio-501/bAbC123/home/.cache",
       "XDG_CONFIG_HOME": "/tmp/xrio-501/bAbC123/home/.config",

@@ -1090,10 +1090,30 @@ describe("the identity a visit launches Chrome with", () => {
     ]);
   });
 
-  it("passes the TZ the host exports through to Chrome", async () => {
-    vi.stubEnv("TZ", "Asia/Kolkata");
+  it.each([
+    ["Asia/Kolkata", "Asia/Calcutta"],
+    ["America/Chicago", "America/Chicago"],
+    [":UTC", "UTC"],
+    ["posix/Europe/Berlin", "Europe/Berlin"],
+    ["", "UTC"],
+    ["garbage", "UTC"],
+    ["europe/berlin", "UTC"],
+  ])(
+    "launches Chrome with TZ set to the zone of the host's TZ=%j, which is %s",
+    async (ambient, zone) => {
+      vi.stubEnv("TZ", ambient);
 
-    await expect(launchPlanOf({})).resolves.toMatchObject({ env: { TZ: "Asia/Kolkata" } });
+      await expect(launchPlanOf({})).resolves.toMatchObject({ env: { TZ: zone } });
+    },
+  );
+
+  it("launches Chrome with a TZ of its own when the host exports none", async () => {
+    vi.stubEnv("TZ", "Asia/Tokyo");
+    delete process.env.TZ;
+
+    const plan = await launchPlanOf({});
+
+    expect(plan?.env.TZ).toBe(new Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
   it("reads the host's zone, display and Xauthority together, after the scratch is created and before planning", async () => {

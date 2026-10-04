@@ -74,7 +74,7 @@ const setup = async () => {
     identity: planIdentity({
       capabilities: hostCapabilities(),
       exit: { facts: { kind: "unknown" }, route: "direct" },
-      hostZone: undefined,
+      hostZone: "UTC",
       mode: "headless",
       pins: noPins,
     }).inputs,

@@ -25,7 +25,7 @@ export interface IdentityContext {
   readonly mode: Exclude<ResolvedMode["mode"], "http">;
   readonly capabilities: HostCapabilities;
   readonly pins: IdentityIntent;
-  readonly hostZone: string | undefined;
+  readonly hostZone: string;
   readonly exit: ExitChoice;
 }
 
@@ -36,7 +36,7 @@ interface Size {
 
 export interface SurfaceChoices {
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
-  readonly timezone: { readonly source: "host"; readonly zone: string | null };
+  readonly timezone: { readonly source: "host"; readonly zone: string };
   readonly gpu: GpuChoice;
   readonly window: { readonly source: "fixed"; readonly size: Size };
   readonly screen:
@@ -133,25 +133,22 @@ const resolveLocale = ({
 const resolveTimezone = ({
   hostZone,
 }: Pick<IdentityContext, "hostZone">): Resolutions["timezone"] => ({
-  expected:
-    hostZone === undefined || hostZone === ""
-      ? []
-      : [
-          {
-            compatibility: false,
-            field: "zone",
-            matcher: { kind: "named-zone" },
-            severity: "fatal",
-          },
-          {
-            compatibility: false,
-            field: "zoneOffsets",
-            matcher: { kind: "zone-offsets" },
-            severity: "fatal",
-          },
-        ],
-  inputs: hostZone === undefined ? [] : [{ name: "TZ", sink: "environment", value: hostZone }],
-  value: { source: "host", zone: hostZone ?? null },
+  expected: [
+    {
+      compatibility: false,
+      field: "zone",
+      matcher: { kind: "named-zone" },
+      severity: "fatal",
+    },
+    {
+      compatibility: false,
+      field: "zoneOffsets",
+      matcher: { kind: "zone-offsets" },
+      severity: "fatal",
+    },
+  ],
+  inputs: [{ name: "TZ", sink: "environment", value: hostZone }],
+  value: { source: "host", zone: hostZone },
 });
 
 const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] =>

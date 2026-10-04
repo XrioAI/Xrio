@@ -323,14 +323,11 @@ const pageGlobals = (matching: ReadonlySet<string>) => ({
   screen: { availHeight: 1040, availWidth: 1920, colorDepth: 24, height: 1080, width: 1920 },
 });
 
-const readInPage = (hostZone: string | undefined, matching: ReadonlySet<string>): string => {
-  const read: unknown = runInNewContext(
-    planIdentity(contextOf({ hostZone })).read.beforeNavigation,
-    pageGlobals(matching),
-  );
+const runRead = (read: string, matching: ReadonlySet<string>): string =>
+  String(runInNewContext(read, pageGlobals(matching)));
 
-  return String(read);
-};
+const readInPage = (hostZone: string, matching: ReadonlySet<string>): string =>
+  runRead(planIdentity(contextOf({ hostZone })).read.beforeNavigation, matching);
 
 describe(identityRead, () => {
   const lightDesktop = new Set([
@@ -359,7 +356,7 @@ describe(identityRead, () => {
   it("reads no requested offsets for a zone Intl refuses, an empty zone, or no zone", () => {
     expect(
       ["Mars/Olympus", "", undefined].map((zone) =>
-        readObservation(MEASURED, readInPage(zone, new Set())),
+        readObservation(MEASURED, runRead(identityRead(zone), new Set())),
       ),
     ).toMatchObject([
       { colorScheme: null, requestedOffsets: null, requestedZone: "Mars/Olympus" },

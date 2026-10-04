@@ -12,7 +12,7 @@ const scratchDir = "/tmp/xrio-501/bAbC123";
 interface IdentityChoice {
   readonly headless: boolean;
   readonly platform: NodeJS.Platform;
-  readonly timezone: string | undefined;
+  readonly timezone: string;
 }
 
 const identityFor = ({ headless, platform, timezone }: IdentityChoice): BrowserInputs =>
@@ -67,7 +67,7 @@ describe(planLaunch, () => {
       browserPath: "/opt/chrome/chrome",
       display: ":99",
       headless: true,
-      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
+      identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
       scratchDir,
       xauthority: "/tmp/xvfb-run.Xauthority",
     });
@@ -98,7 +98,7 @@ describe(planLaunch, () => {
       browserPath: "/opt/chrome/chrome",
       display: undefined,
       headless: false,
-      identity: identityFor({ headless: false, platform: "darwin", timezone: undefined }),
+      identity: identityFor({ headless: false, platform: "darwin", timezone: "UTC" }),
       scratchDir,
       xauthority: undefined,
     });
@@ -119,7 +119,7 @@ describe(planLaunch, () => {
       browserPath: "/Applications/Chrome.app/Contents/MacOS/Chrome",
       display: undefined,
       headless: false,
-      identity: identityFor({ headless: false, platform: "darwin", timezone: undefined }),
+      identity: identityFor({ headless: false, platform: "darwin", timezone: "UTC" }),
       scratchDir,
       xauthority: undefined,
     });
@@ -139,7 +139,7 @@ describe(planLaunch, () => {
       browserPath: "chrome",
       display: ":0",
       headless: true,
-      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
+      identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
       scratchDir,
       xauthority: undefined,
     });
@@ -184,7 +184,7 @@ describe(planLaunch, () => {
       browserPath: "chrome",
       display: undefined,
       headless: true,
-      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
+      identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
       scratchDir,
       xauthority: undefined,
     });
@@ -219,7 +219,7 @@ describe(planLaunch, () => {
       identity: planIdentity({
         capabilities: { platform: "linux" },
         exit: { facts: { kind: "unknown" }, route: "direct" },
-        hostZone: undefined,
+        hostZone: "UTC",
         mode: "headless",
         pins: { locale: "de-DE", timezone: undefined },
       }).inputs,
@@ -242,7 +242,7 @@ describe(planLaunch, () => {
       browserPath: "chrome",
       display: undefined,
       headless: true,
-      identity: identityFor({ headless: true, platform: "linux", timezone: undefined }),
+      identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
       scratchDir,
       xauthority: undefined,
     });
@@ -270,14 +270,14 @@ const labelOf = ({ display, headless, platform, timezone, xauthority }: GoldenCa
   [
     headless ? "headless" : "headed",
     platform,
-    `timezone=${timezone ?? "unset"}`,
+    `timezone=${timezone}`,
     `display=${display ?? "unset"}`,
     `xauthority=${xauthority ?? "unset"}`,
   ].join(" ");
 
 const goldenCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
   (["linux", "darwin"] as const).flatMap((platform) =>
-    [undefined, "America/Chicago"].flatMap((timezone) =>
+    ["UTC", "America/Chicago"].flatMap((timezone) =>
       [undefined, ":7"].flatMap((display) =>
         [undefined, "/tmp/xvfb-run.Xauthority"].map((xauthority) => ({
           display,

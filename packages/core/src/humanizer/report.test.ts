@@ -67,8 +67,8 @@ const headedMac: Observation = {
   outerHeight: 900,
   outerWidth: 1600,
   product: { headless: false, major: 154, version: "154.0.8037.57" },
-  requestedOffsets: null,
-  requestedZone: null,
+  requestedOffsets: ["GMT-05:00", "GMT-04:00"],
+  requestedZone: "America/Toronto",
   screenHeight: 1117,
   screenWidth: 1728,
   userAgent: macUserAgent,
@@ -112,7 +112,6 @@ const insecureCoverage = {
   battery: { reason: "insecure-origin", state: "unchecked" },
   clientHints: { reason: "insecure-origin", state: "unchecked" },
   deviceMemory: { reason: "insecure-origin", state: "unchecked" },
-  timezone: { reason: "not-observed", state: "unchecked" },
   webgpu: { reason: "insecure-origin", state: "unchecked" },
 };
 
@@ -201,7 +200,7 @@ describe("the identity report", () => {
     const plan = planIdentity({
       capabilities: { platform: "darwin" },
       exit: { facts: { kind: "unknown" }, route: "direct" },
-      hostZone: undefined,
+      hostZone: "America/Toronto",
       mode: "headed",
       pins: noPins,
     });
@@ -248,7 +247,7 @@ describe("the identity report", () => {
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { source: "host" },
           screen: { source: "host" },
-          timezone: { source: "host", zone: null },
+          timezone: { source: "host", zone: "America/Toronto" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
         tells: [],
@@ -444,13 +443,6 @@ describe("coverage backed by timezone reads", () => {
   it("reports timezone observed when the expected zone and its offsets were read", () => {
     expect(evaluate(plan, headlessLinux).report.coverage.timezone).toStrictEqual({
       state: "observed",
-    });
-  });
-
-  it("leaves timezone unchecked when no zone was expected despite reading the host zone", () => {
-    expect(evaluate(plan, headedMac).report.coverage.timezone).toStrictEqual({
-      reason: "not-observed",
-      state: "unchecked",
     });
   });
 
