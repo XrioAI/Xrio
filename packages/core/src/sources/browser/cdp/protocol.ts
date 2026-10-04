@@ -100,6 +100,7 @@ type ParamsIn<Kind extends Scope> = Narrowed<{
   "Page.navigate": { readonly url: string };
   "Page.setLifecycleEventsEnabled": { readonly enabled: true };
   "Runtime.evaluate": {
+    readonly awaitPromise: true;
     readonly contextId: IsolatedContextId;
     readonly expression: string;
     readonly returnByValue: true;

@@ -375,6 +375,11 @@ const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<st
 
 const isText = (value: unknown): value is string => typeof value === "string";
 
+const isNumber = (value: unknown): value is number => typeof value === "number";
+
+const PLATFORM_READ =
+  'navigator.userAgentData.getHighEntropyValues(["platform"]).then(({ platform }) => platform)';
+
 const withBrowser = async <Result>(
   driver: BrowserDriverName,
   mode: Mode,
@@ -445,6 +450,20 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
       expect(document).toMatchObject({ headers: { "x-page": "static" }, status: 200 });
       expect(markerOf(document.html)).toBe("static");
       expect(probed(document.html, Object.keys(probe))).toStrictEqual(probe);
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("awaits promises in isolated reads after a capture", async () => {
+    await withBrowser(driver, mode, async (browser, deadline) => {
+      await renderDocument(browser, new URL("/static", server.origin), deadline);
+
+      await expect(
+        browser.evaluateIsolated("Promise.resolve(42)", isNumber, deadline),
+      ).resolves.toBe(42);
+      await expect(browser.evaluateIsolated(PLATFORM_READ, isText, deadline)).resolves.toMatch(
+        /\S/u,
+      );
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });

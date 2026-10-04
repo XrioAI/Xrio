@@ -221,7 +221,7 @@ class Tab {
 
     try {
       const contextId = await untilAborted(document.world, signal);
-      const params = { contextId, expression, returnByValue: true } as const;
+      const params = { awaitPromise: true, contextId, expression, returnByValue: true } as const;
 
       return await this.#send(this.#main, "Runtime.evaluate", params, signal);
     } catch (error) {

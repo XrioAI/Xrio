@@ -65,11 +65,13 @@ const isCommand = (value: unknown): value is Command =>
   typeof value.method === "string" &&
   (!("sessionId" in value) || typeof value.sessionId === "string");
 
-const returnsByValue = (params: unknown): params is { returnByValue: true } =>
+const readsByValue = (params: unknown): params is { awaitPromise: true; returnByValue: true } =>
   typeof params === "object" &&
   params !== null &&
   "returnByValue" in params &&
-  params.returnByValue === true;
+  params.returnByValue === true &&
+  "awaitPromise" in params &&
+  params.awaitPromise === true;
 
 const hasUrl = (params: unknown): params is { url: string } =>
   typeof params === "object" &&
@@ -416,7 +418,7 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Runtime.evaluate": {
-      await (returnsByValue(params)
+      await (readsByValue(params)
         ? evaluateByValue(
             reply(CAPTURED_PAGE),
             onSession(sessionId, { error: TARGET_NAVIGATED, id }),

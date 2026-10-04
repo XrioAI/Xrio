@@ -38,7 +38,7 @@ describe("the CDP commands our driver may send", () => {
       send(
         main,
         "Runtime.evaluate",
-        { contextId: world, expression: "1", returnByValue: true },
+        { awaitPromise: true, contextId: world, expression: "1", returnByValue: true },
         signal,
       ),
     ).resolves.toHaveProperty("result");
@@ -63,14 +63,20 @@ describe("the CDP commands our driver may send", () => {
       main,
       "Runtime.evaluate",
       // @ts-expect-error A plain number could name the main world.
-      { contextId: 1, expression: "1", returnByValue: true },
+      { awaitPromise: true, contextId: 1, expression: "1", returnByValue: true },
       signal,
     );
     void send(
       main,
       "Runtime.evaluate",
-      // @ts-expect-error Evaluates never claim a user gesture.
-      { contextId: world, expression: "1", returnByValue: true, userGesture: true },
+      {
+        awaitPromise: true,
+        contextId: world,
+        expression: "1",
+        returnByValue: true,
+        // @ts-expect-error Evaluates never claim a user gesture.
+        userGesture: true,
+      },
       signal,
     );
     // @ts-expect-error Popups are left alone; only the main page navigates.
