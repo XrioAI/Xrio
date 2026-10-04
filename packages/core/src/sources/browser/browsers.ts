@@ -7,7 +7,7 @@ import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
-import type { AfterCapture, Observation } from "../../humanizer/contracts.ts";
+import type { AfterCapture, HostCapabilities, Observation } from "../../humanizer/contracts.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
@@ -68,6 +68,7 @@ interface VisitSteps extends Partial<RetireSteps> {
 }
 
 interface VisitPlan {
+  readonly capabilities: HostCapabilities;
   readonly identity: IdentityPlan;
   readonly launch: LaunchPlan;
 }
@@ -119,6 +120,15 @@ const assertSupported = ({ major, version }: ChromeProduct): void => {
   }
 };
 
+const assertProbedVersion = ({ version }: ChromeProduct, { fork }: HostCapabilities): void => {
+  if (fork !== undefined && version !== fork.version) {
+    throw launchFailed(
+      `Chrome launched as version ${version}, but the Xrio fork package at ${fork.packageDir} reported ${fork.version} to its version probe.`,
+      "",
+    );
+  }
+};
+
 const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   await untilDeadline(sweepOnce, deadline);
 
@@ -150,6 +160,7 @@ const planVisit = async (
   });
 
   return {
+    capabilities,
     identity,
     launch: planLaunch({
       browserArgs: request.browserArgs,
@@ -282,7 +293,7 @@ const renderInScope = async (
   document: PromiseWithResolvers<SourceDocument>,
 ): Promise<Closed> => {
   try {
-    const { identity, launch } = await timeStage(
+    const { capabilities, identity, launch } = await timeStage(
       "identity",
       async () => await planVisit(request, scope.scratch, steps, deadline),
     );
@@ -291,6 +302,7 @@ const renderInScope = async (
 
     const browser = await startBrowser(driver, scope, launch, deadline);
     assertSupported(browser.product);
+    assertProbedVersion(browser.product, capabilities);
 
     const observation = await timeStage(
       "verify",

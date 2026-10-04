@@ -119,7 +119,7 @@ const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) 
   }
 };
 
-const loadWithFork = async (scenario: FakeForkScenario, root: string) => {
+const loadWithFork = async (scenario: FakeForkScenario, root: string, version?: string) => {
   const browsers = createBrowsers(cdpDriver, 1, {
     hostCapabilities: createCapabilityProbe({ root: path.join(root, "scratch") }),
   });
@@ -129,7 +129,7 @@ const loadWithFork = async (scenario: FakeForkScenario, root: string) => {
   try {
     return await browsers.load({
       browserArgs: [],
-      browserPath: await fakeForkPath(scenario, { root }),
+      browserPath: await fakeForkPath(scenario, { root, version }),
       deadline,
       mode: "headless",
       pins: noPins,
@@ -154,6 +154,16 @@ describe("browsers on the kit fork", () => {
 
   it("probes the package before launch and renders", async () => {
     await expect(loadWithFork("kit", root)).resolves.toMatchObject({ status: 200 });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("refuses a launched Chrome whose version differs from the probed version", async () => {
+    await expect(loadWithFork("kit", root, "154.0.8037.99")).rejects.toSatisfy(
+      (error) =>
+        isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
+        error.message.startsWith("Chrome launched as version 154.0.8037.57, but the Xrio fork") &&
+        error.message.endsWith("reported 154.0.8037.99 to its version probe."),
+    );
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
