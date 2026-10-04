@@ -7,7 +7,6 @@
     "packages/core": {
       "entry": [
         "src/client.ts!",
-        "src/proxy/route.ts!",
         "src/humanizer/contracts.ts!",
         "src/sessions/session.ts!",
         "scripts/*.ts!",

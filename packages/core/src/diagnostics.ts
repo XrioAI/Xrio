@@ -16,6 +16,7 @@ interface StageTiming {
 
 export interface InternalEvent {
   event:
+    | "identity-chosen"
     | "browser-launched"
     | "cdp-message-dropped"
     | "document-rebind"

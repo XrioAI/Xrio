@@ -41,6 +41,7 @@ const linuxHeadless: Observation = {
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
   capabilities: { platform: "linux" },
+  exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "Asia/Kolkata",
   mode: "headless",
   ...overrides,

@@ -4,7 +4,7 @@ import type { ChromeProduct } from "../sources/browser/port.ts";
 
 export type Seed = string;
 
-interface Insets {
+export interface Insets {
   readonly top: number;
   readonly right: number;
   readonly bottom: number;

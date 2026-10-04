@@ -156,6 +156,7 @@ const { args } = planLaunch({
   headless: mode === "headless",
   identity: planIdentity({
     capabilities: hostCapabilities(),
+    exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: readHostZone(),
     mode,
   }).inputs,

@@ -3,16 +3,19 @@ import { describe, expect, it } from "vite-plus/test";
 import { isMinted, mergeBrowserInputs } from "./inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import { EMISSION_ORDER } from "./surfaces.ts";
-import type { Resolution, Resolutions, SurfaceName } from "./surfaces.ts";
+import type { SurfaceName } from "./surfaces.ts";
 
-const isComplete = (candidate: Readonly<Record<string, Resolution>>): candidate is Resolutions =>
-  EMISSION_ORDER.every((name) => name in candidate);
+type EmittedInputs = Parameters<typeof mergeBrowserInputs>[0];
+
+const isComplete = (
+  candidate: Readonly<Record<string, { readonly inputs: readonly LaunchInput[] }>>,
+): candidate is EmittedInputs => EMISSION_ORDER.every((name) => name in candidate);
 
 const resolutionsOf = (
   emitted: Partial<Record<SurfaceName, readonly LaunchInput[]>>,
-): Resolutions => {
+): EmittedInputs => {
   const resolutions = Object.fromEntries(
-    EMISSION_ORDER.map((name) => [name, { expected: [], inputs: emitted[name] ?? [] }]),
+    EMISSION_ORDER.map((name) => [name, { inputs: emitted[name] ?? [] }]),
   );
 
   if (!isComplete(resolutions)) {

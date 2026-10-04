@@ -11,6 +11,7 @@ import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
 import { describeMismatch, evaluate, readObservation } from "../../humanizer/verify.ts";
+import { exitFactsFor, routeFor } from "../../proxy/route.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
@@ -121,9 +122,11 @@ const planVisit = (request: VisitTarget, scratch: ScratchDir, steps: VisitSteps)
   const hostZone = readHostZone();
   const display = process.env.DISPLAY;
   const xauthority = process.env.XAUTHORITY;
+  const route = routeFor(request.proxy);
 
   const identity = steps.planIdentity({
     capabilities: steps.hostCapabilities(),
+    exit: { facts: exitFactsFor(route), route: route.kind },
     hostZone,
     mode: request.mode,
   });
@@ -238,6 +241,9 @@ const renderInScope = async (
 ): Promise<Closed> => {
   try {
     const { identity, launch } = planVisit(request, scope.scratch, steps);
+
+    publishInternalEvent({ detail: JSON.stringify(identity.chosen), event: "identity-chosen" });
+
     const browser = await startBrowser(driver, scope, launch, deadline);
     assertSupported(browser.product);
     await timeStage("verify", async () => {

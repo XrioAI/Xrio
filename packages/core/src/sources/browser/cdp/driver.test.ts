@@ -121,6 +121,7 @@ describe("the CDP driver's documents", () => {
       headless: true,
       identity: planIdentity({
         capabilities: hostCapabilities(),
+        exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: undefined,
         mode: "headless",
       }).inputs,
@@ -159,6 +160,7 @@ describe("the CDP driver's documents", () => {
       headless: true,
       identity: planIdentity({
         capabilities: hostCapabilities(),
+        exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: undefined,
         mode: "headless",
       }).inputs,
@@ -213,6 +215,7 @@ describe("the CDP driver's documents", () => {
       headless: true,
       identity: planIdentity({
         capabilities: hostCapabilities(),
+        exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: undefined,
         mode: "headless",
       }).inputs,

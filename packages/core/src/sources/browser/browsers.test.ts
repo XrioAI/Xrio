@@ -1,4 +1,5 @@
-import { subscribe } from "node:diagnostics_channel";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { ChannelListener } from "node:diagnostics_channel";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
@@ -1334,6 +1335,87 @@ describe("the launch identity check", () => {
       await browsers.close();
       expect({ closed, document }).toMatchObject({ closed: { exited: true }, document: { error } });
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
+});
+
+const isEvent = (message: unknown): message is { event: string; detail: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  typeof message.event === "string" &&
+  "detail" in message &&
+  typeof message.detail === "string";
+
+describe("the identity-chosen event", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { outcome: { value: { status: 200 } }, scenario: "normal" },
+    { outcome: { error: { code: "BROWSER_CRASHED" } }, scenario: "crash-on-navigate" },
+  ])(
+    "names the chosen identity before Chrome launches on a $scenario visit",
+    async ({ outcome, scenario }) => {
+      vi.stubEnv("TZ", "UTC");
+
+      const events: { event: string; detail: string }[] = [];
+
+      const record: ChannelListener = (message) => {
+        if (isEvent(message)) {
+          events.push(message);
+        }
+      };
+
+      const browsers = createBrowsers(cdpDriver, 1, {
+        hostCapabilities: () => ({ platform: "linux" }),
+      });
+
+      using deadline = startDeadline(10_000);
+      subscribe("xrio:event", record);
+
+      const document = await settledValue(
+        browsers
+          .load({ ...(await normalRequest(deadline)), browserPath: await fakeChromePath(scenario) })
+          .finally(() => {
+            unsubscribe("xrio:event", record);
+          }),
+      );
+
+      await browsers.close();
+
+      const chosen: unknown = JSON.parse(
+        events.find(({ event }) => event === "identity-chosen")?.detail ?? "null",
+      );
+
+      expect({
+        chosen,
+        document,
+        order: events.flatMap(({ event }) =>
+          event === "identity-chosen" || event === "browser-launched" ? [event] : [],
+        ),
+      }).toMatchObject({
+        chosen: {
+          exit: { facts: { kind: "unknown" }, route: "direct" },
+          mode: "headless",
+          surfaces: {
+            automation: null,
+            gpu: { backend: "swiftshader", persona: null },
+            leaks: { dnsOverHttps: "off", networkPrediction: "off" },
+            locale: { languages: ["en-US", "en"], tag: "en-US" },
+            screen: {
+              size: { height: 1080, width: 1920 },
+              source: "fixed",
+              workArea: { bottom: 40, left: 0, right: 0, top: 0 },
+            },
+            timezone: { source: "host", zone: "UTC" },
+            window: { size: { height: 900, width: 1600 }, source: "fixed" },
+          },
+        },
+        document: outcome,
+        order: ["identity-chosen", "browser-launched"],
+      });
     },
   );
 });

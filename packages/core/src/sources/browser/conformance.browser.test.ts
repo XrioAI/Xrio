@@ -313,6 +313,7 @@ const withBrowser = async <Result>(
     headless: mode === "headless",
     identity: planIdentity({
       capabilities: hostCapabilities(),
+      exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode,
     }).inputs,
@@ -574,6 +575,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
       headless: mode === "headless",
       identity: planIdentity({
         capabilities: hostCapabilities(),
+        exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: readHostZone(),
         mode,
       }).inputs,

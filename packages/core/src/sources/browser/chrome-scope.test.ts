@@ -72,6 +72,7 @@ const setup = async () => {
     headless: true,
     identity: planIdentity({
       capabilities: hostCapabilities(),
+      exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: undefined,
       mode: "headless",
     }).inputs,

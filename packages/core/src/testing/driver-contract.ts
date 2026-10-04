@@ -88,6 +88,7 @@ const withDriver = async (
     headless: true,
     identity: planIdentity({
       capabilities: hostCapabilities(),
+      exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode: "headless",
     }).inputs,

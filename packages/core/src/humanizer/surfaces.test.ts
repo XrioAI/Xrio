@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { planIdentity } from "./humanizer.ts";
 import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
   capabilities: { platform: "linux" },
+  exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: undefined,
   mode: "headless",
   ...overrides,
@@ -36,6 +38,7 @@ describe("the locale surface", () => {
         { name: "LANGUAGE", sink: "environment", value: "en_US" },
         { name: "intl.accept_languages", sink: "preference", value: "en-US,en" },
       ],
+      value: { languages: ["en-US", "en"], tag: "en-US" },
     });
   });
 
@@ -72,17 +75,23 @@ describe("the timezone surface", () => {
         },
       ],
       inputs: [{ name: "TZ", sink: "forwarded-environment", value: "America/Chicago" }],
+      value: { source: "host", zone: "America/Chicago" },
     });
   });
 
   it("emits and expects nothing when there is no host zone, so Chrome keeps the system zone", () => {
-    expect(resolveSurfaces(contextOf()).timezone).toStrictEqual({ expected: [], inputs: [] });
+    expect(resolveSurfaces(contextOf()).timezone).toStrictEqual({
+      expected: [],
+      inputs: [],
+      value: { source: "host", zone: null },
+    });
   });
 
   it("forwards an empty host zone as it always has, with no zone to expect", () => {
     expect(resolveSurfaces(contextOf({ hostZone: "" })).timezone).toStrictEqual({
       expected: [],
       inputs: [{ name: "TZ", sink: "forwarded-environment", value: "" }],
+      value: { source: "host", zone: "" },
     });
   });
 });
@@ -95,6 +104,7 @@ describe("the gpu surface", () => {
         { name: "--use-gl", sink: "switch", value: "angle" },
         { name: "--use-angle", sink: "switch", value: "swiftshader" },
       ],
+      value: { backend: "swiftshader", persona: null },
     });
   });
 
@@ -102,6 +112,7 @@ describe("the gpu surface", () => {
     expect(resolveSurfaces(contextOf({ capabilities: { platform } })).gpu).toStrictEqual({
       expected: [],
       inputs: [],
+      value: { backend: "native" },
     });
   });
 });
@@ -124,6 +135,7 @@ describe("the window surface", () => {
         },
       ],
       inputs: [{ name: "--window-size", sink: "switch", value: "1600,900" }],
+      value: { size: { height: 900, width: 1600 }, source: "fixed" },
     });
   });
 
@@ -144,6 +156,7 @@ describe("the window surface", () => {
         },
       ],
       inputs: [{ name: "--window-size", sink: "switch", value: "1600,900" }],
+      value: { size: { height: 900, width: 1600 }, source: "fixed" },
     });
   });
 });
@@ -185,6 +198,11 @@ describe("the screen surface", () => {
             "{0,0 1920x1080 colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 workAreaLeft=0 workAreaRight=0 workAreaTop=0 workAreaBottom=40}",
         },
       ],
+      value: {
+        size: { height: 1080, width: 1920 },
+        source: "fixed",
+        workArea: { bottom: 40, left: 0, right: 0, top: 0 },
+      },
     });
   });
 
@@ -192,6 +210,7 @@ describe("the screen surface", () => {
     expect(resolveSurfaces(contextOf({ mode: "headed" })).screen).toStrictEqual({
       expected: [],
       inputs: [],
+      value: { source: "host" },
     });
   });
 });
@@ -204,6 +223,7 @@ describe("the leaks surface", () => {
         { name: "net.network_prediction_options", sink: "preference", value: 2 },
         { name: "dns_over_https.mode", sink: "local-state", value: "off" },
       ],
+      value: { dnsOverHttps: "off", networkPrediction: "off" },
     });
   });
 });
@@ -228,13 +248,14 @@ describe("the automation surface", () => {
         },
       ],
       inputs: [],
+      value: null,
     });
   });
 
   it("expects no colour scheme on macOS, where it follows the host", () => {
     expect(
       resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).automation,
-    ).toStrictEqual({ expected: [noWebdriver], inputs: [] });
+    ).toStrictEqual({ expected: [noWebdriver], inputs: [], value: null });
   });
 });
 
@@ -243,5 +264,32 @@ describe("emission order", () => {
     expect([...EMISSION_ORDER].toSorted()).toStrictEqual(
       Object.keys(resolveSurfaces(contextOf())).toSorted(),
     );
+  });
+});
+
+describe("the chosen identity", () => {
+  it("names the mode, the exit and every surface's choice, with no input or expectation", () => {
+    expect(
+      planIdentity(
+        contextOf({
+          capabilities: { platform: "darwin" },
+          exit: { facts: { kind: "unknown" }, route: "proxy" },
+          hostZone: "Europe/Berlin",
+          mode: "headed",
+        }),
+      ).chosen,
+    ).toStrictEqual({
+      exit: { facts: { kind: "unknown" }, route: "proxy" },
+      mode: "headed",
+      surfaces: {
+        automation: null,
+        gpu: { backend: "native" },
+        leaks: { dnsOverHttps: "off", networkPrediction: "off" },
+        locale: { languages: ["en-US", "en"], tag: "en-US" },
+        screen: { source: "host" },
+        timezone: { source: "host", zone: "Europe/Berlin" },
+        window: { size: { height: 900, width: 1600 }, source: "fixed" },
+      },
+    });
   });
 });

@@ -1,5 +1,6 @@
+import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
-import type { HostCapabilities } from "./contracts.ts";
+import type { GpuChoice, HostCapabilities, Insets } from "./contracts.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
 
@@ -13,15 +14,39 @@ const WINDOW = { height: 900, width: 1600 } as const;
 
 const NETWORK_PREDICTION_NEVER = 2;
 
+export interface ExitChoice {
+  readonly route: Route["kind"];
+  readonly facts: ExitFacts;
+}
+
 export interface IdentityContext {
   readonly mode: Exclude<ResolvedMode["mode"], "http">;
   readonly capabilities: HostCapabilities;
   readonly hostZone: string | undefined;
+  readonly exit: ExitChoice;
 }
 
-export interface Resolution {
+interface Size {
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface SurfaceChoices {
+  readonly locale: { readonly tag: string; readonly languages: readonly string[] };
+  readonly timezone: { readonly source: "host"; readonly zone: string | null };
+  readonly gpu: GpuChoice;
+  readonly window: { readonly source: "fixed"; readonly size: Size };
+  readonly screen:
+    | { readonly source: "fixed"; readonly size: Size; readonly workArea: Insets }
+    | { readonly source: "host" };
+  readonly leaks: { readonly networkPrediction: "off"; readonly dnsOverHttps: "off" };
+  readonly automation: null;
+}
+
+interface Resolution<Value> {
   readonly inputs: readonly LaunchInput[];
   readonly expected: readonly Expectation[];
+  readonly value: Value;
 }
 
 export const EMISSION_ORDER = [
@@ -36,7 +61,9 @@ export const EMISSION_ORDER = [
 
 export type SurfaceName = (typeof EMISSION_ORDER)[number];
 
-export type Resolutions = Readonly<Record<SurfaceName, Resolution>>;
+export type Resolutions = {
+  readonly [Surface in SurfaceName]: Resolution<SurfaceChoices[Surface]>;
+};
 
 const screenInfo = (): string =>
   `{0,0 ${SCREEN.width}x${SCREEN.height} colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 ` +
@@ -52,7 +79,9 @@ const compatible = (
   severity: Expectation["severity"],
 ): Expectation => ({ compatibility: true, field, matcher, severity });
 
-const resolveLocale = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolution => ({
+const resolveLocale = ({
+  capabilities,
+}: Pick<IdentityContext, "capabilities">): Resolutions["locale"] => ({
   expected: [
     compatible("languages", equals(ACCEPT_LANGUAGES.split(",")), "fatal"),
     compatible(
@@ -68,9 +97,12 @@ const resolveLocale = ({ capabilities }: Pick<IdentityContext, "capabilities">):
     { name: "LANGUAGE", sink: "environment", value: LOCALE.replace("-", "_") },
     { name: "intl.accept_languages", sink: "preference", value: ACCEPT_LANGUAGES },
   ],
+  value: { languages: ACCEPT_LANGUAGES.split(","), tag: LOCALE },
 });
 
-const resolveTimezone = ({ hostZone }: Pick<IdentityContext, "hostZone">): Resolution => ({
+const resolveTimezone = ({
+  hostZone,
+}: Pick<IdentityContext, "hostZone">): Resolutions["timezone"] => ({
   expected:
     hostZone === undefined || hostZone === ""
       ? []
@@ -90,20 +122,22 @@ const resolveTimezone = ({ hostZone }: Pick<IdentityContext, "hostZone">): Resol
         ],
   inputs:
     hostZone === undefined ? [] : [{ name: "TZ", sink: "forwarded-environment", value: hostZone }],
+  value: { source: "host", zone: hostZone ?? null },
 });
 
-const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolution => ({
-  expected: [],
-  inputs:
-    capabilities.platform === "linux"
-      ? [
+const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] =>
+  capabilities.platform === "linux"
+    ? {
+        expected: [],
+        inputs: [
           { name: "--use-gl", sink: "switch", value: "angle" },
           { name: "--use-angle", sink: "switch", value: "swiftshader" },
-        ]
-      : [],
-});
+        ],
+        value: { backend: "swiftshader", persona: null },
+      }
+    : { expected: [], inputs: [], value: { backend: "native" } };
 
-const resolveWindow = ({ mode }: Pick<IdentityContext, "mode">): Resolution => ({
+const resolveWindow = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["window"] => ({
   expected:
     mode === "headless"
       ? [
@@ -115,23 +149,28 @@ const resolveWindow = ({ mode }: Pick<IdentityContext, "mode">): Resolution => (
           compatible("outerHeight", atMost("availHeight"), "note"),
         ],
   inputs: [{ name: "--window-size", sink: "switch", value: `${WINDOW.width},${WINDOW.height}` }],
+  value: { size: { height: WINDOW.height, width: WINDOW.width }, source: "fixed" },
 });
 
-const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolution => ({
-  expected:
-    mode === "headless"
-      ? [
+const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["screen"] =>
+  mode === "headless"
+    ? {
+        expected: [
           compatible("screenWidth", equals(SCREEN.width), "fatal"),
           compatible("screenHeight", equals(SCREEN.height), "fatal"),
           compatible("availWidth", equals(SCREEN.width), "fatal"),
           compatible("availHeight", equals(SCREEN.height - SCREEN.workAreaInset), "fatal"),
-        ]
-      : [],
-  inputs:
-    mode === "headless" ? [{ name: "--screen-info", sink: "switch", value: screenInfo() }] : [],
-});
+        ],
+        inputs: [{ name: "--screen-info", sink: "switch", value: screenInfo() }],
+        value: {
+          size: { height: SCREEN.height, width: SCREEN.width },
+          source: "fixed",
+          workArea: { bottom: SCREEN.workAreaInset, left: 0, right: 0, top: 0 },
+        },
+      }
+    : { expected: [], inputs: [], value: { source: "host" } };
 
-const resolveLeaks = (): Resolution => ({
+const resolveLeaks = (): Resolutions["leaks"] => ({
   expected: [],
   inputs: [
     {
@@ -141,11 +180,12 @@ const resolveLeaks = (): Resolution => ({
     },
     { name: "dns_over_https.mode", sink: "local-state", value: "off" },
   ],
+  value: { dnsOverHttps: "off", networkPrediction: "off" },
 });
 
 const resolveAutomation = ({
   capabilities,
-}: Pick<IdentityContext, "capabilities">): Resolution => ({
+}: Pick<IdentityContext, "capabilities">): Resolutions["automation"] => ({
   expected: [
     compatible("webdriver", equals(false), "fatal"),
     ...(capabilities.platform === "linux"
@@ -153,6 +193,7 @@ const resolveAutomation = ({
       : []),
   ],
   inputs: [],
+  value: null,
 });
 
 export const resolveSurfaces = (context: IdentityContext): Resolutions => ({

@@ -1,6 +1,6 @@
 import type { LaunchInput } from "./owned-inputs.ts";
 import { EMISSION_ORDER } from "./surfaces.ts";
-import type { Resolutions, SurfaceName } from "./surfaces.ts";
+import type { SurfaceName } from "./surfaces.ts";
 
 const MINTED = Symbol("BrowserInputs");
 
@@ -49,7 +49,9 @@ const freezeJson = (node: JsonObject): Readonly<JsonObject> => {
   return Object.freeze(node);
 };
 
-export const mergeBrowserInputs = (resolutions: Resolutions): BrowserInputs => {
+type EmittedInputs = Readonly<Record<SurfaceName, { readonly inputs: readonly LaunchInput[] }>>;
+
+export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs => {
   const owners = new Map<string, SurfaceName>();
   const switches: string[] = [];
   const environment: Record<string, string> = {};

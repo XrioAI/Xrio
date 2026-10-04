@@ -17,6 +17,7 @@ interface IdentityChoice {
 const identityFor = ({ headless, platform, timezone }: IdentityChoice): BrowserInputs =>
   planIdentity({
     capabilities: { platform },
+    exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: timezone,
     mode: headless ? "headless" : "headed",
   }).inputs;
