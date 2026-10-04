@@ -1676,6 +1676,104 @@ const isEvent = (message: unknown): message is { event: string; detail: string }
   "detail" in message &&
   typeof message.detail === "string";
 
+describe("a named session's device record", () => {
+  const record = {
+    device: {
+      cores: 0,
+      fonts: { kind: "system" },
+      gpu: { backend: "swiftshader", persona: null },
+      memoryGb: 0,
+      screen: { height: 1000, width: 1700, workArea: { bottom: 50, left: 0, right: 0, top: 0 } },
+      voices: { kind: "system" },
+      window: { height: 800, kind: "floating", width: 1300, x: 100, y: 60 },
+    },
+    policy: { locale: "en-US", timezone: { kind: "pinned", zone: "UTC" } },
+    schema: 1,
+    seed: "00000000000000a1",
+  } as const;
+
+  const namedSession = () => ({
+    id: "session-1",
+    kind: "named" as const,
+    ownership: {
+      epoch: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      signal: new AbortController().signal,
+    },
+    pins: noPins,
+    record,
+  });
+
+  it("presents the stored device instead of drawing a seed", async () => {
+    const browsers = createBrowsers(cdpDriver, 1, {
+      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+      random: () => {
+        throw new Error("A named session draws no seed.");
+      },
+      sessionFor: namedSession,
+    });
+
+    using deadline = startDeadline(10_000);
+    const document = await browsers.load(await normalRequest(deadline));
+
+    await browsers.close();
+    expect(document.identity).toMatchObject({
+      observed: {
+        screen: { availHeight: 950, height: 1000, width: 1700 },
+        window: { outerHeight: 800, outerWidth: 1300, screenX: 100, screenY: 60 },
+      },
+      record,
+      seed: "00000000000000a1",
+      surfaces: { seed: { source: "record" }, timezone: { source: "pin", zone: "UTC" } },
+    });
+  });
+
+  it("refuses a headed scrape of a headless record before Chrome launches", async () => {
+    const browsers = createBrowsers(cdpDriver, 1, { sessionFor: namedSession });
+    using deadline = startDeadline(10_000);
+
+    const document = await settledValue(
+      browsers.load({ ...(await normalRequest(deadline)), mode: "headed" }),
+    );
+
+    await browsers.close();
+    expect({ document, left: await leftovers() }).toMatchObject({
+      document: {
+        error: {
+          code: "INVALID_OPTIONS",
+          message:
+            "The session's device record fixes its mode; a scrape in that session cannot change it.",
+        },
+      },
+      left: nothingLeft,
+    });
+  });
+
+  it("refuses a scrape that pins another zone before Chrome launches", async () => {
+    const browsers = createBrowsers(cdpDriver, 1, { sessionFor: namedSession });
+    using deadline = startDeadline(10_000);
+
+    const document = await settledValue(
+      browsers.load({
+        ...(await normalRequest(deadline)),
+        pins: { ...noPins, timezone: "America/New_York" },
+      }),
+    );
+
+    await browsers.close();
+    expect({ document, left: await leftovers() }).toMatchObject({
+      document: {
+        error: {
+          code: "INVALID_OPTIONS",
+          message:
+            "The session's device record fixes its timezone; a scrape in that session cannot change it.",
+        },
+      },
+      left: nothingLeft,
+    });
+  });
+});
+
 describe("the identity-chosen event", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

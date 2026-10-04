@@ -14,6 +14,7 @@ import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
 import { presentedLocale } from "../../humanizer/surfaces.ts";
+import type { IdentityContext } from "../../humanizer/surfaces.ts";
 import {
   describeMismatch,
   evaluate,
@@ -21,8 +22,10 @@ import {
   readObservation,
 } from "../../humanizer/verify.ts";
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
+import { refuseRecordOverrides } from "../../options.ts";
 import { exitFactsFor, routeFor } from "../../proxy/route.ts";
 import { sessionFor } from "../../sessions/session.ts";
+import type { SessionContext } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
@@ -59,7 +62,7 @@ const AFTER_CAPTURE_FLOOR_MS = 50;
 
 type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
 
-type VisitTarget = Omit<BrowserRequest, "deadline">;
+type VisitTarget = Omit<BrowserRequest, "deadline"> & { device: IdentityContext["device"] };
 
 interface BrowserVisit {
   readonly document: Promise<SourceDocument>;
@@ -153,6 +156,20 @@ const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   }
 };
 
+const deviceFor = (
+  session: SessionContext,
+  scrape: Pick<IdentityContext, "mode" | "pins">,
+  random: VisitSteps["random"],
+): IdentityContext["device"] => {
+  if (session.kind === "anonymous") {
+    return { kind: "fresh", seed: seedOf(random(SEED_BYTES)) };
+  }
+
+  refuseRecordOverrides(session.record, scrape);
+
+  return { kind: "record", record: session.record };
+};
+
 const planVisit = async (
   request: VisitTarget,
   scratch: ScratchDir,
@@ -174,7 +191,7 @@ const planVisit = async (
         fonts.evidence === undefined
           ? capabilities
           : { ...capabilities, fontEvidence: fonts.evidence },
-      device: { kind: "fresh", seed: seedOf(steps.random(SEED_BYTES)) },
+      device: request.device,
       exit: { facts: exitFactsFor(route), route: route.kind },
       hostZone,
       mode: request.mode,
@@ -446,10 +463,12 @@ export const createBrowsers = (
     });
 
     try {
-      const deadline = request.deadline.boundTo(steps.sessionFor().ownership.signal);
+      const session = steps.sessionFor();
+      const deadline = request.deadline.boundTo(session.ownership.signal);
+      const target = { ...request, device: deviceFor(session, request, steps.random) };
       const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
 
-      return await renderInScope(driver, steps, request, deadline, scope, document);
+      return await renderInScope(driver, steps, target, deadline, scope, document);
     } finally {
       admission.release();
     }

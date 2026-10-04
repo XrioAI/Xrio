@@ -4,7 +4,10 @@ import { inspect } from "node:util";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
+import type { DeviceRecord } from "./humanizer/contracts.ts";
+import { refuseRecordOverrides, resolveClientOptions, resolveScrapeOptions } from "./options.ts";
+import { noPins } from "./testing/no-pins.ts";
+import type { ScrapeOptions } from "./types.ts";
 
 const page = { format: "html", url: "https://example.com" } as const;
 
@@ -888,6 +891,150 @@ describe("display option", () => {
         resolveClientOptions({ ...browser, display: { window: "maximized" } }),
       ).source.pins.display,
     ).toBeUndefined();
+  });
+});
+
+const scrapeWith = (
+  choices: Pick<ScrapeOptions, "display" | "locale" | "timezone">,
+  mode: "headless" | "headed" = "headless",
+) => {
+  const { source } = resolveScrapeOptions(
+    { ...page, ...choices },
+    resolveClientOptions({ browserPath: "/browser", mode }),
+  );
+
+  if (source.mode === "http") {
+    throw new Error("A session scrape runs in a browser mode.");
+  }
+
+  return { mode: source.mode, pins: source.pins };
+};
+
+describe(refuseRecordOverrides, () => {
+  const record: DeviceRecord = {
+    device: {
+      cores: 0,
+      fonts: { kind: "system" },
+      gpu: { backend: "swiftshader", persona: null },
+      memoryGb: 0,
+      screen: { height: 1080, width: 1920, workArea: { bottom: 0, left: 66, right: 0, top: 32 } },
+      voices: { kind: "system" },
+      window: { height: 900, kind: "floating", width: 1400, x: 200, y: 60 },
+    },
+    policy: { locale: "de-DE", timezone: { kind: "pinned", zone: "Europe/Berlin" } },
+    schema: 1,
+    seed: "9f2c41d07a3be815",
+  };
+
+  it.each([
+    { name: "nothing", options: {} },
+    {
+      name: "the record's own locale and zone",
+      options: { locale: "de-de", timezone: "europe/berlin" },
+    },
+    {
+      name: "a display the record satisfies",
+      options: {
+        display: {
+          screen: [
+            { height: 1080, weight: 1, width: 1920 },
+            { height: 1440, weight: 1, width: 2560 },
+          ],
+          taskbar: { left: 66, top: 32 },
+          window: { height: 900, width: 1400 },
+        },
+      },
+    },
+  ])("lets a scrape that pins $name use the session", ({ options }) => {
+    expect(() => {
+      refuseRecordOverrides(record, scrapeWith(options));
+    }).not.toThrow();
+  });
+
+  it.each([
+    { fields: "locale", options: { locale: "fr-FR" } },
+    { fields: "timezone", options: { timezone: "America/New_York" } },
+    { fields: "display", options: { display: { screen: { height: 900, width: 1440 } } } },
+    { fields: "display", options: { display: { taskbar: { bottom: 48 } } } },
+    { fields: "display", options: { display: { window: "maximized" } } },
+    {
+      fields: "display",
+      options: {
+        display: {
+          screen: { height: 1080, width: 1920 },
+          window: { height: 900, width: 1400, x: 300, y: 40 },
+        },
+      },
+    },
+  ] as const)("refuses a scrape whose $fields conflicts with the record", ({ fields, options }) => {
+    expect(() => {
+      refuseRecordOverrides(record, scrapeWith(options));
+    }).toThrow(
+      expect.objectContaining(
+        refusal(
+          `The session's device record fixes its ${fields}; a scrape in that session cannot change it.`,
+        ),
+      ),
+    );
+  });
+
+  it("names every field a scrape would change, the mode included", () => {
+    expect(() => {
+      refuseRecordOverrides(
+        record,
+        scrapeWith(
+          { display: { window: "maximized" }, locale: "fr-FR", timezone: "UTC" },
+          "headed",
+        ),
+      );
+    }).toThrow(
+      expect.objectContaining(
+        refusal(
+          "The session's device record fixes its mode, display, locale, and timezone; a scrape in that session cannot change them.",
+        ),
+      ),
+    );
+  });
+
+  it("refuses a headed scrape of a headless record, and a headless scrape of a headed one", () => {
+    const headed: DeviceRecord = {
+      ...record,
+      device: { ...record.device, window: { kind: "chrome-default" } },
+    };
+
+    expect(() => {
+      refuseRecordOverrides(record, scrapeWith({}, "headed"));
+    }).toThrow(
+      expect.objectContaining(
+        refusal(
+          "The session's device record fixes its mode; a scrape in that session cannot change it.",
+        ),
+      ),
+    );
+    expect(() => {
+      refuseRecordOverrides(headed, scrapeWith({}, "headless"));
+    }).toThrow(
+      expect.objectContaining(
+        refusal(
+          "The session's device record fixes its mode; a scrape in that session cannot change it.",
+        ),
+      ),
+    );
+    expect(() => {
+      refuseRecordOverrides(headed, scrapeWith({}, "headed"));
+    }).not.toThrow();
+  });
+
+  it("refuses any pinned zone when the record follows the host's zone", () => {
+    expect(() => {
+      refuseRecordOverrides(
+        {
+          ...record,
+          policy: { locale: "de-DE", timezone: { kind: "host", zone: "Europe/Berlin" } },
+        },
+        { mode: "headless", pins: { ...noPins, timezone: "Europe/Berlin" } },
+      );
+    }).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS" }));
   });
 });
 

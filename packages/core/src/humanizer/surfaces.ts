@@ -3,11 +3,14 @@ import type { ResolvedMode } from "../types.ts";
 import { knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
 import type {
   DeviceRecord,
+  DisplayTables,
   GpuChoice,
   HostCapabilities,
   Insets,
   MediaDeviceCounts,
   Seed,
+  WindowPin,
+  WindowState,
 } from "./contracts.ts";
 import { drawDisplay, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
@@ -149,11 +152,61 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
     followExit: timezone.kind === "exit",
     hostZone: timezone.kind === "host" ? timezone.zone : context.hostZone,
     pins: {
-      display: undefined,
+      display: context.pins.display,
       locale,
       timezone: timezone.kind === "pinned" ? timezone.zone : undefined,
     },
   };
+};
+
+const RECORD_OVERRIDES = ["mode", "display", "locale", "timezone"] as const;
+
+export type RecordOverride = (typeof RECORD_OVERRIDES)[number];
+
+const sameInsets = (left: Insets, right: Insets): boolean =>
+  left.top === right.top &&
+  left.right === right.right &&
+  left.bottom === right.bottom &&
+  left.left === right.left;
+
+const keepsWindow = (window: WindowState, pin: WindowPin): boolean => {
+  if (pin.kind === "maximized" || window.kind !== "floating") {
+    return pin.kind === window.kind;
+  }
+
+  const placed =
+    pin.position === undefined || (pin.position.x === window.x && pin.position.y === window.y);
+
+  return placed && pin.width === window.width && pin.height === window.height;
+};
+
+const keepsDisplay = ({ device }: DeviceRecord, display: DisplayTables): boolean =>
+  device.window.kind === "chrome-default" ||
+  ((display.screens?.some(
+    ({ height, width }) => height === device.screen.height && width === device.screen.width,
+  ) ??
+    true) &&
+    (display.taskbars?.some((insets) => sameInsets(insets, device.screen.workArea)) ?? true) &&
+    (display.windows?.some((pin) => keepsWindow(device.window, pin)) ?? true));
+
+const keepsZone = ({ timezone }: DeviceRecord["policy"], zone: string): boolean =>
+  timezone.kind === "pinned" && timezone.zone === canonicalZone(zone);
+
+const keepsMode = ({ device }: DeviceRecord, mode: IdentityContext["mode"]): boolean =>
+  (device.window.kind === "chrome-default") === (mode === "headed");
+
+export const recordOverrides = (
+  record: DeviceRecord,
+  { mode, pins }: Pick<IdentityContext, "mode" | "pins">,
+): RecordOverride[] => {
+  const kept = {
+    display: pins.display === undefined || keepsDisplay(record, pins.display),
+    locale: pins.locale === undefined || pins.locale === record.policy.locale,
+    mode: keepsMode(record, mode),
+    timezone: pins.timezone === undefined || keepsZone(record.policy, pins.timezone),
+  } satisfies Record<RecordOverride, boolean>;
+
+  return RECORD_OVERRIDES.filter((field) => !kept[field]);
 };
 
 const sourceOf = ({ source }: Device, pinned: boolean): DeviceSource => {

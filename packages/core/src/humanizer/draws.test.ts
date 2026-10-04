@@ -10,6 +10,7 @@ import type { DrawnDisplay } from "./draws.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import { DESKTOP_LAYOUTS, DESKTOP_SCREENS, WINDOW_STATES } from "./owned-inputs.ts";
+import { recordOverrides } from "./surfaces.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import { evaluate } from "./verify.ts";
 
@@ -447,5 +448,28 @@ describe("a record replayed on another host", () => {
       },
       tells: ["host-zone-utc", "host-fonts", "replay-host-skew"],
     });
+  });
+});
+
+describe("a record made from a scrape's pins", () => {
+  const pins = {
+    display: {
+      screens: [{ height: 900, weight: 1, width: 1440 }],
+      taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
+      windows: [{ kind: "maximized", weight: 1 }],
+    },
+    locale: "de-DE",
+    timezone: "Europe/Berlin",
+  } as const;
+
+  it.each(["headless", "headed"] as const)("never conflicts with those pins in %s mode", (mode) => {
+    const context: IdentityContext = { ...headedContext, mode, pins };
+    const { record } = evaluate(planIdentity(context), hostScreen).report;
+    const replayed = planIdentity({ ...context, device: { kind: "record", record } });
+
+    expect({
+      overrides: recordOverrides(record, { mode, pins }),
+      unhonored: replayed.tells.includes("display-pin-unhonored"),
+    }).toStrictEqual({ overrides: [], unhonored: mode === "headed" });
   });
 });

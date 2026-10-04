@@ -1,8 +1,9 @@
 import { CacheDir, defaultCacheDir } from "./cache-dir.ts";
 import { invalidOptions, redactUrl } from "./errors.ts";
-import type { DisplayTables, Insets, WindowPin } from "./humanizer/contracts.ts";
+import type { DeviceRecord, DisplayTables, Insets, WindowPin } from "./humanizer/contracts.ts";
 import { displayMisfit } from "./humanizer/draws.ts";
 import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
+import { recordOverrides } from "./humanizer/surfaces.ts";
 import { canonicalZone } from "./humanizer/zone-name.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
@@ -474,4 +475,20 @@ export const resolveScrapeOptions = (
       : { ...mode, browserArgs: defaults.browserArgs, pins, proxy, url };
 
   return { format, signal, source, timeoutMs };
+};
+
+export const refuseRecordOverrides = (
+  record: DeviceRecord,
+  scrape: Parameters<typeof recordOverrides>[1],
+): void => {
+  const overrides = recordOverrides(record, scrape);
+
+  if (overrides.length > 0) {
+    const fields = new Intl.ListFormat("en", { type: "conjunction" }).format(overrides);
+    const pronoun = overrides.length === 1 ? "it" : "them";
+
+    throw invalidOptions(
+      `The session's device record fixes its ${fields}; a scrape in that session cannot change ${pronoun}.`,
+    );
+  }
 };
