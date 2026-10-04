@@ -90,6 +90,9 @@ export interface HostCapabilities {
   readonly fork?: ForkFacts;
 }
 
+export const knobOf = (capabilities: HostCapabilities, key: string): string | null =>
+  capabilities.fork?.knobs[key]?.value ?? null;
+
 interface Brand {
   readonly brand: string;
   readonly version: string;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { noPins } from "../testing/no-pins.ts";
+import type { HostCapabilities } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
@@ -37,6 +38,32 @@ const expectedLocale = (
     severity: intlSeverity,
   },
 ];
+
+const LINUX_SPEECH = "basharsx4-google-linux-154";
+
+const forkWith = (
+  speechPersona: string | null,
+  artifactVersions: readonly string[] = [],
+): HostCapabilities => ({
+  fork: {
+    dialect: "xrio",
+    knobs: {
+      "speech-persona": { origin: speechPersona === null ? "def" : "set", value: speechPersona },
+      "suppress-headless-token": { origin: "def", value: "true" },
+    },
+    packageDir: "/opt/xrio-chrome",
+    personas: {
+      speech: artifactVersions.map((chromeVersion) => ({
+        chromeVersion,
+        digest: `sha256:${"0".repeat(64)}`,
+        name: LINUX_SPEECH,
+        schema: "xrio-speech-table/v1",
+      })),
+    },
+    version: "154.0.8037.57",
+  },
+  platform: "linux",
+});
 
 describe("the locale surface", () => {
   it.each([
@@ -486,6 +513,51 @@ describe("the media surface", () => {
   });
 });
 
+describe("the speech surface", () => {
+  it("chooses nothing and emits nothing on a stock binary", () => {
+    expect(resolveSurfaces(contextOf()).speech).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: [],
+      value: { persona: null },
+    });
+  });
+
+  it("reports the package's persona when its artifact matches the probed version", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: forkWith(LINUX_SPEECH, ["154.0.8037.57"]) }))
+        .speech,
+    ).toStrictEqual({ expected: [], inputs: [], tells: [], value: { persona: LINUX_SPEECH } });
+  });
+
+  it("tells speech-persona-skew when the persona was recorded on another Chrome version", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: forkWith(LINUX_SPEECH, ["153.0.7900.10"]) }))
+        .speech,
+    ).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: ["speech-persona-skew"],
+      value: { persona: LINUX_SPEECH },
+    });
+  });
+
+  it("tells speech-persona-skew when the selected persona ships no artifact", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: forkWith(LINUX_SPEECH) })).speech.tells,
+    ).toStrictEqual(["speech-persona-skew"]);
+  });
+
+  it("reports no persona and no tell on a fork with no speech persona selected", () => {
+    expect(resolveSurfaces(contextOf({ capabilities: forkWith(null) })).speech).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: [],
+      value: { persona: null },
+    });
+  });
+});
+
 describe("the automation surface", () => {
   const noWebdriver = {
     compatibility: true,
@@ -514,6 +586,17 @@ describe("the automation surface", () => {
     expect(
       resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).automation,
     ).toStrictEqual({ expected: [noWebdriver], inputs: [], value: null });
+  });
+});
+
+describe("the fork in the plan", () => {
+  it("names the fork and carries the surfaces' tells", () => {
+    const plan = planIdentity(contextOf({ capabilities: forkWith(LINUX_SPEECH) }));
+
+    expect({ fork: plan.chosen.fork, tells: plan.tells }).toStrictEqual({
+      fork: "xrio",
+      tells: ["speech-persona-skew"],
+    });
   });
 });
 
@@ -548,6 +631,7 @@ describe("the chosen identity", () => {
       ).chosen,
     ).toStrictEqual({
       exit: { facts: { kind: "unknown" }, route: "proxy" },
+      fork: null,
       mode: "headed",
       surfaces: {
         automation: null,
@@ -556,6 +640,7 @@ describe("the chosen identity", () => {
         locale: { languages: ["en-US", "en"], tag: "en-US" },
         media: { source: "host" },
         screen: { source: "host" },
+        speech: { persona: null },
         timezone: { source: "host", zone: "Europe/Berlin" },
         window: { size: { height: 900, width: 1600 }, source: "fixed" },
       },

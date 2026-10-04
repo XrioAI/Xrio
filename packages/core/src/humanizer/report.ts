@@ -77,7 +77,7 @@ export interface ObservedIdentity {
 
 export interface BrowserIdentityReport {
   readonly mode: IdentityContext["mode"];
-  readonly binary: { readonly version: string };
+  readonly binary: { readonly version: string; readonly fork: "xrio" | null };
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;
   readonly observed: ObservedIdentity;

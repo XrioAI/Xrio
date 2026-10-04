@@ -44,7 +44,7 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
-export type FactTell = "host-zone-utc" | "exit-unknown";
+export type FactTell = "host-zone-utc" | "exit-unknown" | "speech-persona-skew";
 
 export type IdentityTell =
   | "no-taskbar"
@@ -326,7 +326,7 @@ export const evaluate = (
   return {
     mismatches,
     report: {
-      binary: { version: observation.product.version },
+      binary: { fork: chosen.fork, version: observation.product.version },
       coverage: coverageOf(observation),
       exit: chosen.exit,
       mode: chosen.mode,

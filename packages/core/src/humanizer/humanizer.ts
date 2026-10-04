@@ -1,5 +1,6 @@
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 
+import type { ForkFacts } from "./contracts.ts";
 import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
 import type { IdentityIntent } from "./intent.ts";
@@ -12,6 +13,7 @@ import type { FactTell, SurfaceExpectation } from "./verify.ts";
 
 interface ChosenIdentity {
   readonly mode: IdentityContext["mode"];
+  readonly fork: ForkFacts["dialect"] | null;
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;
 }
@@ -31,6 +33,7 @@ const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   locale: resolutions.locale.value,
   media: resolutions.media.value,
   screen: resolutions.screen.value,
+  speech: resolutions.speech.value,
   timezone: resolutions.timezone.value,
   window: resolutions.window.value,
 });
@@ -39,7 +42,12 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
   const resolutions = resolveSurfaces(context);
 
   return {
-    chosen: { exit: context.exit, mode: context.mode, surfaces: choicesOf(resolutions) },
+    chosen: {
+      exit: context.exit,
+      fork: context.capabilities.fork?.dialect ?? null,
+      mode: context.mode,
+      surfaces: choicesOf(resolutions),
+    },
     expected: EMISSION_ORDER.flatMap((surface) =>
       resolutions[surface].expected.map((expectation) => ({ ...expectation, surface })),
     ),

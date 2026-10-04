@@ -145,7 +145,7 @@ describe("the identity report", () => {
     expect(evaluate(plan, headlessLinux)).toStrictEqual({
       mismatches: [],
       report: {
-        binary: { version: "154.0.8037.57" },
+        binary: { fork: null, version: "154.0.8037.57" },
         coverage: secureCoverage,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         mode: "headless",
@@ -188,11 +188,43 @@ describe("the identity report", () => {
             source: "fixed",
             workArea: { bottom: 40, left: 0, right: 0, top: 0 },
           },
+          speech: { persona: null },
           timezone: { source: "host", zone: "UTC" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
         tells: ["headless-token", "host-zone-utc"],
       },
+    });
+  });
+
+  it("names the fork in the binary and adds the surfaces' tells to the observed ones", () => {
+    const plan = planIdentity({
+      capabilities: {
+        fork: {
+          dialect: "xrio",
+          knobs: { "speech-persona": { origin: "set", value: "basharsx4-google-linux-154" } },
+          packageDir: "/opt/xrio-chrome",
+          personas: { speech: [] },
+          version: "154.0.8037.57",
+        },
+        platform: "linux",
+      },
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: "UTC",
+      mode: "headless",
+      pins: noPins,
+    });
+
+    const { report } = evaluate(plan, headlessLinux);
+
+    expect({
+      binary: report.binary,
+      speech: report.surfaces.speech,
+      tells: report.tells,
+    }).toStrictEqual({
+      binary: { fork: "xrio", version: "154.0.8037.57" },
+      speech: { persona: "basharsx4-google-linux-154" },
+      tells: ["headless-token", "host-zone-utc", "speech-persona-skew"],
     });
   });
 
@@ -208,7 +240,7 @@ describe("the identity report", () => {
     expect(evaluate(plan, headedMac)).toStrictEqual({
       mismatches: [],
       report: {
-        binary: { version: "154.0.8037.57" },
+        binary: { fork: null, version: "154.0.8037.57" },
         coverage: insecureCoverage,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         mode: "headed",
@@ -247,6 +279,7 @@ describe("the identity report", () => {
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { source: "host" },
           screen: { source: "host" },
+          speech: { persona: null },
           timezone: { source: "host", zone: "America/Toronto" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },

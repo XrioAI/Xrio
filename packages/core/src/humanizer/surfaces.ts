@@ -1,5 +1,6 @@
 import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
+import { knobOf } from "./contracts.ts";
 import type { GpuChoice, HostCapabilities, Insets, MediaDeviceCounts } from "./contracts.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
@@ -44,6 +45,7 @@ export interface SurfaceChoices {
   readonly screen:
     | { readonly source: "fixed"; readonly size: Size; readonly workArea: Insets }
     | { readonly source: "host" };
+  readonly speech: { readonly persona: string | null };
   readonly leaks: { readonly networkPrediction: "off"; readonly dnsOverHttps: "off" };
   readonly media:
     | { readonly source: "fake"; readonly devices: MediaDeviceCounts }
@@ -64,6 +66,7 @@ export const EMISSION_ORDER = [
   "gpu",
   "window",
   "screen",
+  "speech",
   "leaks",
   "media",
   "automation",
@@ -239,6 +242,21 @@ const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["sc
       }
     : { expected: [], inputs: [], value: { source: "host" } };
 
+const resolveSpeech = ({
+  capabilities,
+}: Pick<IdentityContext, "capabilities">): Resolutions["speech"] => {
+  const persona = knobOf(capabilities, "speech-persona");
+  const artifact = capabilities.fork?.personas.speech.find(({ name }) => name === persona);
+  const skewed = persona !== null && artifact?.chromeVersion !== capabilities.fork?.version;
+
+  return {
+    expected: [],
+    inputs: [],
+    tells: skewed ? ["speech-persona-skew"] : [],
+    value: { persona },
+  };
+};
+
 const resolveLeaks = (): Resolutions["leaks"] => ({
   expected: [],
   inputs: [
@@ -285,6 +303,7 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => ({
   locale: resolveLocale(context),
   media: resolveMedia(context),
   screen: resolveScreen(context),
+  speech: resolveSpeech(context),
   timezone: resolveTimezone(context),
   window: resolveWindow(context),
 });
