@@ -237,6 +237,8 @@ const allowed = [
   'export const o = { HOME: "/h", "Content-Type": "x" };',
   'export const p = ["Accept-Encoding", "Content-Type"];',
   'export const q = "TZX";',
+  'export const agentName = "user-agent-string";',
+  'headers.set("sec-ch-ua-prefers-color-scheme", "dark");',
   'headers.set("accept-encoding", "gzip");',
   "export const r = { intl: { other: 1 }, net: { mode: 1 }, dns_over_https: {} };",
   'export const t = new Headers([["x-other", "1"]]);',
@@ -257,6 +259,32 @@ describe("identity-owner lint rule", () => {
           labels: [{ span: { line: index + 1 } }],
           message,
         })),
+      },
+      status: 1,
+    });
+  });
+
+  it.each([
+    "user-agent",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "sec-ch-ua-full-version-list",
+    "sec-ch-ua-arch",
+    "sec-ch-ua-model",
+    "sec-ch-ua-platform-version",
+    "sec-ch-ua-bitness",
+    "sec-ch-ua-wow64",
+    "sec-ch-ua-form-factors",
+    "sec-ch-ua-full-version",
+    "sec-ch-device-memory",
+  ])("flags the identity header %s as a key, a call argument and an array entry", (name) => {
+    const message = `\`${name}\` is a request header the Humanizer owns; only src/humanizer/ may use it.`;
+    const source = `export const keyed = { "${name.toUpperCase()}": "x" };\nheaders.set("${name}", "x");\nexport const order = ["Host", "${name}"];\n`;
+
+    expect(lint(OUTSIDE, source)).toMatchObject({
+      output: {
+        diagnostics: [1, 2, 3].map((line) => ({ labels: [{ span: { line } }], message })),
       },
       status: 1,
     });

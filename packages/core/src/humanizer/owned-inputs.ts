@@ -19,7 +19,22 @@ export const OWNED_PREFERENCES = [
 
 export const OWNED_LOCAL_STATE = ["dns_over_https.mode"] as const;
 
-export const OWNED_HEADERS = ["accept-language"] as const;
+export const OWNED_HEADERS = [
+  "accept-language",
+  "user-agent",
+  "sec-ch-ua",
+  "sec-ch-ua-mobile",
+  "sec-ch-ua-platform",
+  "sec-ch-ua-full-version-list",
+  "sec-ch-ua-arch",
+  "sec-ch-ua-model",
+  "sec-ch-ua-platform-version",
+  "sec-ch-ua-bitness",
+  "sec-ch-ua-wow64",
+  "sec-ch-ua-form-factors",
+  "sec-ch-ua-full-version",
+  "sec-ch-device-memory",
+] as const;
 
 export const CHROME_ACCEPT_LANGUAGES = {
   "ar-SA": ["ar", "en-US", "en"],
