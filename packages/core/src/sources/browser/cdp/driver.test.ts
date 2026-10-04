@@ -9,12 +9,32 @@ import { isXrioError } from "../../../errors.ts";
 import { fakeChromePath } from "../../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../../testing/leftovers.ts";
 import { manualClock } from "../../../testing/manual-clock.ts";
+import { createScratchDir, removeScratchDir } from "../browser-process.ts";
 import { createBrowsers } from "../browsers.ts";
+import { planLaunch } from "../launch-plan.ts";
+import { CLOSE_BUDGET_MS } from "../port.ts";
+import { renderDocument } from "../render.ts";
 import { cdpDriver } from "./driver.ts";
 
 const LAUNCH_CAP_MS = 30_000;
 
 const SCRAPE_DEADLINE_MS = 120_000;
+
+const WORLD_AND_PAGE_COMMANDS = new Set([
+  "Page.createIsolatedWorld",
+  "Page.navigate",
+  "Runtime.evaluate",
+]);
+
+const isText = (value: unknown): value is string => typeof value === "string";
+
+const isSentCommand = (message: unknown): message is { method: string; scope: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "method" in message &&
+  typeof message.method === "string" &&
+  "scope" in message &&
+  typeof message.scope === "string";
 
 const isRebind = (message: unknown): message is { event: "document-rebind"; detail: string } =>
   typeof message === "object" &&
@@ -87,6 +107,56 @@ describe("the CDP driver's launch", () => {
 });
 
 describe("the CDP driver's documents", () => {
+  it("reads the startup page in its own world, then captures the navigated page in a new one", async () => {
+    const sent: string[] = [];
+
+    const record: ChannelListener = (message) => {
+      if (isSentCommand(message) && WORLD_AND_PAGE_COMMANDS.has(message.method)) {
+        sent.push(message.method);
+      }
+    };
+
+    const scratch = await createScratchDir(Date.now());
+
+    const plan = planLaunch({
+      browserPath: await fakeChromePath("normal"),
+      display: undefined,
+      headless: true,
+      platform: process.platform,
+      scratchDir: scratch.path,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    using deadline = startDeadline(10_000);
+
+    subscribe("xrio:cdp-command", record);
+    const browser = await cdpDriver.launch(plan, deadline, () => {});
+
+    try {
+      await expect(browser.evaluateIsolated("location.href", isText, deadline)).resolves.toContain(
+        "fake page",
+      );
+
+      const document = await renderDocument(browser, new URL("https://fake.test/page"), deadline);
+
+      expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
+      expect(sent).toStrictEqual([
+        "Page.createIsolatedWorld",
+        "Runtime.evaluate",
+        "Page.navigate",
+        "Page.createIsolatedWorld",
+        "Runtime.evaluate",
+      ]);
+    } finally {
+      unsubscribe("xrio:cdp-command", record);
+      await browser.close(CLOSE_BUDGET_MS);
+      await removeScratchDir(scratch);
+    }
+
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
   it("ignores the startup about:blank commit and returns the navigated page", async () => {
     const browsers = createBrowsers(cdpDriver, 1);
     using deadline = startDeadline(10_000);

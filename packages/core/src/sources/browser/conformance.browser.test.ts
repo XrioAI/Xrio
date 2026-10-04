@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
+import type { Deadline } from "../../deadline.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
 import { busyPageStarted, conformancePages } from "../../testing/conformance-pages.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
@@ -19,11 +20,22 @@ import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../testing/processes.ts";
 import type { SourceDocument } from "../../types.ts";
-import { scratchRoot, sweepAbandonedScratch } from "./browser-process.ts";
+import {
+  createScratchDir,
+  killProcessGroup,
+  prepareProfile,
+  removeScratchDir,
+  scratchRoot,
+  sweepAbandonedScratch,
+  waitForExit,
+} from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { BROWSER_DRIVERS } from "./drivers.ts";
 import type { BrowserDriverName } from "./drivers.ts";
 import { planLaunch } from "./launch-plan.ts";
+import { CLOSE_BUDGET_MS } from "./port.ts";
+import type { DriverBrowser } from "./port.ts";
+import { renderDocument } from "./render.ts";
 
 const SCRAPE_CHILD = fileURLToPath(new URL("../../testing/scrape-child.ts", import.meta.url));
 
@@ -361,6 +373,40 @@ const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<st
   return [...sent].toSorted();
 };
 
+const isText = (value: unknown): value is string => typeof value === "string";
+
+const withBrowser = async <Result>(
+  driver: BrowserDriverName,
+  mode: Mode,
+  run: (browser: DriverBrowser, deadline: Deadline) => Promise<Result>,
+): Promise<Result> => {
+  const scratch = await createScratchDir(Date.now());
+
+  const plan = planLaunch({
+    browserPath: chromePath(),
+    display: process.env.DISPLAY,
+    headless: mode === "headless",
+    platform: process.platform,
+    scratchDir: scratch.path,
+    timezone: process.env.TZ,
+    xauthority: process.env.XAUTHORITY,
+  });
+
+  using deadline = startDeadline(20_000);
+
+  await prepareProfile(plan);
+  const browser = await BROWSER_DRIVERS[driver].launch(plan, deadline, () => {});
+
+  try {
+    return await run(browser, deadline);
+  } finally {
+    await browser.close(CLOSE_BUDGET_MS);
+    killProcessGroup(browser.pid);
+    await waitForExit(browser.pid);
+    await removeScratchDir(scratch);
+  }
+};
+
 const probed = (html: string, keys: readonly string[]) => {
   const groups = PROBE.exec(html)?.groups ?? {};
 
@@ -387,6 +433,21 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
+
+  it("reads the startup page before navigating, then captures the page it navigates to", async () => {
+    await withBrowser(driver, mode, async (browser, deadline) => {
+      await expect(browser.evaluateIsolated("location.href", isText, deadline)).resolves.toBe(
+        "about:blank",
+      );
+
+      const document = await renderDocument(browser, new URL("/static", server.origin), deadline);
+
+      expect(document).toMatchObject({ headers: { "x-page": "static" }, status: 200 });
+      expect(markerOf(document.html)).toBe("static");
+      expect(probed(document.html, Object.keys(probe))).toStrictEqual(probe);
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
 
   it("sends cookies set on each redirect hop to the next", async () => {
     const document = await load(driver, mode, "/redirect/1");

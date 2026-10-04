@@ -40,6 +40,8 @@ const DOWNLOAD_SETTLE_MS = 500;
 
 const NAVIGATION_DOWNLOAD = "navigation";
 
+const STARTUP_LOADER = "startup";
+
 const DIALOG_DISMISS_MS = { longest: 1500, shortest: 600 } as const;
 
 const CONTEXT_GONE = /Cannot find context with specified id|Execution context was destroyed/u;
@@ -178,12 +180,7 @@ class Tab {
     deadline: Deadline,
   ): Promise<Result> => {
     deadline.throwIfExpired();
-    const document = this.#document;
-
-    if (document === undefined) {
-      throw new DriverError({ kind: "document-replaced" });
-    }
-
+    const document = this.#document ?? (await this.#startupDocument(deadline));
     const { exceptionDetails, result } = await this.#evaluate(document, expression, deadline);
 
     if (exceptionDetails !== undefined) {
@@ -323,17 +320,30 @@ class Tab {
     }
   }
 
-  #adopt(loaderId: string): void {
+  async #startupDocument(deadline: Deadline): Promise<CommittedDocument> {
+    await untilAborted(this.#ready, deadline.signal);
+
+    if (this.#navigated) {
+      throw new DriverError({ kind: "document-replaced" });
+    }
+
+    return this.#document ?? this.#adopt(STARTUP_LOADER);
+  }
+
+  #adopt(loaderId: string): CommittedDocument {
     if (this.#document?.loaderId === loaderId) {
-      return;
+      return this.#document;
     }
 
     this.#document?.replaced.abort(new DriverError({ kind: "document-replaced" }));
     const replaced = new AbortController();
     const world = this.#createWorld(AbortSignal.any([this.#lifetime, replaced.signal]));
+    const document = { loaderId, replaced, world };
 
     void settle(world);
-    this.#document = { loaderId, replaced, world };
+    this.#document = document;
+
+    return document;
   }
 
   async #createWorld(signal: AbortSignal): Promise<IsolatedContextId> {
