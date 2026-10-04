@@ -7,7 +7,6 @@ describe("BrowserInputs types", () => {
     expectTypeOf<{
       switches: readonly string[];
       environment: Readonly<Record<string, string>>;
-      forwardedEnvironment: Readonly<Record<string, string>>;
       preferences: Readonly<Record<string, never>>;
       localState: Readonly<Record<string, never>>;
     }>().not.toExtend<BrowserInputs>();

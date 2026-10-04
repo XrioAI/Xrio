@@ -181,7 +181,6 @@ const childEnvironment = (request: LaunchRequest, directories: LaunchDirectories
   XDG_CACHE_HOME: path.join(directories.home, ".cache"),
   XDG_CONFIG_HOME: path.join(directories.home, ".config"),
   XDG_DATA_HOME: path.join(directories.home, ".local", "share"),
-  ...request.identity.forwardedEnvironment,
   ...displayEnvironment(request),
 });
 

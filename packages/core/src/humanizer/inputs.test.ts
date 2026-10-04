@@ -59,19 +59,17 @@ describe(mergeBrowserInputs, () => {
           { name: "LANG", sink: "environment", value: "C.UTF-8" },
           { name: "intl.accept_languages", sink: "preference", value: "en-US,en" },
         ],
-        timezone: [{ name: "TZ", sink: "forwarded-environment", value: "Asia/Kolkata" }],
+        timezone: [{ name: "TZ", sink: "environment", value: "Asia/Kolkata" }],
       }),
     );
 
     expect({
       environment: inputs.environment,
-      forwardedEnvironment: inputs.forwardedEnvironment,
       localState: inputs.localState,
       preferences: inputs.preferences,
       switches: inputs.switches,
     }).toStrictEqual({
-      environment: { LANG: "C.UTF-8" },
-      forwardedEnvironment: { TZ: "Asia/Kolkata" },
+      environment: { LANG: "C.UTF-8", TZ: "Asia/Kolkata" },
       localState: { dns_over_https: { mode: "off" } },
       preferences: {
         intl: { accept_languages: "en-US,en" },
@@ -97,12 +95,12 @@ describe(mergeBrowserInputs, () => {
       mergeBrowserInputs(
         resolutionsOf({
           timezone: [
-            { name: "TZ", sink: "forwarded-environment", value: "UTC" },
-            { name: "TZ", sink: "forwarded-environment", value: "Asia/Kolkata" },
+            { name: "TZ", sink: "environment", value: "UTC" },
+            { name: "TZ", sink: "environment", value: "Asia/Kolkata" },
           ],
         }),
       ),
-    ).toThrow("The timezone and timezone surfaces both emit the forwarded-environment TZ.");
+    ).toThrow("The timezone and timezone surfaces both emit the environment TZ.");
   });
 
   it("freezes what it mints, nested values included", () => {
@@ -120,11 +118,10 @@ describe(mergeBrowserInputs, () => {
       Object.isFrozen(inputs),
       Object.isFrozen(inputs.switches),
       Object.isFrozen(inputs.environment),
-      Object.isFrozen(inputs.forwardedEnvironment),
       Object.isFrozen(inputs.preferences),
       Object.isFrozen(inputs.localState),
       Object.isFrozen(inputs.localState.dns_over_https),
-    ]).toStrictEqual([true, true, true, true, true, true, true]);
+    ]).toStrictEqual([true, true, true, true, true, true]);
   });
 
   it("recognises what it minted and nothing copied from it", () => {

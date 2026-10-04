@@ -150,8 +150,7 @@ const resolveTimezone = ({
             severity: "fatal",
           },
         ],
-  inputs:
-    hostZone === undefined ? [] : [{ name: "TZ", sink: "forwarded-environment", value: hostZone }],
+  inputs: hostZone === undefined ? [] : [{ name: "TZ", sink: "environment", value: hostZone }],
   value: { source: "host", zone: hostZone ?? null },
 });
 

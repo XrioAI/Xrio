@@ -139,7 +139,7 @@ describe("the timezone surface", () => {
           severity: "fatal",
         },
       ],
-      inputs: [{ name: "TZ", sink: "forwarded-environment", value: "America/Chicago" }],
+      inputs: [{ name: "TZ", sink: "environment", value: "America/Chicago" }],
       value: { source: "host", zone: "America/Chicago" },
     });
   });
@@ -155,7 +155,7 @@ describe("the timezone surface", () => {
   it("forwards an empty host zone as it always has, with no zone to expect", () => {
     expect(resolveSurfaces(contextOf({ hostZone: "" })).timezone).toStrictEqual({
       expected: [],
-      inputs: [{ name: "TZ", sink: "forwarded-environment", value: "" }],
+      inputs: [{ name: "TZ", sink: "environment", value: "" }],
       value: { source: "host", zone: "" },
     });
   });

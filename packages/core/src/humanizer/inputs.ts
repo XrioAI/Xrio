@@ -14,7 +14,6 @@ export interface BrowserInputs {
   readonly [MINTED]: true;
   readonly switches: readonly string[];
   readonly environment: Readonly<Record<string, string>>;
-  readonly forwardedEnvironment: Readonly<Record<string, string>>;
   readonly preferences: Readonly<JsonObject>;
   readonly localState: Readonly<JsonObject>;
 }
@@ -55,7 +54,6 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
   const owners = new Map<string, SurfaceName>();
   const switches: string[] = [];
   const environment: Record<string, string> = {};
-  const forwardedEnvironment: Record<string, string> = {};
   const preferences: JsonObject = {};
   const localState: JsonObject = {};
 
@@ -68,11 +66,6 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
 
       case "environment": {
         environment[input.name] = input.value;
-        break;
-      }
-
-      case "forwarded-environment": {
-        forwardedEnvironment[input.name] = input.value;
         break;
       }
 
@@ -109,7 +102,6 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
   const inputs: BrowserInputs = {
     [MINTED]: true,
     environment: Object.freeze(environment),
-    forwardedEnvironment: Object.freeze(forwardedEnvironment),
     localState: freezeJson(localState),
     preferences: freezeJson(preferences),
     switches: Object.freeze(switches),

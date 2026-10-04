@@ -8,9 +8,7 @@ export const OWNED_SWITCHES = [
   "--use-fake-device-for-media-stream",
 ] as const;
 
-export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE"] as const;
-
-export const FORWARDED_ENVIRONMENT = ["TZ"] as const;
+export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE", "TZ"] as const;
 
 export const OWNED_PREFERENCES = [
   "intl.accept_languages",
@@ -162,11 +160,6 @@ export type LaunchInput =
   | {
       readonly sink: "environment";
       readonly name: (typeof OWNED_ENVIRONMENT)[number];
-      readonly value: string;
-    }
-  | {
-      readonly sink: "forwarded-environment";
-      readonly name: (typeof FORWARDED_ENVIRONMENT)[number];
       readonly value: string;
     }
   | {
