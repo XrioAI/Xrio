@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { noPins } from "../testing/no-pins.ts";
 import { planIdentity } from "./humanizer.ts";
+import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext } from "./surfaces.ts";
 
@@ -9,51 +11,114 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: undefined,
   mode: "headless",
+  pins: noPins,
   ...overrides,
 });
 
-const languagesOnLinux = {
-  compatibility: true,
-  field: "languages",
-  matcher: { kind: "equals", value: ["en-US", "en"] },
-  severity: "fatal",
-};
+const pinnedTo = (locale: string): Partial<IdentityContext> => ({
+  pins: { locale, timezone: undefined },
+});
+
+const expectedLocale = (
+  tag: string,
+  languages: readonly string[],
+  intlSeverity: "fatal" | "note",
+) => [
+  {
+    compatibility: true,
+    field: "languages",
+    matcher: { kind: "equals", value: languages },
+    severity: "fatal",
+  },
+  {
+    compatibility: true,
+    field: "intlLocale",
+    matcher: { kind: "same-language", locale: tag },
+    severity: intlSeverity,
+  },
+];
 
 describe("the locale surface", () => {
-  it("chooses en-US with Chrome's two-language list", () => {
-    expect(resolveSurfaces(contextOf()).locale).toStrictEqual({
-      expected: [
-        languagesOnLinux,
-        {
-          compatibility: true,
-          field: "intlLocale",
-          matcher: { kind: "same-language", locale: "en-US" },
-          severity: "fatal",
-        },
-      ],
+  it.each([
+    {
+      languages: ["en-US", "en"],
+      list: "en-US,en",
+      posix: "en_US",
+      tag: "en-US",
+    },
+    {
+      languages: ["de-DE", "de", "en-US", "en"],
+      list: "de-DE,de,en-US,en",
+      posix: "de_DE",
+      tag: "de-DE",
+    },
+    {
+      languages: ["pt-BR", "pt", "en-US", "en"],
+      list: "pt-BR,pt,en-US,en",
+      posix: "pt_BR",
+      tag: "pt-BR",
+    },
+    {
+      languages: ["en-AU", "en-US", "en"],
+      list: "en-AU,en-US,en",
+      posix: "en_AU",
+      tag: "en-AU",
+    },
+  ])("presents $tag with Chrome's list", (locale) => {
+    const { languages, list, posix, tag } = locale;
+
+    expect(resolveSurfaces(contextOf(pinnedTo(tag))).locale).toStrictEqual({
+      expected: expectedLocale(tag, languages, "fatal"),
       inputs: [
-        { name: "--lang", sink: "switch", value: "en-US" },
-        { name: "--accept-lang", sink: "switch", value: "en-US,en" },
+        { name: "--accept-lang", sink: "switch", value: list },
         { name: "LANG", sink: "environment", value: "C.UTF-8" },
-        { name: "LANGUAGE", sink: "environment", value: "en_US" },
-        { name: "intl.accept_languages", sink: "preference", value: "en-US,en" },
+        { name: "LANGUAGE", sink: "environment", value: posix },
+        { name: "intl.accept_languages", sink: "preference", value: list },
       ],
-      value: { languages: ["en-US", "en"], tag: "en-US" },
+      value: { languages, tag },
     });
+  });
+
+  it("presents en-US when no locale is pinned", () => {
+    expect(resolveSurfaces(contextOf()).locale).toStrictEqual(
+      resolveSurfaces(contextOf(pinnedTo("en-US"))).locale,
+    );
+  });
+
+  it("keeps the bare language Chrome leads with for ja-JP", () => {
+    const { inputs, value } = resolveSurfaces(contextOf(pinnedTo("ja-JP"))).locale;
+
+    expect(inputs).toContainEqual({
+      name: "intl.accept_languages",
+      sink: "preference",
+      value: "ja,en-US,en",
+    });
+    expect(value).toStrictEqual({ languages: ["ja", "en-US", "en"], tag: "ja-JP" });
+  });
+
+  it("never emits --lang, which Chrome ignores", () => {
+    const { inputs } = resolveSurfaces(contextOf(pinnedTo("de-DE"))).locale;
+
+    expect(inputs.map(({ name }) => name)).not.toContain("--lang");
   });
 
   it("only notes an Intl language off the plan on macOS, where Intl follows the host", () => {
     expect(
-      resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).locale.expected,
-    ).toStrictEqual([
-      languagesOnLinux,
-      {
-        compatibility: true,
-        field: "intlLocale",
-        matcher: { kind: "same-language", locale: "en-US" },
-        severity: "note",
-      },
-    ]);
+      resolveSurfaces(contextOf({ ...pinnedTo("de-DE"), capabilities: { platform: "darwin" } }))
+        .locale.expected,
+    ).toStrictEqual(expectedLocale("de-DE", ["de-DE", "de", "en-US", "en"], "note"));
+  });
+
+  it("refuses a tag whose Chrome list is unmeasured, which the options never let through", () => {
+    expect(() => resolveSurfaces(contextOf(pinnedTo("sw-KE")))).toThrow(
+      "Xrio has not measured Chrome's language list for sw-KE.",
+    );
+  });
+
+  it("shares no array with the table it reads", () => {
+    const { value } = resolveSurfaces(contextOf(pinnedTo("de-DE"))).locale;
+
+    expect(value.languages).not.toBe(chromeAcceptLanguages("de-DE"));
   });
 });
 

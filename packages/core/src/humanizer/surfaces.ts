@@ -1,12 +1,12 @@
 import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
 import type { GpuChoice, HostCapabilities, Insets, MediaDeviceCounts } from "./contracts.ts";
+import type { IdentityIntent } from "./intent.ts";
+import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
 
 export const DEFAULT_LOCALE = "en-US";
-
-const ACCEPT_LANGUAGES = "en-US,en";
 
 const SCREEN = { height: 1080, width: 1920, workAreaInset: 40 } as const;
 
@@ -22,6 +22,7 @@ export interface ExitChoice {
 export interface IdentityContext {
   readonly mode: Exclude<ResolvedMode["mode"], "http">;
   readonly capabilities: HostCapabilities;
+  readonly pins: IdentityIntent;
   readonly hostZone: string | undefined;
   readonly exit: ExitChoice;
 }
@@ -85,24 +86,35 @@ const compatible = (
 
 const resolveLocale = ({
   capabilities,
-}: Pick<IdentityContext, "capabilities">): Resolutions["locale"] => ({
-  expected: [
-    compatible("languages", equals(ACCEPT_LANGUAGES.split(",")), "fatal"),
-    compatible(
-      "intlLocale",
-      { kind: "same-language", locale: DEFAULT_LOCALE },
-      capabilities.platform === "linux" ? "fatal" : "note",
-    ),
-  ],
-  inputs: [
-    { name: "--lang", sink: "switch", value: DEFAULT_LOCALE },
-    { name: "--accept-lang", sink: "switch", value: ACCEPT_LANGUAGES },
-    { name: "LANG", sink: "environment", value: "C.UTF-8" },
-    { name: "LANGUAGE", sink: "environment", value: DEFAULT_LOCALE.replace("-", "_") },
-    { name: "intl.accept_languages", sink: "preference", value: ACCEPT_LANGUAGES },
-  ],
-  value: { languages: ACCEPT_LANGUAGES.split(","), tag: DEFAULT_LOCALE },
-});
+  pins,
+}: Pick<IdentityContext, "capabilities" | "pins">): Resolutions["locale"] => {
+  const tag = pins.locale ?? DEFAULT_LOCALE;
+  const languages = chromeAcceptLanguages(tag);
+
+  if (languages === undefined) {
+    throw new Error(`Xrio has not measured Chrome's language list for ${tag}.`);
+  }
+
+  const list = languages.join(",");
+
+  return {
+    expected: [
+      compatible("languages", equals([...languages]), "fatal"),
+      compatible(
+        "intlLocale",
+        { kind: "same-language", locale: tag },
+        capabilities.platform === "linux" ? "fatal" : "note",
+      ),
+    ],
+    inputs: [
+      { name: "--accept-lang", sink: "switch", value: list },
+      { name: "LANG", sink: "environment", value: "C.UTF-8" },
+      { name: "LANGUAGE", sink: "environment", value: tag.replace("-", "_") },
+      { name: "intl.accept_languages", sink: "preference", value: list },
+    ],
+    value: { languages: [...languages], tag },
+  };
+};
 
 const resolveTimezone = ({
   hostZone,

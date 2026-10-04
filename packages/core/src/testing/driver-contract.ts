@@ -18,6 +18,7 @@ import { settleWithin } from "../sources/browser/lifetime.ts";
 import type { BrowserDriver, DriverBrowser, DriverEvent } from "../sources/browser/port.ts";
 import { chromePath } from "./chrome-path.ts";
 import { startFixtureServer } from "./fixture-server.ts";
+import { noPins } from "./no-pins.ts";
 import { killRenderers } from "./processes.ts";
 
 export const DRIVER_GUARANTEES = [
@@ -91,6 +92,7 @@ const withDriver = async (
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode: "headless",
+      pins: noPins,
     }).inputs,
     scratchDir: scratch.path,
     xauthority: process.env.XAUTHORITY,

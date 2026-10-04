@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { noPins } from "../testing/no-pins.ts";
 import type { Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import { httpIdentity } from "./report.ts";
@@ -133,6 +134,7 @@ describe("the identity report", () => {
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",
+      pins: noPins,
     });
 
     expect(evaluate(plan, headlessLinux)).toStrictEqual({
@@ -195,6 +197,7 @@ describe("the identity report", () => {
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: undefined,
       mode: "headed",
+      pins: noPins,
     });
 
     expect(evaluate(plan, headedMac)).toStrictEqual({
@@ -254,6 +257,7 @@ describe("the secure-context surfaces' coverage", () => {
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
+    pins: noPins,
   });
 
   it.each([
@@ -285,6 +289,7 @@ describe("a secure origin whose individual reads gave nothing", () => {
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",
+      pins: noPins,
     });
 
     const { coverage } = evaluate(plan, {
@@ -318,6 +323,7 @@ describe("report independence", () => {
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
+    pins: noPins,
   });
 
   it("keeps a caller's change to one report's coverage out of the next report", () => {
@@ -389,6 +395,7 @@ describe("no shared object inside one report", () => {
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
+    pins: noPins,
   });
 
   it("holds for a headless report", () => {
@@ -419,6 +426,7 @@ describe("coverage backed by timezone reads", () => {
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
     mode: "headless",
+    pins: noPins,
   });
 
   it("leaves platform unchecked even when secure client hints name the platform", () => {

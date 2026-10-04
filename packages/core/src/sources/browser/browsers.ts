@@ -138,6 +138,7 @@ const planVisit = (request: VisitTarget, scratch: ScratchDir, steps: VisitSteps)
     exit: { facts: exitFactsFor(route), route: route.kind },
     hostZone,
     mode: request.mode,
+    pins: request.pins,
   });
 
   return {

@@ -13,6 +13,7 @@ import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
+import type { IdentityIntent } from "../../humanizer/intent.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
 import {
   busyPageStarted,
@@ -63,6 +64,10 @@ const PROBE =
 const IDENTITY_REPORT = /<pre id="identity">(?<report>[^<]*)<\/pre>/u;
 
 const MEDIA_REPORT = /<pre id="media">(?<report>[^<]*)<\/pre>/u;
+
+const INTL_LOCALE = /"intlLocale":"(?<locale>[^"]*)"/u;
+
+const ACCEPT_LANGUAGE = /<meta name="request-accept-language" content="(?<header>[^"]*)">/u;
 
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
@@ -243,6 +248,7 @@ const load = async (
   timeoutMs = 20_000,
   signal?: AbortSignal,
   browserArgs: readonly string[] = [],
+  pins: IdentityIntent = noPins,
 ): Promise<SourceDocument> => {
   const browsers = createBrowsers(cdpDriver, 1);
   using deadline = startDeadline(timeoutMs, signal);
@@ -253,7 +259,7 @@ const load = async (
       browserPath: chromePath(),
       deadline,
       mode,
-      pins: noPins,
+      pins,
       proxy: undefined,
       url: new URL(route, server.origin),
     });
@@ -328,6 +334,7 @@ const withBrowser = async <Result>(
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode,
+      pins: noPins,
     }).inputs,
     scratchDir: scratch.path,
     xauthority: process.env.XAUTHORITY,
@@ -577,6 +584,39 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
     expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
   });
 
+  it.each([
+    {
+      header: "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+      languages: ["de-DE", "de", "en-US", "en"],
+      tag: "de-DE",
+    },
+    {
+      header: "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+      languages: ["pt-BR", "pt", "en-US", "en"],
+      tag: "pt-BR",
+    },
+    { header: "en-AU,en-US;q=0.9,en;q=0.8", languages: ["en-AU", "en-US", "en"], tag: "en-AU" },
+  ])(
+    "presents the pinned $tag in the page, the Intl language and the request header",
+    async ({ header, languages, tag }) => {
+      const { html, identity } = await load(mode, "/identity", 20_000, undefined, [], {
+        locale: tag,
+        timezone: undefined,
+      });
+
+      const reportText = IDENTITY_REPORT.exec(html)?.groups?.report ?? "null";
+      const report: unknown = JSON.parse(reportText);
+      const intlLanguage = process.platform === "linux" ? tag.slice(0, 2) : "";
+
+      expect(report).toMatchObject({ language: languages[0], languages });
+      expect(
+        (INTL_LOCALE.exec(reportText)?.groups?.locale ?? "").startsWith(intlLanguage),
+      ).toBeTruthy();
+      expect(ACCEPT_LANGUAGE.exec(html)?.groups?.header).toBe(header);
+      expect(identity).toMatchObject({ surfaces: { locale: { languages, tag } } });
+    },
+  );
+
   it.runIf(process.platform === "linux")(
     "lists one unlabelled microphone and speaker and no camera on Linux, with no permission granted",
     async () => {
@@ -654,6 +694,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: readHostZone(),
         mode,
+        pins: noPins,
       }).inputs,
       scratchDir: path.dirname(profile ?? ""),
       xauthority: process.env.XAUTHORITY,

@@ -550,12 +550,13 @@ const routes = new Map<
   ],
   [
     "/identity",
-    (response) => {
+    (response, _origins, request) => {
       requestedPaths.delete("/identity-sized");
       sendPage(
         response,
         "identity",
         `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${IDENTITY_REPORT_SCRIPT}`,
+        `<meta name="request-accept-language" content="${request.headers["accept-language"] ?? ""}">`,
       );
     },
   ],

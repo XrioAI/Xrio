@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
+import { noPins } from "../../testing/no-pins.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
 import { createScratchDir, spawnChrome } from "./browser-process.ts";
 import { hostCapabilities } from "./capabilities.ts";
@@ -75,6 +76,7 @@ const setup = async () => {
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: undefined,
       mode: "headless",
+      pins: noPins,
     }).inputs,
     scratchDir: scope.scratch.path,
     xauthority: undefined,

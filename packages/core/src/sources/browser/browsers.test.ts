@@ -1287,6 +1287,49 @@ describe("the launch identity check", () => {
     });
   });
 
+  it("rejects a Chrome that ignores the pinned locale before navigation", async () => {
+    const browsers = createBrowsers(cdpDriver, 1, {
+      hostCapabilities: () => ({ platform: "linux" }),
+    });
+
+    using deadline = startDeadline(10_000);
+
+    using stages = stageTimeline(
+      new Set(["launch", "verify", "navigation", "capture", "teardown"]),
+    );
+
+    const document = await stages.recording(
+      async () =>
+        await settledValue(
+          browsers.load({
+            ...(await normalRequest(deadline)),
+            pins: { locale: "de-DE", timezone: undefined },
+          }),
+        ),
+    );
+
+    await browsers.close();
+    expect({ document, timeline: stages.timeline }).toMatchObject({
+      document: {
+        error: {
+          code: "BROWSER_LAUNCH_FAILED",
+          details: {
+            mismatches: [
+              {
+                expected: ["de-DE", "de", "en-US", "en"],
+                field: "languages",
+                observed: ["en-US", "en"],
+                surface: "locale",
+              },
+              { expected: "de", field: "intlLocale", observed: "en-US", surface: "locale" },
+            ],
+          },
+        },
+      },
+      timeline: ["launch", "verify", "teardown"],
+    });
+  });
+
   it("reads again once when Chrome reports an unsized window, then evaluates the sized one", async () => {
     const observed: { outerWidth: number; outerHeight: number }[] = [];
 

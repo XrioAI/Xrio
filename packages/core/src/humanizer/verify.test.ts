@@ -2,6 +2,7 @@ import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { noPins } from "../testing/no-pins.ts";
 import type { Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityContext } from "./surfaces.ts";
@@ -52,6 +53,7 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "Asia/Kolkata",
   mode: "headless",
+  pins: noPins,
   ...overrides,
 });
 

@@ -161,6 +161,7 @@ const { args } = planLaunch({
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: readHostZone(),
     mode,
+    pins: noPins,
   }).inputs,
   scratchDir: "<scratch>",
   xauthority: process.env.XAUTHORITY,

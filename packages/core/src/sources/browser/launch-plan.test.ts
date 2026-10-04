@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
+import { noPins } from "../../testing/no-pins.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
 import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
@@ -20,6 +21,7 @@ const identityFor = ({ headless, platform, timezone }: IdentityChoice): BrowserI
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: timezone,
     mode: headless ? "headless" : "headed",
+    pins: noPins,
   }).inputs;
 
 const baseline = [
@@ -53,7 +55,6 @@ const xrioSwitches = [
   "--disable-features=AutofillServerCommunication,AimServerEligibilityEnabled,AimServerRequestOnStartupEnabled",
   "--disable-component-update",
   "--disable-domain-reliability",
-  "--lang=en-US",
   "--accept-lang=en-US,en",
 ];
 
@@ -207,6 +208,32 @@ describe(planLaunch, () => {
         path: `${scratchDir}/profile/Local State`,
       },
     ]);
+  });
+
+  it("plans a pinned locale's language switch, environment and preference, and no --lang", () => {
+    const { args, env, files } = planLaunch({
+      browserArgs: [],
+      browserPath: "chrome",
+      display: undefined,
+      headless: true,
+      identity: planIdentity({
+        capabilities: { platform: "linux" },
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: undefined,
+        mode: "headless",
+        pins: { locale: "de-DE", timezone: undefined },
+      }).inputs,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(
+      args.filter((arg) => arg.startsWith("--lang") || arg.startsWith("--accept-lang")),
+    ).toStrictEqual(["--accept-lang=de-DE,de,en-US,en"]);
+    expect([env.LANG, env.LANGUAGE]).toStrictEqual(["C.UTF-8", "de_DE"]);
+    expect(files[0].contents).toBe(
+      '{"intl":{"accept_languages":"de-DE,de,en-US,en"},"net":{"network_prediction_options":2}}',
+    );
   });
 
   it("keeps Chrome's singleton socket path within the 108-byte limit", () => {
