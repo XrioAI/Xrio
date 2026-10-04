@@ -36,6 +36,9 @@ export const OWNED_HEADERS = [
   "sec-ch-ua-form-factors",
   "sec-ch-ua-full-version",
   "sec-ch-device-memory",
+  "sec-ch-dpr",
+  "sec-ch-viewport-width",
+  "sec-ch-viewport-height",
 ] as const;
 
 export const CHROME_ACCEPT_LANGUAGES = {

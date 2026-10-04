@@ -293,6 +293,9 @@ describe("identity-owner lint rule", () => {
     "sec-ch-ua-form-factors",
     "sec-ch-ua-full-version",
     "sec-ch-device-memory",
+    "sec-ch-dpr",
+    "sec-ch-viewport-width",
+    "sec-ch-viewport-height",
   ])("flags the identity header %s as a key, a call argument and an array entry", (name) => {
     const message = `\`${name}\` is a request header the Humanizer owns; only src/humanizer/ may use it.`;
     const source = `export const keyed = { "${name.toUpperCase()}": "x" };\nheaders.set("${name}", "x");\nexport const order = ["Host", "${name}"];\n`;
