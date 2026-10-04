@@ -4,14 +4,14 @@ Applied to Chromium in `series` order by `scripts/apply.sh`, against the tag in 
 
 | Patch | What it does |
 | --- | --- |
-| `xrio-sources.patch` | Adds the fork's own sources: knob registry, config and config-file loader, GL/speech/media/battery personas, perturbation and geometry helpers, and their unit tests. |
+| `xrio-sources.patch` | Adds the fork's own sources: knob registry, config and config-file loader, the machine-class draw and persona accessors every other patch calls, GL/speech/media/battery personas, perturbation and geometry helpers, and their unit tests. |
 | `base-BUILD.gn.patch` | Compiles the `xrio_*` sources into `base` and their tests into `base_unittests`. |
 | `chrome-app-chrome_main_delegate.cc.patch` | Loads `xrio-config.json` / `--xrio-config-file` at startup, validates every `--xrio-*` switch (refuses to launch on a bad one), adds `--xrio-dump-config`. |
 | `content-common-renderer.mojom.patch` | Adds the `SetXrioConfig` message to the renderer interface. |
-| `content-browser-renderer_host-render_process_host_impl.cc.patch` | Collects the config and persona tables in the browser and sends them to each renderer. |
+| `content-browser-renderer_host-render_process_host_impl.cc.patch` | Collects the config and persona tables in the browser, installs the GL/speech copies there, sends them to each renderer, and aligns the cpuPerformance tier with the `hardwareConcurrency` override. |
 | `content-renderer-render_thread_impl.h.patch` | Declares the renderer's `SetXrioConfig` handler. |
 | `content-renderer-render_thread_impl.cc.patch` | Stores the received config in the renderer. |
-| `components-embedder_support-user_agent_utils.cc.patch` | UA brand and full-version overrides; drops the `HeadlessChrome` token. |
+| `components-embedder_support-user_agent_utils.cc.patch` | UA-CH brand and high-entropy full-version overrides; drops the `Headless` token from the UA product. |
 | `components-embedder_support-user_agent_utils_unittest.cc.patch` | Tests for the headless UA token. |
 | `third_party-blink-renderer-core-frame-navigator.cc.patch` | `navigator.webdriver` reports `false`. |
 | `third_party-blink-renderer-core-exported-web_view_impl.cc.patch` | Exposes `hrefTranslate` as branded Chrome does. |
@@ -22,18 +22,18 @@ Applied to Chromium in `series` order by `scripts/apply.sh`, against the tag in 
 | `third_party-blink-renderer-platform-graphics-image_data_buffer.h.patch` | Holds the perturbed pixels for the encode path. |
 | `third_party-blink-renderer-platform-graphics-image_data_buffer.cc.patch` | Applies the same perturbation to `toDataURL` / `toBlob`. |
 | `third_party-blink-renderer-modules-media_capabilities-media_capabilities.h.patch` | Carries the codec family through a pending `decodingInfo()` call. |
-| `third_party-blink-renderer-modules-media_capabilities-media_capabilities.cc.patch` | Decode-capability persona for `mediaCapabilities.decodingInfo()`. |
+| `third_party-blink-renderer-modules-media_capabilities-media_capabilities.cc.patch` | Decode-capability persona for `mediaCapabilities.decodingInfo()`, including the timeout path (off by default). |
 | `third_party-blink-renderer-core-frame-navigator_concurrent_hardware.cc.patch` | Overrides `navigator.hardwareConcurrency`. |
 | `third_party-blink-renderer-core-frame-navigator_device_memory.cc.patch` | Overrides `navigator.deviceMemory`. |
-| `content-browser-client_hints-client_hints.cc.patch` | `Device-Memory` client hint follows the override (browser side). |
-| `third_party-blink-renderer-core-loader-frame_fetch_context.cc.patch` | `Device-Memory` request headers follow the override (renderer side). |
+| `content-browser-client_hints-client_hints.cc.patch` | `Device-Memory` / `Sec-CH-Device-Memory` client hints follow the override (browser side). |
+| `third_party-blink-renderer-core-loader-frame_fetch_context.cc.patch` | `Device-Memory` / `Sec-CH-Device-Memory` follow the override (renderer, subresource requests). |
 | `third_party-blink-renderer-core-timing-memory_info.cc.patch` | Overrides `performance.memory.jsHeapSizeLimit`. |
 | `third_party-blink-renderer-modules-webaudio-audio_buffer.cc.patch` | Seeded `AudioBuffer` perturbation (off by default). |
 | `third_party-blink-renderer-modules-webaudio-offline_audio_context.cc.patch` | Seeded `OfflineAudioContext` perturbation (off by default). |
-| `third_party-blink-renderer-core-dom-element.cc.patch` | Seeded jitter for `getClientRects` / `getBoundingClientRect`. |
-| `third_party-blink-renderer-core-html-canvas-text_metrics.cc.patch` | Seeded jitter for `measureText` widths. |
+| `third_party-blink-renderer-core-dom-element.cc.patch` | Seeded size jitter for `getClientRects` / `getBoundingClientRect` (off by default). |
+| `third_party-blink-renderer-core-html-canvas-text_metrics.cc.patch` | Seeded jitter for `measureText` widths (off by default). |
 | `services-device-battery-BUILD.gn.patch` | Compiles the battery persona. |
-| `services-device-battery-battery_status_service.cc.patch` | Battery persona for `navigator.getBattery()` (absent by default). |
+| `services-device-battery-battery_status_service.cc.patch` | Overrides `navigator.getBattery()` with a configured status; upstream values unless `battery-status` is set. |
 | `services-device-BUILD.gn.patch` | Adds the battery persona unit test. |
 | `components-variations-service-variations_service.cc.patch` | Blocks the variations (field trial) fetch. |
 | `components-network_time-network_time_tracker.cc.patch` | Blocks network time queries. |
@@ -42,7 +42,7 @@ Applied to Chromium in `series` order by `scripts/apply.sh`, against the tag in 
 | `chrome-browser-first_run-first_run.cc.patch` | Skips first-run import. |
 | `third_party-blink-renderer-core-script-detect_javascript_frameworks.cc.patch` | Disables page framework detection. |
 | `components-gcm_driver-gcm_driver_desktop.cc.patch` | Blocks GCM (push) connections. |
-| `components-update_client-update_checker.cc.patch` | Blocks component update pings. |
+| `components-update_client-update_checker.cc.patch` | Blocks every update_client check (component and extension update pings). |
 | `chrome-browser-spellchecker-spellcheck_hunspell_dictionary.cc.patch` | Blocks spellcheck dictionary downloads. |
 | `components-signin-core-browser-account_reconcilor.cc.patch` | Disables Google account reconciliation. |
 | `components-javascript_dialogs-app_modal_dialog_manager.cc.patch` | Auto-answers `beforeunload` dialogs. |
