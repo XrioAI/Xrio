@@ -12,7 +12,7 @@ const resolutionsOf = (
   emitted: Partial<Record<SurfaceName, readonly LaunchInput[]>>,
 ): Resolutions => {
   const resolutions = Object.fromEntries(
-    EMISSION_ORDER.map((name) => [name, { inputs: emitted[name] ?? [] }]),
+    EMISSION_ORDER.map((name) => [name, { expected: [], inputs: emitted[name] ?? [] }]),
   );
 
   if (!isComplete(resolutions)) {

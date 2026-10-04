@@ -1,6 +1,7 @@
 import type { ResolvedMode } from "../types.ts";
 import type { HostCapabilities } from "./contracts.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
+import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
 
 const LOCALE = "en-US";
 
@@ -20,9 +21,18 @@ export interface IdentityContext {
 
 export interface Resolution {
   readonly inputs: readonly LaunchInput[];
+  readonly expected: readonly Expectation[];
 }
 
-export const EMISSION_ORDER = ["locale", "timezone", "gpu", "window", "screen", "leaks"] as const;
+export const EMISSION_ORDER = [
+  "locale",
+  "timezone",
+  "gpu",
+  "window",
+  "screen",
+  "leaks",
+  "automation",
+] as const;
 
 export type SurfaceName = (typeof EMISSION_ORDER)[number];
 
@@ -32,7 +42,25 @@ const screenInfo = (): string =>
   `{0,0 ${SCREEN.width}x${SCREEN.height} colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 ` +
   `workAreaLeft=0 workAreaRight=0 workAreaTop=0 workAreaBottom=${SCREEN.workAreaInset}}`;
 
-const resolveLocale = (): Resolution => ({
+const equals = (value: Observed): Matcher => ({ kind: "equals", value });
+
+const atMost = (field: ObservedField): Matcher => ({ field, kind: "at-most-field" });
+
+const compatible = (
+  field: ObservedField,
+  matcher: Matcher,
+  severity: Expectation["severity"],
+): Expectation => ({ compatibility: true, field, matcher, severity });
+
+const resolveLocale = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolution => ({
+  expected: [
+    compatible("languages", equals(ACCEPT_LANGUAGES.split(",")), "fatal"),
+    compatible(
+      "intlLocale",
+      { kind: "same-language", locale: LOCALE },
+      capabilities.platform === "linux" ? "fatal" : "note",
+    ),
+  ],
   inputs: [
     { name: "--lang", sink: "switch", value: LOCALE },
     { name: "--accept-lang", sink: "switch", value: ACCEPT_LANGUAGES },
@@ -43,11 +71,29 @@ const resolveLocale = (): Resolution => ({
 });
 
 const resolveTimezone = ({ hostZone }: Pick<IdentityContext, "hostZone">): Resolution => ({
+  expected:
+    hostZone === undefined || hostZone === ""
+      ? []
+      : [
+          {
+            compatibility: false,
+            field: "zone",
+            matcher: { kind: "named-zone" },
+            severity: "fatal",
+          },
+          {
+            compatibility: false,
+            field: "zoneOffsets",
+            matcher: { kind: "zone-offsets" },
+            severity: "fatal",
+          },
+        ],
   inputs:
     hostZone === undefined ? [] : [{ name: "TZ", sink: "forwarded-environment", value: hostZone }],
 });
 
 const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolution => ({
+  expected: [],
   inputs:
     capabilities.platform === "linux"
       ? [
@@ -57,16 +103,36 @@ const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Re
       : [],
 });
 
-const resolveWindow = (): Resolution => ({
+const resolveWindow = ({ mode }: Pick<IdentityContext, "mode">): Resolution => ({
+  expected:
+    mode === "headless"
+      ? [
+          compatible("outerWidth", equals(WINDOW.width), "fatal"),
+          compatible("outerHeight", equals(WINDOW.height), "fatal"),
+        ]
+      : [
+          compatible("outerWidth", atMost("availWidth"), "note"),
+          compatible("outerHeight", atMost("availHeight"), "note"),
+        ],
   inputs: [{ name: "--window-size", sink: "switch", value: `${WINDOW.width},${WINDOW.height}` }],
 });
 
 const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolution => ({
+  expected:
+    mode === "headless"
+      ? [
+          compatible("screenWidth", equals(SCREEN.width), "fatal"),
+          compatible("screenHeight", equals(SCREEN.height), "fatal"),
+          compatible("availWidth", equals(SCREEN.width), "fatal"),
+          compatible("availHeight", equals(SCREEN.height - SCREEN.workAreaInset), "fatal"),
+        ]
+      : [],
   inputs:
     mode === "headless" ? [{ name: "--screen-info", sink: "switch", value: screenInfo() }] : [],
 });
 
 const resolveLeaks = (): Resolution => ({
+  expected: [],
   inputs: [
     {
       name: "net.network_prediction_options",
@@ -77,11 +143,24 @@ const resolveLeaks = (): Resolution => ({
   ],
 });
 
+const resolveAutomation = ({
+  capabilities,
+}: Pick<IdentityContext, "capabilities">): Resolution => ({
+  expected: [
+    compatible("webdriver", equals(false), "fatal"),
+    ...(capabilities.platform === "linux"
+      ? [compatible("colorScheme", equals("light"), "note")]
+      : []),
+  ],
+  inputs: [],
+});
+
 export const resolveSurfaces = (context: IdentityContext): Resolutions => ({
+  automation: resolveAutomation(context),
   gpu: resolveGpu(context),
   leaks: resolveLeaks(),
-  locale: resolveLocale(),
+  locale: resolveLocale(context),
   screen: resolveScreen(context),
   timezone: resolveTimezone(context),
-  window: resolveWindow(),
+  window: resolveWindow(context),
 });

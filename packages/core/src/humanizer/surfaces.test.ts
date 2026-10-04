@@ -10,9 +10,25 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
   ...overrides,
 });
 
+const languagesOnLinux = {
+  compatibility: true,
+  field: "languages",
+  matcher: { kind: "equals", value: ["en-US", "en"] },
+  severity: "fatal",
+};
+
 describe("the locale surface", () => {
   it("chooses en-US with Chrome's two-language list", () => {
     expect(resolveSurfaces(contextOf()).locale).toStrictEqual({
+      expected: [
+        languagesOnLinux,
+        {
+          compatibility: true,
+          field: "intlLocale",
+          matcher: { kind: "same-language", locale: "en-US" },
+          severity: "fatal",
+        },
+      ],
       inputs: [
         { name: "--lang", sink: "switch", value: "en-US" },
         { name: "--accept-lang", sink: "switch", value: "en-US,en" },
@@ -22,29 +38,59 @@ describe("the locale surface", () => {
       ],
     });
   });
+
+  it("only notes an Intl language off the plan on macOS, where Intl follows the host", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).locale.expected,
+    ).toStrictEqual([
+      languagesOnLinux,
+      {
+        compatibility: true,
+        field: "intlLocale",
+        matcher: { kind: "same-language", locale: "en-US" },
+        severity: "note",
+      },
+    ]);
+  });
 });
 
 describe("the timezone surface", () => {
   it("forwards the host zone to Chrome", () => {
     expect(resolveSurfaces(contextOf({ hostZone: "America/Chicago" })).timezone).toStrictEqual({
+      expected: [
+        {
+          compatibility: false,
+          field: "zone",
+          matcher: { kind: "named-zone" },
+          severity: "fatal",
+        },
+        {
+          compatibility: false,
+          field: "zoneOffsets",
+          matcher: { kind: "zone-offsets" },
+          severity: "fatal",
+        },
+      ],
       inputs: [{ name: "TZ", sink: "forwarded-environment", value: "America/Chicago" }],
     });
   });
 
-  it("emits nothing when there is no host zone, so Chrome keeps the system zone", () => {
-    expect(resolveSurfaces(contextOf()).timezone).toStrictEqual({ inputs: [] });
+  it("emits and expects nothing when there is no host zone, so Chrome keeps the system zone", () => {
+    expect(resolveSurfaces(contextOf()).timezone).toStrictEqual({ expected: [], inputs: [] });
   });
 
-  it("forwards an empty host zone as it always has", () => {
-    expect(resolveSurfaces(contextOf({ hostZone: "" })).timezone.inputs).toStrictEqual([
-      { name: "TZ", sink: "forwarded-environment", value: "" },
-    ]);
+  it("forwards an empty host zone as it always has, with no zone to expect", () => {
+    expect(resolveSurfaces(contextOf({ hostZone: "" })).timezone).toStrictEqual({
+      expected: [],
+      inputs: [{ name: "TZ", sink: "forwarded-environment", value: "" }],
+    });
   });
 });
 
 describe("the gpu surface", () => {
   it("selects ANGLE on SwiftShader on Linux", () => {
     expect(resolveSurfaces(contextOf()).gpu).toStrictEqual({
+      expected: [],
       inputs: [
         { name: "--use-gl", sink: "switch", value: "angle" },
         { name: "--use-angle", sink: "switch", value: "swiftshader" },
@@ -54,14 +100,49 @@ describe("the gpu surface", () => {
 
   it.each(["darwin", "win32"] as const)("leaves the system's backend alone on %s", (platform) => {
     expect(resolveSurfaces(contextOf({ capabilities: { platform } })).gpu).toStrictEqual({
+      expected: [],
       inputs: [],
     });
   });
 });
 
 describe("the window surface", () => {
-  it.each(["headless", "headed"] as const)("sizes the %s window at 1600x900", (mode) => {
-    expect(resolveSurfaces(contextOf({ mode })).window).toStrictEqual({
+  it("sizes the headless window at 1600x900 and expects exactly that", () => {
+    expect(resolveSurfaces(contextOf()).window).toStrictEqual({
+      expected: [
+        {
+          compatibility: true,
+          field: "outerWidth",
+          matcher: { kind: "equals", value: 1600 },
+          severity: "fatal",
+        },
+        {
+          compatibility: true,
+          field: "outerHeight",
+          matcher: { kind: "equals", value: 900 },
+          severity: "fatal",
+        },
+      ],
+      inputs: [{ name: "--window-size", sink: "switch", value: "1600,900" }],
+    });
+  });
+
+  it("sizes the headed window at 1600x900 and only notes one that overflows the work area", () => {
+    expect(resolveSurfaces(contextOf({ mode: "headed" })).window).toStrictEqual({
+      expected: [
+        {
+          compatibility: true,
+          field: "outerWidth",
+          matcher: { field: "availWidth", kind: "at-most-field" },
+          severity: "note",
+        },
+        {
+          compatibility: true,
+          field: "outerHeight",
+          matcher: { field: "availHeight", kind: "at-most-field" },
+          severity: "note",
+        },
+      ],
       inputs: [{ name: "--window-size", sink: "switch", value: "1600,900" }],
     });
   });
@@ -70,6 +151,32 @@ describe("the window surface", () => {
 describe("the screen surface", () => {
   it("describes a 1920x1080 screen with a 40 px bottom inset in headless mode", () => {
     expect(resolveSurfaces(contextOf()).screen).toStrictEqual({
+      expected: [
+        {
+          compatibility: true,
+          field: "screenWidth",
+          matcher: { kind: "equals", value: 1920 },
+          severity: "fatal",
+        },
+        {
+          compatibility: true,
+          field: "screenHeight",
+          matcher: { kind: "equals", value: 1080 },
+          severity: "fatal",
+        },
+        {
+          compatibility: true,
+          field: "availWidth",
+          matcher: { kind: "equals", value: 1920 },
+          severity: "fatal",
+        },
+        {
+          compatibility: true,
+          field: "availHeight",
+          matcher: { kind: "equals", value: 1040 },
+          severity: "fatal",
+        },
+      ],
       inputs: [
         {
           name: "--screen-info",
@@ -82,18 +189,52 @@ describe("the screen surface", () => {
   });
 
   it("leaves a headed browser the real display", () => {
-    expect(resolveSurfaces(contextOf({ mode: "headed" })).screen).toStrictEqual({ inputs: [] });
+    expect(resolveSurfaces(contextOf({ mode: "headed" })).screen).toStrictEqual({
+      expected: [],
+      inputs: [],
+    });
   });
 });
 
 describe("the leaks surface", () => {
   it("turns network prediction and DNS-over-HTTPS off", () => {
     expect(resolveSurfaces(contextOf()).leaks).toStrictEqual({
+      expected: [],
       inputs: [
         { name: "net.network_prediction_options", sink: "preference", value: 2 },
         { name: "dns_over_https.mode", sink: "local-state", value: "off" },
       ],
     });
+  });
+});
+
+describe("the automation surface", () => {
+  const noWebdriver = {
+    compatibility: true,
+    field: "webdriver",
+    matcher: { kind: "equals", value: false },
+    severity: "fatal",
+  };
+
+  it("expects webdriver false and notes a colour scheme other than light on Linux", () => {
+    expect(resolveSurfaces(contextOf()).automation).toStrictEqual({
+      expected: [
+        noWebdriver,
+        {
+          compatibility: true,
+          field: "colorScheme",
+          matcher: { kind: "equals", value: "light" },
+          severity: "note",
+        },
+      ],
+      inputs: [],
+    });
+  });
+
+  it("expects no colour scheme on macOS, where it follows the host", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).automation,
+    ).toStrictEqual({ expected: [noWebdriver], inputs: [] });
   });
 });
 

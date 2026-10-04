@@ -60,6 +60,28 @@ export interface HostCapabilities {
 
 export interface Observation {
   readonly product: ChromeProduct;
+  readonly zone: string | null;
+  readonly requestedZone: string | null;
+  readonly zoneOffsets: readonly string[];
+  readonly requestedOffsets: readonly string[] | null;
+  readonly intlLocale: string;
+  readonly languages: readonly string[];
+  readonly screenWidth: number;
+  readonly screenHeight: number;
+  readonly availWidth: number;
+  readonly availHeight: number;
+  readonly colorDepth: number;
+  readonly outerWidth: number;
+  readonly outerHeight: number;
+  readonly devicePixelRatio: number;
+  readonly colorScheme: string | null;
+  readonly reducedMotion: string | null;
+  readonly pointer: string | null;
+  readonly hover: string | null;
+  readonly anyPointer: string | null;
+  readonly maxTouchPoints: number;
+  readonly webdriver: boolean;
+  readonly userAgent: string;
 }
 
 export type DeviceRecordRefusal =
