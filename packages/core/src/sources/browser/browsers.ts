@@ -1,13 +1,16 @@
 import { availableParallelism, totalmem } from "node:os";
 import { constrainedMemory } from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
+import type { Observation } from "../../humanizer/contracts.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
+import { describeMismatch, evaluate, readObservation } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
@@ -32,6 +35,10 @@ const STDERR_TAIL_CHARS = 8192;
 
 const MIN_CHROME_MAJOR = 150;
 
+const VERIFY_TIMEOUT_MS = 10_000;
+
+const UNSIZED_RETRY_MS = 250;
+
 type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
 
 type VisitTarget = Omit<BrowserRequest, "deadline">;
@@ -45,6 +52,7 @@ interface VisitSteps extends Partial<RetireSteps> {
   readonly sessionFor: typeof sessionFor;
   readonly hostCapabilities: typeof hostCapabilities;
   readonly planIdentity: typeof planIdentity;
+  readonly evaluate: typeof evaluate;
 }
 
 interface VisitPlan {
@@ -52,7 +60,7 @@ interface VisitPlan {
   readonly launch: LaunchPlan;
 }
 
-const defaultSteps: VisitSteps = { hostCapabilities, planIdentity, sessionFor };
+const defaultSteps: VisitSteps = { evaluate, hostCapabilities, planIdentity, sessionFor };
 
 export interface Browsers {
   readonly start: (request: BrowserRequest) => BrowserVisit;
@@ -91,7 +99,7 @@ const sweepOnce = async (): Promise<void> => {
 };
 
 const launchFailed = (message: string, stderr: string, cause?: unknown): XrioError =>
-  new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { stderr } });
+  new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { mismatches: [], stderr } });
 
 const assertSupported = ({ major, version }: ChromeProduct): void => {
   if (major < MIN_CHROME_MAJOR) {
@@ -167,6 +175,59 @@ const startBrowser = async (
   }
 };
 
+const isText = (value: unknown): value is string => typeof value === "string";
+
+const observeLaunch = async (
+  browser: DriverBrowser,
+  read: string,
+  deadline: Deadline,
+): Promise<Observation> => {
+  try {
+    using stage = deadline.startStage(VERIFY_TIMEOUT_MS);
+    const reading = deadline.boundTo(stage.signal);
+
+    const readOnce = async (): Promise<Observation> =>
+      readObservation(browser.product, await browser.evaluateIsolated(read, isText, reading));
+
+    const first = await readOnce();
+
+    if (first.outerWidth > 0) {
+      return first;
+    }
+
+    await delay(UNSIZED_RETRY_MS, undefined, { signal: reading.signal });
+
+    return await readOnce();
+  } catch (error) {
+    deadline.throwIfExpired();
+    throw launchFailed(
+      `Xrio could not read Chrome's launch identity: ${messageOf(error)}`,
+      "",
+      error,
+    );
+  }
+};
+
+const verifyLaunch = async (
+  browser: DriverBrowser,
+  identity: IdentityPlan,
+  deadline: Deadline,
+  steps: VisitSteps,
+): Promise<void> => {
+  const observation = await observeLaunch(browser, identity.read, deadline);
+  const { mismatches } = steps.evaluate(identity.expected, observation);
+
+  if (mismatches.length > 0) {
+    const fields = mismatches.map((mismatch) => describeMismatch(mismatch, observation)).join(", ");
+
+    throw new XrioError(
+      "BROWSER_LAUNCH_FAILED",
+      `Chrome's launch identity does not match Xrio's plan: ${fields}.`,
+      { details: { mismatches, stderr: "" } },
+    );
+  }
+};
+
 const renderInScope = async (
   driver: BrowserDriver,
   steps: VisitSteps,
@@ -176,9 +237,12 @@ const renderInScope = async (
   document: PromiseWithResolvers<SourceDocument>,
 ): Promise<Closed> => {
   try {
-    const { launch } = planVisit(request, scope.scratch, steps);
+    const { identity, launch } = planVisit(request, scope.scratch, steps);
     const browser = await startBrowser(driver, scope, launch, deadline);
     assertSupported(browser.product);
+    await timeStage("verify", async () => {
+      await verifyLaunch(browser, identity, deadline, steps);
+    });
     document.resolve(await renderDocument(browser, request.url, deadline));
   } catch (error) {
     document.reject(error);

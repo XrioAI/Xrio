@@ -10,6 +10,7 @@ import type {
   ChallengeRound,
   ClientOptions,
   ErrorCode,
+  IdentityMismatch,
   InvalidOptionsError,
   ScrapeFormat,
   ScrapeResult,
@@ -132,7 +133,11 @@ describe("XrioClient types", () => {
     expectTypeOf<XrioError<"CLIENT_CLOSED">["details"]>().toEqualTypeOf<undefined>();
     expectTypeOf<XrioError<"BROWSER_LAUNCH_FAILED">["details"]>().toEqualTypeOf<{
       stderr: string;
+      mismatches: readonly IdentityMismatch[];
     }>();
+    expectTypeOf<IdentityMismatch["surface"]>().toEqualTypeOf<
+      "locale" | "timezone" | "gpu" | "window" | "screen" | "leaks" | "automation"
+    >();
   });
 
   it("narrows errors and their details by code", () => {

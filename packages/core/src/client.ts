@@ -27,6 +27,8 @@ export type {
 
 export { isXrioError, XrioError } from "./errors.ts";
 
+export type { IdentityMismatch } from "./humanizer/verify.ts";
+
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
 
 export type {

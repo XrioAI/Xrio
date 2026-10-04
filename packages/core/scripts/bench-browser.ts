@@ -19,7 +19,15 @@ const SCRAPE_TIMEOUT_MS = 30_000;
 
 const PERCENTILES = [50, 95] as const;
 
-const MEASURES = ["launch", "navigation", "capture", "teardown", "answer", "exit"] as const;
+const MEASURES = [
+  "launch",
+  "verify",
+  "navigation",
+  "capture",
+  "teardown",
+  "answer",
+  "exit",
+] as const;
 
 type Measure = (typeof MEASURES)[number];
 
@@ -74,7 +82,15 @@ const sha256Of = async (file: string): Promise<string> =>
 const server = await startFixtureServer(conformancePages);
 
 const scrapeOnce = async (): Promise<Sample> => {
-  const sample: Sample = { answer: 0, capture: 0, exit: 0, launch: 0, navigation: 0, teardown: 0 };
+  const sample: Sample = {
+    answer: 0,
+    capture: 0,
+    exit: 0,
+    launch: 0,
+    navigation: 0,
+    teardown: 0,
+    verify: 0,
+  };
 
   const record: ChannelListener = (message) => {
     if (isStageTiming(message) && isMeasure(message.stage)) {

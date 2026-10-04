@@ -135,7 +135,7 @@ const isLaunchLine = (value: unknown): value is { launched: number } =>
 
 const SETTLE_SLACK_MS = 500;
 
-const SCRAPE_STAGES = new Set(["queue", "launch", "navigation", "capture"]);
+const SCRAPE_STAGES = new Set(["queue", "launch", "verify", "navigation", "capture"]);
 
 const isStageTiming = (message: unknown): message is { stage: string; durationMs: number } =>
   typeof message === "object" &&

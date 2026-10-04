@@ -68,7 +68,7 @@ await using xrio = new XrioClient({ mode: "headless", browserPath, maxBrowsers: 
 
 `await xrio.close()`, or leaving an `await using` block, lets accepted scrapes, running or queued, finish under their own deadlines, and resolves once every browser has been torn down. If a Chrome outlives its teardown budget, a `teardown-incomplete` event says so and its profile is left for the startup sweep. A scrape started after `close()` rejects with `CLIENT_CLOSED`. Teardown always runs, even after a timeout: Chrome gets 2 seconds to close, then its process group is killed and its profile is deleted. Xrio installs no process signal handlers. If Node dies without closing, Chrome exits when its end of the debugging pipe closes, and the next process to launch a browser deletes profiles left behind for more than an hour.
 
-Stage timings (`queue`, `launch`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (browser launches, document rebinds, raw-header fallbacks, dropped request URLs, and an incomplete teardown or startup sweep) on `xrio:event`. Nothing is printed by default.
+Stage timings (`queue`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (browser launches, document rebinds, raw-header fallbacks, dropped request URLs, and an incomplete teardown or startup sweep) on `xrio:event`. Nothing is printed by default.
 
 `timeoutMs` is one deadline for the whole scrape, covering queueing and launching a browser, connecting, redirects, reading the body or capturing the page, and building the result. It defaults to 60,000 and must be a positive integer no greater than 2,147,483,647. When it passes, the scrape rejects with an `XrioError` whose `code` is `TIMEOUT`. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
 
@@ -135,7 +135,7 @@ try {
 | `PROXY_AUTH_FAILED`        | `XrioError` | The proxy answered 407, or a SOCKS5 proxy rejected the credentials.                                                                                                               |
 | `PROXY_UNREACHABLE`        | `XrioError` | Xrio could not connect to the proxy, or it did not speak the expected protocol.                                                                                                   |
 | `PROXY_CONNECT_FAILED`     | `XrioError` | The proxy refused the tunnel with another non-2xx status. `details.status` holds it.                                                                                              |
-| `BROWSER_LAUNCH_FAILED`    | `XrioError` | Chrome did not start or is older than 150. `details.stderr` holds the end of its output.                                                                                          |
+| `BROWSER_LAUNCH_FAILED`    | `XrioError` | Chrome did not start, is older than 150, or failed its pre-navigation identity check. `details.stderr` holds its output tail, `details.mismatches` each fatal mismatch.           |
 | `BROWSER_CRASHED`          | `XrioError` | The browser or the page's renderer died mid-scrape.                                                                                                                               |
 | `CLIENT_CLOSED`            | `XrioError` | `scrape()` was called after `close()`.                                                                                                                                            |
 

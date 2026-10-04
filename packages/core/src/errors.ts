@@ -1,9 +1,10 @@
 import type { BlockReport } from "./blocks/classify.ts";
+import type { IdentityMismatch } from "./humanizer/verify.ts";
 import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
   BROWSER_CRASHED: undefined;
-  BROWSER_LAUNCH_FAILED: { stderr: string };
+  BROWSER_LAUNCH_FAILED: { stderr: string; mismatches: readonly IdentityMismatch[] };
   CLIENT_CLOSED: undefined;
   NETWORK_ERROR: { netError: string } | undefined;
   PROXY_AUTH_FAILED: undefined;

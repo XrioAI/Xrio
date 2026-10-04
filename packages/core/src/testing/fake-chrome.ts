@@ -19,6 +19,7 @@ const SCENARIOS = [
   "evaluate-throws",
   "hang-on-navigate",
   "navigate-error",
+  "unsized-window",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -76,6 +77,15 @@ const readsByValue = (params: unknown): params is { awaitPromise: true; returnBy
   params.returnByValue === true &&
   "awaitPromise" in params &&
   params.awaitPromise === true;
+
+const IDENTITY_READ_MARKER = "requestedOffsets";
+
+const readsIdentity = (params: unknown): params is { expression: string } =>
+  typeof params === "object" &&
+  params !== null &&
+  "expression" in params &&
+  typeof params.expression === "string" &&
+  params.expression.includes(IDENTITY_READ_MARKER);
 
 const hasUrl = (params: unknown): params is { url: string } =>
   typeof params === "object" &&
@@ -237,6 +247,47 @@ const UTILITY_SCRIPT: Json = {
   },
 };
 
+const UTC_OFFSETS = ["GMT+00:00", "GMT+00:00"];
+
+const OBSERVATION = {
+  anyPointer: "fine",
+  availHeight: 1040,
+  availWidth: 1920,
+  colorDepth: 24,
+  colorScheme: "light",
+  devicePixelRatio: 1,
+  hover: "hover",
+  intlLocale: "en-US",
+  languages: ["en-US", "en"],
+  maxTouchPoints: 0,
+  outerHeight: 900,
+  outerWidth: 1600,
+  pointer: "fine",
+  reducedMotion: "no-preference",
+  requestedOffsets: UTC_OFFSETS,
+  requestedZone: "UTC",
+  screenHeight: 1080,
+  screenWidth: 1920,
+  userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${PRODUCT} Safari/537.36`,
+  webdriver: false,
+  zone: "UTC",
+  zoneOffsets: UTC_OFFSETS,
+};
+
+const identityReply = (observation: typeof OBSERVATION): Json => ({
+  result: { type: "string", value: JSON.stringify(observation) },
+});
+
+let identityReads = 0;
+
+const observedIdentity = (): Json => {
+  identityReads += 1;
+
+  return scenario === "unsized-window" && identityReads === 1
+    ? identityReply({ ...OBSERVATION, outerHeight: 0, outerWidth: 0 })
+    : identityReply(OBSERVATION);
+};
+
 const fixedResults = new Map<string, Json>([
   [
     "DOM.getDocument",
@@ -390,6 +441,24 @@ const closeBrowser = async (closed: Json): Promise<void> => {
   process.exit(0);
 };
 
+const answerEvaluate = async (
+  { id, params, sessionId }: Command,
+  reply: (result: Json) => Json,
+): Promise<void> => {
+  if (currentUrl === "about:blank" && readsIdentity(params)) {
+    await write([reply(observedIdentity())]);
+
+    return;
+  }
+
+  await (readsByValue(params)
+    ? evaluateByValue(
+        reply(scenario === "evaluate-throws" ? THROWN : CAPTURED_PAGE),
+        onSession(sessionId, { error: TARGET_NAVIGATED, id }),
+      )
+    : write([reply(UTILITY_SCRIPT)]));
+};
+
 const answer = async ({ id, method, params, sessionId }: Command): Promise<void> => {
   const reply = (result: Json): Json => onSession(sessionId, { id, result });
 
@@ -432,17 +501,12 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Runtime.callFunctionOn": {
-      await write([reply(CAPTURED_PAGE)]);
+      await write([reply(currentUrl === "about:blank" ? observedIdentity() : CAPTURED_PAGE)]);
       break;
     }
 
     case "Runtime.evaluate": {
-      await (readsByValue(params)
-        ? evaluateByValue(
-            reply(scenario === "evaluate-throws" ? THROWN : CAPTURED_PAGE),
-            onSession(sessionId, { error: TARGET_NAVIGATED, id }),
-          )
-        : write([reply(UTILITY_SCRIPT)]));
+      await answerEvaluate({ id, method, params, sessionId }, reply);
       break;
     }
 

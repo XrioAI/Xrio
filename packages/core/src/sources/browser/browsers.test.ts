@@ -5,10 +5,11 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { startDeadline } from "../../deadline.ts";
+import { startDeadline, untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
+import { evaluate } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
@@ -332,10 +333,11 @@ interface VisitCase {
 }
 
 const visitOn = async (
+  driver: BrowserDriver,
   { abortAfterMs, scenario, timeoutMs = 10_000 }: VisitCase,
   steps: Partial<RetireSteps> = {},
 ) => {
-  const browsers = createBrowsers(cdpDriver, 1, steps);
+  const browsers = createBrowsers(driver, 1, steps);
   const owner = new AbortController();
   const browserPath = await fakeChromePath(scenario);
   using deadline: Deadline & Disposable = startDeadline(timeoutMs);
@@ -368,7 +370,7 @@ const settledCleanly = { closed: { exited: true }, leftAtClose: nothingLeft };
 
 describe("browser visits on the fake browser", () => {
   it("resolves the document, then closes once Chrome and its profile are gone", async () => {
-    await expect(visitOn({ scenario: "normal" })).resolves.toMatchObject({
+    await expect(visitOn(cdpDriver, { scenario: "normal" })).resolves.toMatchObject({
       ...settledCleanly,
       document: { value: { status: 200, url: "https://fake.test/page" } },
     });
@@ -390,7 +392,7 @@ describe("browser visits on the fake browser", () => {
   ])(
     "rejects the document with $error after $scenario, then closes once nothing is left",
     async ({ error, ...visitCase }) => {
-      await expect(visitOn(visitCase)).resolves.toMatchObject({
+      await expect(visitOn(cdpDriver, visitCase)).resolves.toMatchObject({
         ...settledCleanly,
         document: { error },
       });
@@ -426,6 +428,7 @@ describe("browser visits on the fake browser", () => {
 
   it("closes with exited false and a reason when teardown cannot confirm that Chrome exited", async () => {
     const outcome = await visitOn(
+      cdpDriver,
       { scenario: "normal" },
       {
         retireProcessGroup: async (pgid) => {
@@ -1120,6 +1123,146 @@ describe("the identity a visit launches Chrome with", () => {
       expect(
         plan?.args.filter((value) => value.startsWith("--use-") && value !== BASELINE_USE_SWITCH),
       ).toStrictEqual(switches);
+    },
+  );
+});
+
+const readingWith = (read: (deadline: Deadline) => Promise<string>): BrowserDriver => ({
+  launch: async (plan, deadline, owned, deferCleanup) => {
+    const browser = await cdpDriver.launch(plan, deadline, owned, deferCleanup);
+
+    return {
+      ...browser,
+      evaluateIsolated: async (_expression, isResult, readDeadline) => {
+        const value = await read(readDeadline);
+
+        if (!isResult(value)) {
+          throw new Error("The test read returned an unexpected value.");
+        }
+
+        return value;
+      },
+    };
+  },
+});
+
+describe("the launch identity check", () => {
+  it("runs as the verify stage after launch and before navigation", async () => {
+    const browsers = createBrowsers(cdpDriver, 1);
+    using deadline = startDeadline(10_000);
+
+    using stages = stageTimeline(
+      new Set(["launch", "verify", "navigation", "capture", "teardown"]),
+    );
+
+    await stages.recording(async () => await browsers.load(await normalRequest(deadline)));
+    await browsers.close();
+    expect(stages.timeline).toStrictEqual([
+      "launch",
+      "verify",
+      "navigation",
+      "capture",
+      "teardown",
+    ]);
+  });
+
+  it("reads again once when Chrome reports an unsized window, then evaluates the sized one", async () => {
+    const observed: { outerWidth: number; outerHeight: number }[] = [];
+
+    const recordingEvaluate: typeof evaluate = (expected, observation) => {
+      observed.push({ outerHeight: observation.outerHeight, outerWidth: observation.outerWidth });
+
+      return evaluate(expected, observation);
+    };
+
+    const browsers = createBrowsers(cdpDriver, 1, { evaluate: recordingEvaluate });
+    using deadline = startDeadline(10_000);
+
+    const document = await settledValue(
+      browsers.load({
+        ...(await normalRequest(deadline)),
+        browserPath: await fakeChromePath("unsized-window"),
+      }),
+    );
+
+    await browsers.close();
+    expect({ document, observed }).toMatchObject({
+      document: { value: { status: 200 } },
+      observed: [{ outerHeight: 900, outerWidth: 1600 }],
+    });
+  });
+
+  it.each([
+    {
+      failure: "a malformed read",
+      message:
+        "Xrio could not read Chrome's launch identity: The identity read returned a malformed anyPointer",
+      read: async () => await Promise.resolve("{}"),
+    },
+    {
+      failure: "a read that is not JSON",
+      message: "Xrio could not read Chrome's launch identity: Unexpected token",
+      read: async () => await Promise.resolve("<html>"),
+    },
+    {
+      failure: "a read that throws",
+      message: "Xrio could not read Chrome's launch identity: Read failed.",
+      read: async () => await Promise.reject(new Error("Read failed.")),
+    },
+  ])("rejects $failure with BROWSER_LAUNCH_FAILED and no mismatches", async ({ message, read }) => {
+    const outcome = await visitOn(readingWith(read), { scenario: "normal" });
+
+    expect(outcome).toMatchObject({
+      ...settledCleanly,
+      document: {
+        error: { code: "BROWSER_LAUNCH_FAILED", details: { mismatches: [], stderr: "" } },
+      },
+    });
+    expect(outcome.document).toSatisfy(
+      ({ error }) => error instanceof Error && error.message.startsWith(message),
+    );
+  });
+
+  it.each([
+    {
+      deadlineMs: 60_000,
+      error: {
+        code: "BROWSER_LAUNCH_FAILED",
+        details: { mismatches: [] },
+        message:
+          "Xrio could not read Chrome's launch identity: The stage did not finish within 10000 ms.",
+      },
+      waitMs: 10_000,
+    },
+    { deadlineMs: 5000, error: { code: "TIMEOUT" }, waitMs: 5000 },
+  ])(
+    "rejects a read still running after $waitMs ms of a $deadlineMs ms deadline with $error.code",
+    async ({ deadlineMs, error, waitMs }) => {
+      const { advance, clock } = manualClock();
+      const readStarted = Promise.withResolvers<"started">();
+
+      const hangingRead = readingWith(async (deadline) => {
+        readStarted.resolve("started");
+
+        return await untilDeadline(
+          async () => await Promise.withResolvers<string>().promise,
+          deadline,
+        );
+      });
+
+      const browsers = createBrowsers(hangingRead, 1);
+      using deadline = startDeadline(deadlineMs, undefined, clock);
+      const visit = browsers.start(await normalRequest(deadline));
+
+      await readStarted.promise;
+      advance(waitMs);
+
+      const document = await settledValue(visit.document);
+      const closed = await visit.closed;
+
+      await browsers.close();
+      expect({ closed, document }).toMatchObject({ closed: { exited: true }, document: { error } });
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
 });

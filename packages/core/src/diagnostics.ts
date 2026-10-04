@@ -1,6 +1,13 @@
 import { channel } from "node:diagnostics_channel";
 
-export type Stage = "queue" | "launch" | "navigation" | "challenge" | "capture" | "teardown";
+export type Stage =
+  | "queue"
+  | "launch"
+  | "verify"
+  | "navigation"
+  | "challenge"
+  | "capture"
+  | "teardown";
 
 interface StageTiming {
   stage: Stage;
