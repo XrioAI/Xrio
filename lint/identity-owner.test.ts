@@ -101,7 +101,7 @@ const violations = [
   },
   {
     message:
-      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const j = { "Accept-Language": "fr" };',
   },
   {
@@ -135,17 +135,17 @@ const violations = [
   },
   {
     message:
-      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const computed = { ["accept-language"]: "fr" };',
   },
   {
     message:
-      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const tuples = new Headers([["Accept-Language", "fr"]]);',
   },
   {
     message:
-      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const record = new Headers({ "accept-language": "fr" });',
   },
   {
@@ -160,12 +160,12 @@ const violations = [
   },
   {
     message:
-      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const template = { [`accept-language`]: "fr" };',
   },
   {
     message:
-      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
     source: 'export const templateTuples = new Headers([[`accept-language`, "fr"]]);',
   },
   {
@@ -204,15 +204,40 @@ const violations = [
       "`intl.accept_languages` is a profile setting the Humanizer owns; only src/humanizer/ may write it.",
     source: 'export const dotted = { prefs: { "intl.accept_languages": "de" } };',
   },
+  {
+    message:
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'headers.set("accept-language", "fr");',
+  },
+  {
+    message:
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'headers.append("Accept-Language", "fr");',
+  },
+  {
+    message:
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'export const order = ["Host", "Accept-Language", "Priority"];',
+  },
+  {
+    message:
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'headers.set(`accept-language`, "fr");',
+  },
+  {
+    message:
+      "`accept-language` is a request header the Humanizer owns; only src/humanizer/ may use it.",
+    source: 'export const language = headers.get("Accept-Language");',
+  },
 ];
 
 const allowed = [
   'export const m = ["--disable-features=X", "--headless", "--language-tool"];',
   "export const n = process.env.DISPLAY;",
   'export const o = { HOME: "/h", "Content-Type": "x" };',
-  'export const p = ["Accept-Language", "Accept-Encoding"];',
+  'export const p = ["Accept-Encoding", "Content-Type"];',
   'export const q = "TZX";',
-  'headers.set("accept-language", "fr");',
+  'headers.set("accept-encoding", "gzip");',
   "export const r = { intl: { other: 1 }, net: { mode: 1 }, dns_over_https: {} };",
   'export const t = new Headers([["x-other", "1"]]);',
   "export const u = { preferences: { intl: { other: 1 } }, myintl: { accept_languages: 1 } };",

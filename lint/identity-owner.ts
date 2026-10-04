@@ -11,7 +11,7 @@ import {
   OWNED_SWITCHES,
 } from "../packages/core/src/humanizer/owned-inputs.ts";
 
-type LiteralKind = "switch" | "fork" | "environment" | "preference";
+type LiteralKind = "switch" | "fork" | "environment" | "preference" | "header";
 
 interface LiteralMatcher {
   readonly kind: LiteralKind;
@@ -30,6 +30,7 @@ const literalMatchers: readonly LiteralMatcher[] = [
   { find: (text) => FORK_SWITCH_PREFIXES.find((prefix) => text.startsWith(prefix)), kind: "fork" },
   { find: (text) => ENVIRONMENT_NAMES.find((name) => name === text), kind: "environment" },
   { find: (text) => PROFILE_SETTINGS.find((name) => name === text), kind: "preference" },
+  { find: (text) => OWNED_HEADERS.find((name) => name === text.toLowerCase()), kind: "header" },
 ];
 
 const isText = (value: unknown): value is string => typeof value === "string";
@@ -121,9 +122,6 @@ const memberName = ({ computed, property }: ESTree.MemberExpression): string | u
 const ownedVariable = (name: string | undefined): string | undefined =>
   ENVIRONMENT_NAMES.find((owned) => owned === name);
 
-const ownedHeader = (name: string | undefined): string | undefined =>
-  OWNED_HEADERS.find((owned) => owned === name?.toLowerCase());
-
 export default defineRule({
   create: (context) => {
     const reportText = (text: string, node: ESTree.Node): void => {
@@ -141,31 +139,14 @@ export default defineRule({
     const reportProperty = (property: ESTree.ObjectProperty): void => {
       const name = keyText(property);
       const variable = property.key.type === "Identifier" ? ownedVariable(name) : undefined;
-      const header = ownedHeader(name);
       const setting = settingEndingAt(property);
 
       if (variable !== undefined) {
         context.report({ data: { name: variable }, messageId: "environment", node: property });
       }
 
-      if (header !== undefined) {
-        context.report({ data: { name: header }, messageId: "header", node: property });
-      }
-
       if (setting !== undefined) {
         context.report({ data: { name: setting }, messageId: "preference", node: property });
-      }
-    };
-
-    const reportHeaderTuples = (entries: ESTree.ArrayExpression): void => {
-      for (const entry of entries.elements) {
-        const [first] = entry?.type === "ArrayExpression" ? entry.elements : [];
-        const name = first?.type === "Literal" ? first.value : plainTemplate(first);
-        const header = isText(name) ? ownedHeader(name) : undefined;
-
-        if (header !== undefined && first !== null && first !== undefined) {
-          context.report({ data: { name: header }, messageId: "header", node: first });
-        }
       }
     };
 
@@ -180,17 +161,6 @@ export default defineRule({
 
         if (variable !== undefined && isProcessEnv(node.object)) {
           context.report({ data: { name: variable }, messageId: "read", node });
-        }
-      },
-      NewExpression: (node) => {
-        const [entries] = node.arguments;
-
-        if (
-          node.callee.type === "Identifier" &&
-          node.callee.name === "Headers" &&
-          entries?.type === "ArrayExpression"
-        ) {
-          reportHeaderTuples(entries);
         }
       },
       ObjectExpression: (node) => {
@@ -224,7 +194,7 @@ export default defineRule({
       environment:
         "`{{name}}` is an environment variable the Humanizer owns; only src/humanizer/ may use it.",
       fork: "`{{name}}` switches belong to the browser fork's dialect; only src/humanizer/ may emit them.",
-      header: "`{{name}}` is a request header the Humanizer owns; only src/humanizer/ may set it.",
+      header: "`{{name}}` is a request header the Humanizer owns; only src/humanizer/ may use it.",
       preference:
         "`{{name}}` is a profile setting the Humanizer owns; only src/humanizer/ may write it.",
       read: "`process.env.{{name}}` is read by the Humanizer; take the value from the identity inputs.",
