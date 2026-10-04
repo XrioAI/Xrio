@@ -194,7 +194,7 @@ describe(readDeviceRecord, () => {
         ...record,
         device: {
           ...record.device,
-          window: { height: 900, kind: "floating", width: 1400, x: 10, y: 40 },
+          window: { height: 900, kind: "floating", width: 1400, x: 80, y: 40 },
         },
         policy: { locale: "de-DE", timezone: { kind: "pinned", zone: "Europe/Berlin" } },
       },
@@ -410,6 +410,75 @@ describe(readDeviceRecord, () => {
     expect(refusalOf(JSON.stringify(stored))).toStrictEqual({
       message: `Device record field ${field} is malformed.`,
       refusal: { field, kind: "malformed" },
+    });
+  });
+});
+
+const withDevice = (device: Partial<PresentedDevice>) =>
+  JSON.stringify({ ...record, device: { ...record.device, ...device } });
+
+describe("a stored record that cannot replay", () => {
+  it.each([
+    {
+      field: "device",
+      reason:
+        "its 1300x800 window at 5000,4000 is not a whole-pixel window inside its screen's work area",
+      stored: withDevice({
+        window: { height: 800, kind: "floating", width: 1300, x: 5000, y: 4000 },
+      }),
+    },
+    {
+      field: "device",
+      reason: "its screen 0x0 is not a size in whole pixels",
+      stored: withDevice({
+        screen: { height: 0, width: 0, workArea: { bottom: 0, left: 0, right: 0, top: 0 } },
+      }),
+    },
+    {
+      field: "device",
+      reason: "its screen 1920.5x1080 is not a size in whole pixels",
+      stored: withDevice({ screen: { ...record.device.screen, width: 1920.5 } }),
+    },
+    {
+      field: "device",
+      reason: "its screen's work area insets are not whole pixels",
+      stored: withDevice({
+        screen: { ...record.device.screen, workArea: { bottom: 0.5, left: 0, right: 0, top: 0 } },
+      }),
+    },
+    {
+      field: "device",
+      reason: "its screen's 1856x40 work area is under Chrome's 500x88 px minimum window",
+      stored: withDevice({
+        screen: {
+          ...record.device.screen,
+          workArea: { bottom: 1008, left: 64, right: 0, top: 32 },
+        },
+      }),
+    },
+    {
+      field: "device",
+      reason:
+        "its 1300x50 window at 100,100 is not a whole-pixel window inside its screen's work area",
+      stored: withDevice({ window: { height: 50, kind: "floating", width: 1300, x: 100, y: 100 } }),
+    },
+    {
+      field: "policy",
+      reason: "Xrio has not measured Chrome's language list for its locale xx-XX",
+      stored: JSON.stringify({ ...record, policy: { ...record.policy, locale: "xx-XX" } }),
+    },
+    {
+      field: "policy",
+      reason: "its zone Mars/Olympus is not one Chrome names",
+      stored: JSON.stringify({
+        ...record,
+        policy: { locale: "en-US", timezone: { kind: "pinned", zone: "Mars/Olympus" } },
+      }),
+    },
+  ])("is refused because $reason", ({ field, reason, stored }) => {
+    expect(refusalOf(stored)).toStrictEqual({
+      message: `Device record cannot replay: ${reason}.`,
+      refusal: { field, kind: "unreplayable", reason },
     });
   });
 });

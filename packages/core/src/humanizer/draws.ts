@@ -74,7 +74,7 @@ type DrawnWindow = Exclude<WindowState, { kind: "chrome-default" }>;
 
 export interface DrawnDisplay {
   readonly screen: PresentedDevice["screen"];
-  readonly layout: string;
+  readonly layout: string | null;
   readonly window: DrawnWindow;
 }
 

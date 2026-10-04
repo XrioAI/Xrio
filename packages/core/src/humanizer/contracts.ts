@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
+import { chromeAcceptLanguages } from "./owned-inputs.ts";
+import { canonicalZone } from "./zone-name.ts";
 
 export type Seed = string;
 
@@ -184,12 +186,28 @@ export interface Observation {
 
 export type DeviceRecordRefusal =
   | { readonly kind: "unknown-schema"; readonly schema: number }
-  | { readonly kind: "malformed"; readonly field: "record" | keyof DeviceRecord };
+  | { readonly kind: "malformed"; readonly field: "record" | keyof DeviceRecord }
+  | { readonly kind: "unreplayable"; readonly field: "device" | "policy"; readonly reason: string };
 
-const describeRefusal = (refusal: DeviceRecordRefusal): string =>
-  refusal.kind === "unknown-schema"
-    ? `Device record schema ${refusal.schema} is unknown; Xrio reads schema ${DEVICE_SCHEMA} only.`
-    : `Device record field ${refusal.field} is malformed.`;
+const describeRefusal = (refusal: DeviceRecordRefusal): string => {
+  switch (refusal.kind) {
+    case "unknown-schema": {
+      return `Device record schema ${refusal.schema} is unknown; Xrio reads schema ${DEVICE_SCHEMA} only.`;
+    }
+
+    case "malformed": {
+      return `Device record field ${refusal.field} is malformed.`;
+    }
+
+    case "unreplayable": {
+      return `Device record cannot replay: ${refusal.reason}.`;
+    }
+
+    default: {
+      throw new Error(`No description for ${JSON.stringify(refusal satisfies never)}.`);
+    }
+  }
+};
 
 export class DeviceRecordRefusedError extends Error {
   override readonly name = "DeviceRecordRefusedError";
@@ -208,6 +226,94 @@ const malformed = (
   new DeviceRecordRefusedError({ field, kind: "malformed" }, { cause });
 
 const SEED = /^[\da-f]{16}$/u;
+
+export const CHROME_MIN_WINDOW = { height: 88, width: 500 } as const;
+
+const isWholeAtLeast = (value: number, min: number): boolean =>
+  Number.isSafeInteger(value) && value >= min;
+
+const screenProblem = ({ height, width, workArea }: PresentedDevice["screen"]) => {
+  const insets = [workArea.top, workArea.right, workArea.bottom, workArea.left];
+
+  if (!isWholeAtLeast(width, 1) || !isWholeAtLeast(height, 1)) {
+    return `its screen ${width}x${height} is not a size in whole pixels`;
+  }
+
+  if (!insets.every((inset) => isWholeAtLeast(inset, 0))) {
+    return "its screen's work area insets are not whole pixels";
+  }
+
+  const areaWidth = width - workArea.left - workArea.right;
+  const areaHeight = height - workArea.top - workArea.bottom;
+  const fits = areaWidth >= CHROME_MIN_WINDOW.width && areaHeight >= CHROME_MIN_WINDOW.height;
+
+  return fits
+    ? undefined
+    : `its screen's ${areaWidth}x${areaHeight} work area is under Chrome's ${CHROME_MIN_WINDOW.width}x${CHROME_MIN_WINDOW.height} px minimum window`;
+};
+
+type FloatingWindow = Extract<WindowState, { kind: "floating" }>;
+
+const floatsInside = (screen: PresentedDevice["screen"], window: FloatingWindow): boolean => {
+  const { height, width, x, y } = window;
+
+  return (
+    [height, width, x, y].every((value) => Number.isSafeInteger(value)) &&
+    width >= CHROME_MIN_WINDOW.width &&
+    height >= CHROME_MIN_WINDOW.height &&
+    x >= screen.workArea.left &&
+    y >= screen.workArea.top &&
+    x + width <= screen.width - screen.workArea.right &&
+    y + height <= screen.height - screen.workArea.bottom
+  );
+};
+
+const windowProblem = ({ screen, window }: PresentedDevice): string | undefined =>
+  window.kind !== "floating" || floatsInside(screen, window)
+    ? undefined
+    : `its ${window.width}x${window.height} window at ${window.x},${window.y} is not a whole-pixel window inside its screen's work area`;
+
+const policyProblem = ({ locale, timezone }: DeviceRecord["policy"]) => {
+  if (chromeAcceptLanguages(locale) === undefined) {
+    return `Xrio has not measured Chrome's language list for its locale ${locale}`;
+  }
+
+  return timezone.kind === "exit" || canonicalZone(timezone.zone) !== undefined
+    ? undefined
+    : `its zone ${timezone.zone} is not one Chrome names`;
+};
+
+const unreplayable = (field: "device" | "policy", reason: string): DeviceRecordRefusedError =>
+  new DeviceRecordRefusedError({ field, kind: "unreplayable", reason });
+
+export const refuseUnreplayable = (record: DeviceRecord): DeviceRecord => {
+  const deviceProblem = screenProblem(record.device.screen) ?? windowProblem(record.device);
+
+  if (deviceProblem !== undefined) {
+    throw unreplayable("device", deviceProblem);
+  }
+
+  const problem = policyProblem(record.policy);
+
+  if (problem !== undefined) {
+    throw unreplayable("policy", problem);
+  }
+
+  return record;
+};
+
+export const headlessWindowOf = ({
+  device,
+}: DeviceRecord): Exclude<WindowState, { kind: "chrome-default" }> => {
+  if (device.window.kind === "chrome-default") {
+    throw unreplayable(
+      "device",
+      "its window is a headed Chrome's own, which a headless browser cannot present",
+    );
+  }
+
+  return device.window;
+};
 
 const isObject = (value: unknown): value is object =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -384,7 +490,7 @@ export const readDeviceRecord = (stored: string): DeviceRecord => {
     throw malformed("record");
   }
 
-  return { device, policy, schema: DEVICE_SCHEMA, seed };
+  return refuseUnreplayable({ device, policy, schema: DEVICE_SCHEMA, seed });
 };
 
 type StackContent =

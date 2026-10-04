@@ -194,6 +194,7 @@ describe("the identity report", () => {
       report: {
         binary: { fork: null, version: "154.0.8037.57" },
         coverage: secureCoverage,
+        digests: plan.chosen.digests,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         mode: "headless",
         notes: [],
@@ -227,6 +228,7 @@ describe("the identity report", () => {
           webgpu: false,
           window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
         },
+        record: plan.chosen.record,
         seed: fixedSeed,
         surfaces: {
           automation: null,
@@ -241,6 +243,7 @@ describe("the identity report", () => {
             source: "drawn",
             workArea: { bottom: 0, left: 0, right: 0, top: 32 },
           },
+          seed: { source: "fresh" },
           speech: { persona: null },
           timezone: { source: "host", zone: "UTC" },
           window: { height: 1018, kind: "maximized", source: "drawn", width: 1680, x: 0, y: 32 },
@@ -250,7 +253,7 @@ describe("the identity report", () => {
     });
   });
 
-  it("names the fork in the binary and adds the surfaces' tells to the observed ones", () => {
+  it("names the fork in the binary, its speech persona in the record, and adds the surfaces' tells", () => {
     const plan = planIdentity({
       capabilities: {
         fork: {
@@ -275,10 +278,12 @@ describe("the identity report", () => {
       binary: report.binary,
       speech: report.surfaces.speech,
       tells: report.tells,
+      voices: report.record.device.voices,
     }).toStrictEqual({
       binary: { fork: "xrio", version: "154.0.8037.57" },
       speech: { persona: "basharsx4-google-linux-154" },
       tells: ["headless-token", "host-zone-utc", "host-fonts", "speech-persona-skew"],
+      voices: { kind: "persona", name: "basharsx4-google-linux-154" },
     });
   });
 
@@ -298,6 +303,10 @@ describe("the identity report", () => {
       report: {
         binary: { fork: null, version: "154.0.8037.57" },
         coverage: insecureCoverage,
+        digests: {
+          device: "2d8b0e9006044e784b1c8773658016085faf838b559749604031e64bc30fdd08",
+          host: plan.chosen.digests.host,
+        },
         exit: { facts: { kind: "unknown" }, route: "direct" },
         mode: "headed",
         notes: [],
@@ -331,6 +340,24 @@ describe("the identity report", () => {
           webgpu: null,
           window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
         },
+        record: {
+          device: {
+            cores: 0,
+            fonts: { kind: "system" },
+            gpu: { backend: "native" },
+            memoryGb: 0,
+            screen: {
+              height: 1117,
+              width: 1728,
+              workArea: { bottom: 38, left: 0, right: 0, top: 0 },
+            },
+            voices: { kind: "system" },
+            window: { kind: "chrome-default" },
+          },
+          policy: { locale: "en-US", timezone: { kind: "host", zone: "America/Toronto" } },
+          schema: 1,
+          seed: fixedSeed,
+        },
         seed: fixedSeed,
         surfaces: {
           automation: null,
@@ -340,6 +367,7 @@ describe("the identity report", () => {
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { source: "host" },
           screen: { source: "host" },
+          seed: { source: "fresh" },
           speech: { persona: null },
           timezone: { source: "host", zone: "America/Toronto" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },

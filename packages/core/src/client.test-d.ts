@@ -239,6 +239,7 @@ describe("XrioClient types", () => {
       mismatches: readonly IdentityMismatch[];
     }>();
     expectTypeOf<IdentityMismatch["surface"]>().toEqualTypeOf<
+      | "seed"
       | "locale"
       | "timezone"
       | "gpu"

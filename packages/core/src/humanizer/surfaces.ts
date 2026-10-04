@@ -1,7 +1,14 @@
 import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
-import { knobOf } from "./contracts.ts";
-import type { GpuChoice, HostCapabilities, Insets, MediaDeviceCounts, Seed } from "./contracts.ts";
+import { knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
+import type {
+  DeviceRecord,
+  GpuChoice,
+  HostCapabilities,
+  Insets,
+  MediaDeviceCounts,
+  Seed,
+} from "./contracts.ts";
 import { drawDisplay, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
@@ -26,10 +33,9 @@ export interface ExitChoice {
   readonly facts: ExitFacts;
 }
 
-interface DeviceChoice {
-  readonly kind: "fresh";
-  readonly seed: Seed;
-}
+type DeviceChoice =
+  | { readonly kind: "fresh"; readonly seed: Seed }
+  | { readonly kind: "record"; readonly record: DeviceRecord };
 
 export interface IdentityContext {
   readonly mode: Exclude<ResolvedMode["mode"], "http">;
@@ -46,19 +52,22 @@ interface Size {
   readonly height: number;
 }
 
+type DeviceSource = "drawn" | "record";
+
 export interface SurfaceChoices {
+  readonly seed: { readonly source: DeviceChoice["kind"] };
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
   readonly timezone: { readonly source: "pin" | "exit" | "host"; readonly zone: string };
   readonly gpu: GpuChoice;
   readonly window:
-    | ({ readonly source: "drawn"; readonly kind: "maximized" | "floating" } & Bounds)
+    | ({ readonly source: DeviceSource; readonly kind: "maximized" | "floating" } & Bounds)
     | { readonly source: "fixed"; readonly size: Size };
   readonly screen:
     | {
-        readonly source: "drawn";
+        readonly source: DeviceSource;
         readonly size: Size;
         readonly workArea: Insets;
-        readonly layout: string;
+        readonly layout: string | null;
       }
     | { readonly source: "host" };
   readonly fonts:
@@ -80,6 +89,7 @@ interface Resolution<Value> {
 }
 
 export const EMISSION_ORDER = [
+  "seed",
   "locale",
   "timezone",
   "gpu",
@@ -97,6 +107,48 @@ export type SurfaceName = (typeof EMISSION_ORDER)[number];
 export type Resolutions = {
   readonly [Surface in SurfaceName]: Resolution<SurfaceChoices[Surface]>;
 };
+
+export interface Device {
+  readonly seed: Seed;
+  readonly source: SurfaceChoices["seed"]["source"];
+  readonly display: DrawnDisplay | null;
+}
+
+const recordedDisplay = (record: DeviceRecord): DrawnDisplay => ({
+  layout: null,
+  screen: record.device.screen,
+  window: headlessWindowOf(record),
+});
+
+export const deviceOf = ({ device, mode }: Pick<IdentityContext, "device" | "mode">): Device => {
+  if (device.kind === "fresh") {
+    const display = mode === "headed" ? null : drawDisplay(device.seed);
+
+    return { display, seed: device.seed, source: "fresh" };
+  }
+
+  const record = refuseUnreplayable(device.record);
+  const display = mode === "headed" ? null : recordedDisplay(record);
+
+  return { display, seed: record.seed, source: "record" };
+};
+
+const replayPolicy = (context: IdentityContext): IdentityContext => {
+  if (context.device.kind === "fresh") {
+    return context;
+  }
+
+  const { locale, timezone } = context.device.record.policy;
+
+  return {
+    ...context,
+    followExit: timezone.kind === "exit",
+    hostZone: timezone.kind === "host" ? timezone.zone : context.hostZone,
+    pins: { locale, timezone: timezone.kind === "pinned" ? timezone.zone : undefined },
+  };
+};
+
+const sourceOf = ({ source }: Device): DeviceSource => (source === "record" ? "record" : "drawn");
 
 const screenInfo = ({ height, width, workArea }: DrawnDisplay["screen"]): string =>
   `{0,0 ${width}x${height} colorDepth=24 devicePixelRatio=1 isInternal=0 rotation=0 ` +
@@ -264,11 +316,10 @@ const resolveHeadedWindow = (): Resolutions["window"] => ({
   value: { size: { ...HEADED_WINDOW }, source: "fixed" },
 });
 
-const resolveWindow = (
-  { mode }: Pick<IdentityContext, "mode">,
-  display: DrawnDisplay,
-): Resolutions["window"] => {
-  if (mode === "headed") {
+const resolveWindow = (device: Device): Resolutions["window"] => {
+  const { display } = device;
+
+  if (display === null) {
     return resolveHeadedWindow();
   }
 
@@ -288,7 +339,7 @@ const resolveWindow = (
     value: {
       height: bounds.height,
       kind: display.window.kind,
-      source: "drawn",
+      source: sourceOf(device),
       width: bounds.width,
       x: bounds.x,
       y: bounds.y,
@@ -296,30 +347,45 @@ const resolveWindow = (
   };
 };
 
-const resolveScreen = (
-  { mode }: Pick<IdentityContext, "mode">,
-  { layout, screen }: DrawnDisplay,
-): Resolutions["screen"] => {
-  if (mode === "headed") {
-    return { expected: [], inputs: [], value: { source: "host" } };
-  }
-
+const screenExpectations = (
+  screen: DrawnDisplay["screen"],
+  severity: Expectation["severity"],
+): Expectation[] => {
   const area = workAreaOf(screen);
 
+  return [
+    compatible("screenWidth", equals(screen.width), severity),
+    compatible("screenHeight", equals(screen.height), severity),
+    compatible("availWidth", equals(area.width), severity),
+    compatible("availHeight", equals(area.height), severity),
+    compatible("availLeft", equals(area.x), severity),
+    compatible("availTop", equals(area.y), severity),
+  ];
+};
+
+const resolveHostScreen = ({ device }: Pick<IdentityContext, "device">): Resolutions["screen"] => ({
+  expected: device.kind === "record" ? screenExpectations(device.record.device.screen, "note") : [],
+  inputs: [],
+  value: { source: "host" },
+});
+
+const resolveScreen = (
+  context: Pick<IdentityContext, "device">,
+  device: Device,
+): Resolutions["screen"] => {
+  if (device.display === null) {
+    return resolveHostScreen(context);
+  }
+
+  const { layout, screen } = device.display;
+
   return {
-    expected: [
-      compatible("screenWidth", equals(screen.width), "fatal"),
-      compatible("screenHeight", equals(screen.height), "fatal"),
-      compatible("availWidth", equals(area.width), "fatal"),
-      compatible("availHeight", equals(area.height), "fatal"),
-      compatible("availLeft", equals(area.x), "fatal"),
-      compatible("availTop", equals(area.y), "fatal"),
-    ],
+    expected: screenExpectations(screen, "fatal"),
     inputs: [{ name: "--screen-info", sink: "switch", value: screenInfo(screen) }],
     value: {
       layout,
       size: { height: screen.height, width: screen.width },
-      source: "drawn",
+      source: sourceOf(device),
       workArea: { ...screen.workArea },
     },
   };
@@ -442,18 +508,20 @@ const resolveAutomation = ({
 });
 
 export const resolveSurfaces = (context: IdentityContext): Resolutions => {
-  const display = drawDisplay(context.device.seed);
+  const replayed = replayPolicy(context);
+  const device = deviceOf(context);
 
   return {
-    automation: resolveAutomation(context),
-    fonts: resolveFonts(context),
-    gpu: resolveGpu(context),
+    automation: resolveAutomation(replayed),
+    fonts: resolveFonts(replayed),
+    gpu: resolveGpu(replayed),
     leaks: resolveLeaks(),
-    locale: resolveLocale(context),
-    media: resolveMedia(context),
-    screen: resolveScreen(context, display),
-    speech: resolveSpeech(context),
-    timezone: resolveTimezone(context),
-    window: resolveWindow(context, display),
+    locale: resolveLocale(replayed),
+    media: resolveMedia(replayed),
+    screen: resolveScreen(replayed, device),
+    seed: { expected: [], inputs: [], value: { source: device.source } },
+    speech: resolveSpeech(replayed),
+    timezone: resolveTimezone(replayed),
+    window: resolveWindow(device),
   };
 };

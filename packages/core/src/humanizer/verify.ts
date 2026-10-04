@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
+import { deviceDigest } from "./contracts.ts";
 import type {
   AfterCapture,
   ClientHints,
@@ -11,9 +12,12 @@ import type {
 import { FONT_PROBE_FAMILIES, FONT_SENTINEL_FAMILIES } from "./fonts.ts";
 import type { FontRead } from "./fonts.ts";
 import type { IdentityPlan } from "./humanizer.ts";
+import { presentedScreen, recordOf } from "./record.ts";
 import { coverageOf, observedOf } from "./report.ts";
 import type { BrowserIdentityReport } from "./report.ts";
 import type { SurfaceName } from "./surfaces.ts";
+
+const HEADED_WINDOW = { kind: "chrome-default" } as const;
 
 const MEASURED_MAJORS: ReadonlySet<number> = new Set([154]);
 
@@ -60,7 +64,8 @@ export type FactTell =
   | "exit-unknown"
   | "speech-persona-skew"
   | "http-profile-skew"
-  | "host-fonts";
+  | "host-fonts"
+  | "replay-host-skew";
 
 export type IdentityTell =
   | "no-taskbar"
@@ -370,6 +375,15 @@ export const evaluate = (
   observation: Observation,
 ): Evaluation => {
   const measured = isMeasured(observation.product);
+
+  const record =
+    chosen.record ??
+    recordOf(
+      chosen.seed,
+      { screen: presentedScreen(observation), window: HEADED_WINDOW },
+      chosen.surfaces,
+    );
+
   const mismatches: IdentityMismatch[] = [];
   const notes: IdentityMismatch[] = [];
 
@@ -395,10 +409,12 @@ export const evaluate = (
     report: {
       binary: { fork: chosen.fork, version: observation.product.version },
       coverage: coverageOf({ fonts: fontEvidence, fontsDrifted: drifted }, observation),
+      digests: { device: deviceDigest(record), host: chosen.digests.host },
       exit: chosen.exit,
       mode: chosen.mode,
       notes: structuredClone(notes),
       observed: observedOf(observation, drifted ? undefined : fontEvidence),
+      record,
       seed: chosen.seed,
       surfaces: chosen.surfaces,
       tells: [

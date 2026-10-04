@@ -864,9 +864,14 @@ describe("the chosen identity", () => {
         }),
       ).chosen,
     ).toStrictEqual({
+      digests: {
+        device: null,
+        host: "b764e55bf78b66aa3ae5a19887dc836c3f68fc089dd58a8247efa2e3e83d6867",
+      },
       exit: { facts: { kind: "unknown" }, route: "proxy" },
       fork: null,
       mode: "headed",
+      record: null,
       seed: fixedSeed,
       surfaces: {
         automation: null,
@@ -876,6 +881,7 @@ describe("the chosen identity", () => {
         locale: { languages: ["en-US", "en"], tag: "en-US" },
         media: { source: "host" },
         screen: { source: "host" },
+        seed: { source: "fresh" },
         speech: { persona: null },
         timezone: { source: "host", zone: "Europe/Berlin" },
         window: { size: { height: 900, width: 1600 }, source: "fixed" },

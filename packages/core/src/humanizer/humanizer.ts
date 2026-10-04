@@ -1,20 +1,32 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 
-import type { FontEvidence, ForkFacts, HostCapabilities } from "./contracts.ts";
+import { deviceDigest, hostDigest } from "./contracts.ts";
+import type { DeviceRecord, FontEvidence, ForkFacts, HostCapabilities } from "./contracts.ts";
 import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
 import type { IdentityIntent } from "./intent.ts";
+import { fontsOf, recordOf, voicesOf } from "./record.ts";
 import { httpReport } from "./report.ts";
 import type { HttpIdentityReport } from "./report.ts";
-import { EMISSION_ORDER, presentedLocale, resolveSurfaces } from "./surfaces.ts";
-import type { ExitChoice, IdentityContext, Resolutions, SurfaceChoices } from "./surfaces.ts";
+import { deviceOf, EMISSION_ORDER, presentedLocale, resolveSurfaces } from "./surfaces.ts";
+import type {
+  Device,
+  ExitChoice,
+  IdentityContext,
+  Resolutions,
+  SurfaceChoices,
+} from "./surfaces.ts";
 import { AFTER_CAPTURE_READ, identityRead } from "./verify.ts";
 import type { FactTell, SurfaceExpectation } from "./verify.ts";
 
 interface ChosenIdentity {
   readonly mode: IdentityContext["mode"];
   readonly fork: ForkFacts["dialect"] | null;
-  readonly seed: IdentityContext["device"]["seed"];
+  readonly seed: Device["seed"];
+  readonly record: DeviceRecord | null;
+  readonly digests: { readonly device: string | null; readonly host: string };
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;
 }
@@ -36,21 +48,48 @@ const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   locale: resolutions.locale.value,
   media: resolutions.media.value,
   screen: resolutions.screen.value,
+  seed: resolutions.seed.value,
   speech: resolutions.speech.value,
   timezone: resolutions.timezone.value,
   window: resolutions.window.value,
 });
 
+const hostSkewed = (record: DeviceRecord, surfaces: SurfaceChoices): boolean =>
+  !isDeepStrictEqual(record.device.gpu, surfaces.gpu) ||
+  !isDeepStrictEqual(record.device.fonts, fontsOf(surfaces)) ||
+  !isDeepStrictEqual(record.device.voices, voicesOf(surfaces.speech));
+
+const recordFor = (
+  { device }: IdentityContext,
+  { display, seed }: Device,
+  surfaces: SurfaceChoices,
+): DeviceRecord | null => {
+  if (device.kind === "record") {
+    return structuredClone(device.record);
+  }
+
+  return display === null ? null : recordOf(seed, display, surfaces);
+};
+
 export const planIdentity = (context: IdentityContext): IdentityPlan => {
   const resolutions = resolveSurfaces(context);
+  const device = deviceOf(context);
+  const surfaces = choicesOf(resolutions);
+  const record = recordFor(context, device, surfaces);
+  const skewed = context.device.kind === "record" && hostSkewed(context.device.record, surfaces);
 
   return {
     chosen: {
+      digests: {
+        device: record === null ? null : deviceDigest(record),
+        host: hostDigest(context.capabilities),
+      },
       exit: context.exit,
       fork: context.capabilities.fork?.dialect ?? null,
       mode: context.mode,
-      seed: context.device.seed,
-      surfaces: choicesOf(resolutions),
+      record,
+      seed: device.seed,
+      surfaces,
     },
     expected: EMISSION_ORDER.flatMap((surface) =>
       resolutions[surface].expected.map((expectation) => ({ ...expectation, surface })),
@@ -64,7 +103,10 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
         context.capabilities.fontEvidence === undefined ? "full" : "sentinel",
       ),
     },
-    tells: EMISSION_ORDER.flatMap((surface) => resolutions[surface].tells ?? []),
+    tells: [
+      ...EMISSION_ORDER.flatMap((surface) => resolutions[surface].tells ?? []),
+      ...(skewed ? ["replay-host-skew" as const] : []),
+    ],
   };
 };
 

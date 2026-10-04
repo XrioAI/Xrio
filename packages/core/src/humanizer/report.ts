@@ -3,6 +3,7 @@ import type {
   ClientHints,
   FontEvidence,
   HostCapabilities,
+  DeviceRecord,
   Observation,
 } from "./contracts.ts";
 import type { ExitChoice, IdentityContext, SurfaceChoices } from "./surfaces.ts";
@@ -93,6 +94,8 @@ export interface ObservedIdentity {
 export interface BrowserIdentityReport {
   readonly mode: IdentityContext["mode"];
   readonly seed: string;
+  readonly record: DeviceRecord;
+  readonly digests: { readonly device: string; readonly host: string };
   readonly binary: { readonly version: string; readonly fork: "xrio" | null };
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;
