@@ -73,7 +73,7 @@ describe("process host facts", () => {
 
       await expect(
         hostFactsFor(new CacheDir(root)).snapshotFor(undefined, deadline),
-      ).resolves.toStrictEqual({ platform: process.platform });
+      ).resolves.toMatchObject({ platform: process.platform });
       await expect(readdir(root)).resolves.toStrictEqual([]);
     });
   });

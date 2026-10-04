@@ -87,6 +87,7 @@ export interface ForkFacts {
 
 export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
+  readonly readableRenderNode?: true;
   readonly fork?: ForkFacts;
 }
 

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { access, constants, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { text } from "node:stream/consumers";
@@ -50,6 +50,10 @@ const FAILED_PROBE_TTL_MS = 60_000;
 const STDERR_TAIL_CHARS = 2048;
 
 const FACTS_FORMAT = 1;
+
+const RENDER_NODE_DIRECTORY = "/dev/dri";
+
+const RENDER_NODE_NAME = /^renderD\d+$/u;
 
 const UNSET_VALUES = new Set(["<unset>", "<absent>"]);
 
@@ -111,6 +115,7 @@ interface RawArtifact {
 interface ProbeOptions {
   readonly budgetMs: number;
   readonly now: () => number;
+  readonly renderNodeDirectory: string;
   readonly root: string;
   readonly scratchRoot: string;
   readonly signal: AbortSignal;
@@ -233,6 +238,28 @@ const isFile = async (file: string): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+const isReadable = async (file: string): Promise<boolean> => {
+  try {
+    await access(file, constants.R_OK);
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const hasReadableRenderNode = async (directory: string): Promise<boolean> => {
+  const names = await namesIn(directory);
+
+  const readable = await Promise.all(
+    names
+      .filter((name) => RENDER_NODE_NAME.test(name))
+      .map(async (name) => await isReadable(path.join(directory, name))),
+  );
+
+  return readable.includes(true);
 };
 
 const declaresFork = async (versions: string): Promise<boolean> => {
@@ -651,6 +678,7 @@ export const createCapabilityProbe = (
   const options: ProbeOptions = {
     budgetMs: PROBE_BUDGET_MS,
     now: Date.now,
+    renderNodeDirectory: RENDER_NODE_DIRECTORY,
     root: hostCacheRoot(),
     scratchRoot: overrides.root ?? scratchRoot(),
     signal: new AbortController().signal,
@@ -752,10 +780,14 @@ export const createCapabilityProbe = (
   };
 
   return async (browserPath, deadline) => {
+    const host: HostCapabilities = (await hasReadableRenderNode(options.renderNodeDirectory))
+      ? { platform: process.platform, readableRenderNode: true }
+      : { platform: process.platform };
+
     const fork = browserPath === undefined ? undefined : await forkPackageOf(browserPath);
 
     if (fork === undefined) {
-      return { platform: process.platform };
+      return host;
     }
 
     const facts =
@@ -763,6 +795,6 @@ export const createCapabilityProbe = (
         ? await forkFactsOf(fork)
         : await untilDeadline(async () => await forkFactsOf(fork), deadline);
 
-    return { fork: facts, platform: process.platform };
+    return { ...host, fork: facts };
   };
 };

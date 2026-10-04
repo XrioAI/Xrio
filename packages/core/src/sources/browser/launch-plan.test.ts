@@ -9,6 +9,8 @@ import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
 
 const scratchDir = "/tmp/xrio-501/bAbC123";
 
+const GL_SWITCH = /^--(?:use-gl|use-angle|enable-unsafe-swiftshader)(?:=|$)/u;
+
 interface IdentityChoice {
   readonly headless: boolean;
   readonly platform: NodeJS.Platform;
@@ -87,6 +89,29 @@ describe(planLaunch, () => {
     ]);
     expect(plan.env).not.toHaveProperty("DISPLAY");
     expect(plan.env).not.toHaveProperty("XAUTHORITY");
+  });
+
+  it("plans ANGLE on Vulkan instead of SwiftShader when a render node is readable", () => {
+    const { args } = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/chrome/chrome",
+      display: ":99",
+      headless: false,
+      identity: planIdentity({
+        capabilities: { platform: "linux", readableRenderNode: true },
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headed",
+        pins: noPins,
+      }).inputs,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(args.filter((arg) => GL_SWITCH.test(arg))).toStrictEqual([
+      "--use-gl=angle",
+      "--use-angle=vulkan",
+    ]);
   });
 
   it("places the caller's switches after Xrio's and before the profile tail", () => {

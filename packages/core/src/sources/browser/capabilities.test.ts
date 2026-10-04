@@ -12,6 +12,7 @@ import {
   realpath,
   rename,
   rm,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -99,6 +100,32 @@ const failureOf = async (pending: Promise<unknown>) => {
   throw new Error("The probe resolved.");
 };
 
+type RenderNodeKind = "readable" | "dangling";
+
+const writeRenderNode = async (
+  directory: string,
+  name: string,
+  kind: RenderNodeKind,
+): Promise<void> => {
+  const node = path.join(directory, name);
+
+  await (kind === "readable"
+    ? writeFile(node, "")
+    : symlink(path.join(directory, "missing-device"), node));
+};
+
+const driWith = async (
+  directory: string,
+  nodes: Readonly<Record<string, RenderNodeKind>>,
+): Promise<void> => {
+  await mkdir(directory);
+  await Promise.all(
+    Object.entries(nodes).map(async ([name, kind]) => {
+      await writeRenderNode(directory, name, kind);
+    }),
+  );
+};
+
 const deadPid = async (): Promise<number> => {
   const child = spawn("/usr/bin/true");
 
@@ -143,8 +170,11 @@ describe("hostCapabilities", () => {
 
   const scratch = () => path.join(root, "scratch");
 
-  const probeWith = (overrides: { now?: () => number; budgetMs?: number } = {}) =>
-    createCapabilityProbe({ root: scratch(), ...overrides });
+  const dri = () => path.join(root, "dri");
+
+  const probeWith = (
+    overrides: { now?: () => number; budgetMs?: number; renderNodeDirectory?: string } = {},
+  ) => createCapabilityProbe({ renderNodeDirectory: dri(), root: scratch(), ...overrides });
 
   const forkAt = async (scenario: FakeForkScenario) => await fakeForkPath(scenario, { root });
 
@@ -264,6 +294,55 @@ describe("hostCapabilities", () => {
         code: "BROWSER_LAUNCH_FAILED",
         message: `The Xrio fork package at ${await packageOf(executable)} failed its probe: the dump lists 39 of 77 knobs.`,
       });
+    });
+  });
+
+  describe("the render node", () => {
+    it("is absent where the host has no /dev/dri", async () => {
+      await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        platform: process.platform,
+      });
+    });
+
+    it("ignores the display's card node and entries that are not render nodes", async () => {
+      await driWith(dri(), {
+        card0: "readable",
+        renderD: "readable",
+        "renderD128.bak": "readable",
+      });
+
+      await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        platform: process.platform,
+      });
+    });
+
+    it("is present when any render node opens for reading", async () => {
+      await driWith(dri(), { card0: "readable", renderD128: "dangling", renderD129: "readable" });
+
+      await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        platform: process.platform,
+        readableRenderNode: true,
+      });
+    });
+
+    it("is absent when every render node fails to open", async () => {
+      await driWith(dri(), { renderD128: "dangling" });
+
+      await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        platform: process.platform,
+      });
+    });
+
+    it("accompanies the fork's facts", async () => {
+      await driWith(dri(), { renderD128: "readable" });
+
+      const capabilities = await probeWith()(await forkAt("kit"));
+
+      expect([
+        capabilities.platform,
+        capabilities.readableRenderNode,
+        capabilities.fork?.version,
+      ]).toStrictEqual([process.platform, true, "154.0.8037.57"]);
     });
   });
 

@@ -359,6 +359,20 @@ describe("the gpu surface", () => {
     });
   });
 
+  it("selects ANGLE on Vulkan on Linux when a render node is readable", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: { platform: "linux", readableRenderNode: true } }))
+        .gpu,
+    ).toStrictEqual({
+      expected: [],
+      inputs: [
+        { name: "--use-gl", sink: "switch", value: "angle" },
+        { name: "--use-angle", sink: "switch", value: "vulkan" },
+      ],
+      value: { backend: "native" },
+    });
+  });
+
   it.each(["darwin", "win32"] as const)("leaves the system's backend alone on %s", (platform) => {
     expect(resolveSurfaces(contextOf({ capabilities: { platform } })).gpu).toStrictEqual({
       expected: [],

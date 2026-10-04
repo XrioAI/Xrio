@@ -197,14 +197,34 @@ const resolveTimezone = (
   };
 };
 
-const resolveGpu = ({ capabilities }: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] =>
-  capabilities.platform === "linux"
+const chooseGpu = ({
+  platform,
+  readableRenderNode,
+}: HostCapabilities): Pick<Resolutions["gpu"], "inputs" | "value"> => {
+  if (platform !== "linux") {
+    return { inputs: [], value: { backend: "native" } };
+  }
+
+  return readableRenderNode === true
     ? {
-        expected: [],
+        inputs: [
+          { name: "--use-gl", sink: "switch", value: "angle" },
+          { name: "--use-angle", sink: "switch", value: "vulkan" },
+        ],
+        value: { backend: "native" },
+      }
+    : {
         inputs: [{ name: "--enable-unsafe-swiftshader", sink: "switch" }],
         value: { backend: "swiftshader", persona: null },
-      }
-    : { expected: [], inputs: [], value: { backend: "native" } };
+      };
+};
+
+const resolveGpu = ({
+  capabilities,
+}: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] => ({
+  expected: [],
+  ...chooseGpu(capabilities),
+});
 
 const resolveWindow = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["window"] => ({
   expected:

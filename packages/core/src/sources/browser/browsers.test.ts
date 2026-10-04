@@ -10,7 +10,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-p
 import { startDeadline, untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
-import type { Observation } from "../../humanizer/contracts.ts";
+import type { HostCapabilities, Observation } from "../../humanizer/contracts.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import { AFTER_CAPTURE_READ, evaluate } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
@@ -1222,18 +1222,32 @@ describe("the identity a visit launches Chrome with", () => {
 
   it.each([
     {
-      platform: "linux" as const,
+      capabilities: { platform: "linux" },
+      host: "Linux",
       switches: [
         "--enable-unsafe-swiftshader",
         "--use-fake-device-for-media-stream=device-count=0",
       ],
     },
-    { platform: "darwin" as const, switches: [] },
-  ])(
-    "selects the GL backend and the media devices from the host's $platform capabilities",
-    async ({ platform, switches }) => {
+    {
+      capabilities: { platform: "linux", readableRenderNode: true },
+      host: "Linux with a render node",
+      switches: [
+        "--use-gl=angle",
+        "--use-angle=vulkan",
+        "--use-fake-device-for-media-stream=device-count=0",
+      ],
+    },
+    { capabilities: { platform: "darwin" }, host: "darwin", switches: [] },
+  ] satisfies readonly {
+    readonly capabilities: HostCapabilities;
+    readonly host: string;
+    readonly switches: readonly string[];
+  }[])(
+    "selects the GL backend and the media devices from the capabilities of $host",
+    async ({ capabilities, switches }) => {
       const plan = await launchPlanOf({
-        hostCapabilities: async () => await Promise.resolve({ platform }),
+        hostCapabilities: async () => await Promise.resolve(capabilities),
       });
 
       expect(
