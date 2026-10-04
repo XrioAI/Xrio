@@ -582,6 +582,28 @@ describe("the automation surface", () => {
     });
   });
 
+  it("expects no HeadlessChrome token where the fork suppresses it", () => {
+    expect(resolveSurfaces(contextOf({ capabilities: forkWith(null) })).automation).toStrictEqual({
+      expected: [
+        noWebdriver,
+        {
+          compatibility: false,
+          field: "userAgent",
+          matcher: { kind: "no-headless-token" },
+          severity: "fatal",
+        },
+        {
+          compatibility: true,
+          field: "colorScheme",
+          matcher: { kind: "equals", value: "light" },
+          severity: "note",
+        },
+      ],
+      inputs: [],
+      value: null,
+    });
+  });
+
   it("expects no colour scheme on macOS, where it follows the host", () => {
     expect(
       resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).automation,

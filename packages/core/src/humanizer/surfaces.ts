@@ -283,11 +283,19 @@ const resolveMedia = ({
       }
     : { expected: [], inputs: [], value: { source: "host" } };
 
+const NO_HEADLESS_TOKEN: Expectation = {
+  compatibility: false,
+  field: "userAgent",
+  matcher: { kind: "no-headless-token" },
+  severity: "fatal",
+};
+
 const resolveAutomation = ({
   capabilities,
 }: Pick<IdentityContext, "capabilities">): Resolutions["automation"] => ({
   expected: [
     compatible("webdriver", equals(false), "fatal"),
+    ...(knobOf(capabilities, "suppress-headless-token") === "true" ? [NO_HEADLESS_TOKEN] : []),
     ...(capabilities.platform === "linux"
       ? [compatible("colorScheme", equals("light"), "note")]
       : []),

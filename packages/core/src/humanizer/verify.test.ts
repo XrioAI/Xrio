@@ -111,6 +111,22 @@ describe("each matcher kind", () => {
       }),
       wanted: 1920,
     },
+    {
+      held: linuxHeadless,
+      kind: "no-headless-token",
+      missed: {
+        ...linuxHeadless,
+        userAgent:
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      },
+      rule: expectation({
+        field: "userAgent",
+        matcher: { kind: "no-headless-token" },
+        surface: "automation",
+      }),
+      wanted:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    },
   ] as const)("$kind holds or names the field it missed", ({ held, missed, rule, wanted }) => {
     expect(evaluate(planWith([rule]), held).mismatches).toStrictEqual([]);
     expect(evaluate(planWith([rule]), missed).mismatches).toStrictEqual([

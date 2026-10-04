@@ -15,6 +15,8 @@ const PLAUSIBLE_COLOR_DEPTH = 24;
 
 const UNRESOLVED_ZONE = "Etc/Unknown";
 
+const HEADLESS_TOKEN = "HeadlessChrome/";
+
 export type ObservedField = Exclude<keyof Observation, "product" | "afterCapture">;
 
 export type Observed = Observation[ObservedField];
@@ -24,7 +26,8 @@ export type Matcher =
   | { readonly kind: "same-language"; readonly locale: string }
   | { readonly kind: "named-zone" }
   | { readonly kind: "zone-offsets" }
-  | { readonly kind: "at-most-field"; readonly field: ObservedField };
+  | { readonly kind: "at-most-field"; readonly field: ObservedField }
+  | { readonly kind: "no-headless-token" };
 
 export interface Expectation {
   readonly field: ObservedField;
@@ -215,6 +218,10 @@ const expectedBy = (matcher: Matcher, observation: Observation): Observed => {
       return observation[matcher.field];
     }
 
+    case "no-headless-token": {
+      return observation.userAgent.replaceAll(HEADLESS_TOKEN, "Chrome/");
+    }
+
     default: {
       throw new Error(`No rule for ${JSON.stringify(matcher satisfies never)}.`);
     }
@@ -239,6 +246,10 @@ const holds = (matcher: Matcher, expected: Observed, observed: Observed): boolea
 
     case "named-zone": {
       return namesZone(observed);
+    }
+
+    case "no-headless-token": {
+      return isTextValue(observed) && !observed.includes(HEADLESS_TOKEN);
     }
 
     case "equals":
