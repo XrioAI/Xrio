@@ -34,6 +34,8 @@ const headlessLinux: Observation = {
   },
   anyPointer: "fine",
   availHeight: 1040,
+  availLeft: 0,
+  availTop: 0,
   availWidth: 1920,
   colorDepth: 24,
   colorScheme: "light",
@@ -54,6 +56,8 @@ const headlessLinux: Observation = {
   requestedZone: "UTC",
   screenHeight: 1080,
   screenWidth: 1920,
+  screenX: 22,
+  screenY: 22,
   userAgent: linuxUserAgent,
   webdriver: false,
   webgl: true,
@@ -204,6 +208,8 @@ describe("the identity report", () => {
           reducedMotion: "no-preference",
           screen: {
             availHeight: 1040,
+            availLeft: 0,
+            availTop: 0,
             availWidth: 1920,
             colorDepth: 24,
             devicePixelRatio: 1,
@@ -214,7 +220,7 @@ describe("the identity report", () => {
           userAgent: linuxUserAgent,
           webdriver: false,
           webgpu: false,
-          window: { outerHeight: 900, outerWidth: 1600 },
+          window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
         },
         surfaces: {
           automation: null,
@@ -302,6 +308,8 @@ describe("the identity report", () => {
           reducedMotion: "no-preference",
           screen: {
             availHeight: 1079,
+            availLeft: 0,
+            availTop: 0,
             availWidth: 1728,
             colorDepth: 24,
             devicePixelRatio: 2,
@@ -312,7 +320,7 @@ describe("the identity report", () => {
           userAgent: macUserAgent,
           webdriver: false,
           webgpu: null,
-          window: { outerHeight: 900, outerWidth: 1600 },
+          window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
         },
         surfaces: {
           automation: null,

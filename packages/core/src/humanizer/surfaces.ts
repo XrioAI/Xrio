@@ -258,6 +258,8 @@ const resolveScreen = ({ mode }: Pick<IdentityContext, "mode">): Resolutions["sc
           compatible("screenHeight", equals(SCREEN.height), "fatal"),
           compatible("availWidth", equals(SCREEN.width), "fatal"),
           compatible("availHeight", equals(SCREEN.height - SCREEN.workAreaInset), "fatal"),
+          compatible("availLeft", equals(0), "fatal"),
+          compatible("availTop", equals(0), "fatal"),
         ],
         inputs: [{ name: "--screen-info", sink: "switch", value: screenInfo() }],
         value: {

@@ -67,10 +67,17 @@ export interface ObservedIdentity {
     readonly height: number;
     readonly availWidth: number;
     readonly availHeight: number;
+    readonly availLeft: number;
+    readonly availTop: number;
     readonly colorDepth: number;
     readonly devicePixelRatio: number;
   };
-  readonly window: { readonly outerWidth: number; readonly outerHeight: number };
+  readonly window: {
+    readonly outerWidth: number;
+    readonly outerHeight: number;
+    readonly screenX: number;
+    readonly screenY: number;
+  };
   readonly colorScheme: string | null;
   readonly reducedMotion: string | null;
   readonly pointer: string | null;
@@ -218,6 +225,8 @@ export const observedOf = (
     reducedMotion: observation.reducedMotion,
     screen: {
       availHeight: observation.availHeight,
+      availLeft: observation.availLeft,
+      availTop: observation.availTop,
       availWidth: observation.availWidth,
       colorDepth: observation.colorDepth,
       devicePixelRatio: observation.devicePixelRatio,
@@ -228,7 +237,12 @@ export const observedOf = (
     userAgent: observation.userAgent,
     webdriver: observation.webdriver,
     webgpu,
-    window: { outerHeight: observation.outerHeight, outerWidth: observation.outerWidth },
+    window: {
+      outerHeight: observation.outerHeight,
+      outerWidth: observation.outerWidth,
+      screenX: observation.screenX,
+      screenY: observation.screenY,
+    },
   };
 };
 

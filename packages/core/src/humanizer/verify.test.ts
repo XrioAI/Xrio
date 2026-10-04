@@ -25,6 +25,8 @@ const linuxHeadless: Observation = {
   afterCapture: { kind: "not-navigated" },
   anyPointer: "fine",
   availHeight: 1040,
+  availLeft: 0,
+  availTop: 0,
   availWidth: 1920,
   colorDepth: 24,
   colorScheme: "light",
@@ -45,6 +47,8 @@ const linuxHeadless: Observation = {
   requestedZone: "Asia/Kolkata",
   screenHeight: 1080,
   screenWidth: 1920,
+  screenX: 22,
+  screenY: 22,
   userAgent:
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
   webdriver: false,
@@ -574,7 +578,17 @@ const pageGlobals = (matching: ReadonlySet<string>, options: PageOptions) => ({
   },
   outerHeight: 900,
   outerWidth: 1600,
-  screen: { availHeight: 1040, availWidth: 1920, colorDepth: 24, height: 1080, width: 1920 },
+  screen: {
+    availHeight: 1040,
+    availLeft: 0,
+    availTop: 32,
+    availWidth: 1920,
+    colorDepth: 24,
+    height: 1080,
+    width: 1920,
+  },
+  screenX: 22,
+  screenY: 44,
 });
 
 const runRead = (read: string, matching: ReadonlySet<string>, options: PageOptions = {}): string =>
@@ -608,6 +622,7 @@ describe(identityRead, () => {
   it("reads every field the observation needs, with the requested zone's offsets", () => {
     expect(readObservation(MEASURED, readInPage("Asia/Kolkata", lightDesktop))).toMatchObject({
       anyPointer: "fine",
+      availTop: 32,
       colorScheme: "light",
       hover: "hover",
       languages: ["en-US", "en"],
@@ -616,6 +631,7 @@ describe(identityRead, () => {
       reducedMotion: "no-preference",
       requestedOffsets: ["GMT+05:30", "GMT+05:30"],
       screenHeight: 1080,
+      screenY: 44,
       webdriver: false,
       webgl: true,
     });

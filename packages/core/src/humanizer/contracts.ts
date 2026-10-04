@@ -160,9 +160,13 @@ export interface Observation {
   readonly screenHeight: number;
   readonly availWidth: number;
   readonly availHeight: number;
+  readonly availLeft: number;
+  readonly availTop: number;
   readonly colorDepth: number;
   readonly outerWidth: number;
   readonly outerHeight: number;
+  readonly screenX: number;
+  readonly screenY: number;
   readonly devicePixelRatio: number;
   readonly colorScheme: string | null;
   readonly reducedMotion: string | null;

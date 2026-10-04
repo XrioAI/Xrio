@@ -477,6 +477,18 @@ describe("the screen surface", () => {
           matcher: { kind: "equals", value: 1040 },
           severity: "fatal",
         },
+        {
+          compatibility: true,
+          field: "availLeft",
+          matcher: { kind: "equals", value: 0 },
+          severity: "fatal",
+        },
+        {
+          compatibility: true,
+          field: "availTop",
+          matcher: { kind: "equals", value: 0 },
+          severity: "fatal",
+        },
       ],
       inputs: [
         {

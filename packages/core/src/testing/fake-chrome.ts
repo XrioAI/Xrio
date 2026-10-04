@@ -261,6 +261,8 @@ const UTC_OFFSETS = ["GMT+00:00", "GMT+00:00"];
 const OBSERVATION = {
   anyPointer: "fine",
   availHeight: 1040,
+  availLeft: 0,
+  availTop: 0,
   availWidth: 1920,
   colorDepth: 24,
   colorScheme: "light",
@@ -280,6 +282,8 @@ const OBSERVATION = {
   requestedZone: scenario === "identity-drift" ? "America/Chicago" : "UTC",
   screenHeight: 1080,
   screenWidth: 1920,
+  screenX: 22,
+  screenY: 22,
   userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
   webdriver: false,
   webgl: scenario !== "no-webgl",
