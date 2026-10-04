@@ -51,7 +51,6 @@ export type IdentityTell =
   | "display-implausible"
   | "headless-token"
   | "unmeasured-chrome"
-  | "zone-unverified"
   | FactTell;
 
 type ObservedTell = Exclude<IdentityTell, FactTell>;
@@ -94,7 +93,7 @@ const READING = {
   pointer: isTextOrNull,
   reducedMotion: isTextOrNull,
   requestedOffsets: isTextsOrNull,
-  requestedZone: isTextOrNull,
+  requestedZone: isText,
   screenHeight: isNumber,
   screenWidth: isNumber,
   userAgent: isText,
@@ -294,8 +293,6 @@ const TELLS: Readonly<Record<ObservedTell, (observation: Observation) => boolean
   "headless-token": ({ userAgent }) => userAgent.includes("HeadlessChrome"),
   "no-taskbar": ({ availHeight, screenHeight }) => availHeight === screenHeight,
   "unmeasured-chrome": ({ product }) => !isMeasured(product),
-  "zone-unverified": ({ requestedOffsets, requestedZone, zone }) =>
-    requestedZone !== null && requestedOffsets === null && namesZone(zone),
 };
 
 const TELL_ORDER: readonly ObservedTell[] = [
@@ -303,7 +300,6 @@ const TELL_ORDER: readonly ObservedTell[] = [
   "display-implausible",
   "headless-token",
   "unmeasured-chrome",
-  "zone-unverified",
 ];
 
 export const evaluate = (
@@ -354,7 +350,7 @@ const READ_SOURCE = `(requested) => {
     );
   const requestedOffsets = () => {
     try {
-      return requested === null ? null : offsetsIn(requested.replace(/^:/, "").replace(/^(?:posix|right)[/]/, ""));
+      return offsetsIn(requested);
     } catch {
       return null;
     }
@@ -441,5 +437,5 @@ const AFTER_CAPTURE_SOURCE = `async () => {
 
 export const AFTER_CAPTURE_READ = `(${AFTER_CAPTURE_SOURCE})()`;
 
-export const identityRead = (requestedZone: string | undefined): string =>
-  `(${READ_SOURCE})(${JSON.stringify(requestedZone === "" ? null : (requestedZone ?? null))})`;
+export const identityRead = (requestedZone: string): string =>
+  `(${READ_SOURCE})(${JSON.stringify(requestedZone)})`;

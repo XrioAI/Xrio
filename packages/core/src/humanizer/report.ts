@@ -129,13 +129,8 @@ const readCoverage = (afterCapture: AfterCapture, gotValue: boolean): Coverage =
     ? unchecked("read-failed")
     : afterCaptureCoverage(afterCapture);
 
-const timezoneCoverage = ({ requestedZone, requestedOffsets, zone }: Observation): Coverage => {
-  if (requestedZone === null) {
-    return unchecked("not-observed");
-  }
-
-  return zone === null || requestedOffsets === null ? unchecked("read-failed") : observedCoverage();
-};
+const timezoneCoverage = ({ requestedOffsets, zone }: Observation): Coverage =>
+  zone === null || requestedOffsets === null ? unchecked("read-failed") : observedCoverage();
 
 export const coverageOf = (observation: Observation): IdentityCoverage => {
   const { afterCapture } = observation;

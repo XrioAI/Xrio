@@ -173,12 +173,12 @@ describe("severity", () => {
     ]);
   });
 
-  it("only notes a TZ Intl cannot name while Chrome names a zone, reporting that zone", () => {
+  it("only notes a zone the page's Intl cannot name while Chrome names a zone, reporting that zone", () => {
     expect(
-      evaluate(planFor({ hostZone: ":/etc/localtime" }), {
+      evaluate(planFor({ hostZone: "Antarctica/Coyhaique" }), {
         ...linuxHeadless,
         requestedOffsets: null,
-        requestedZone: ":/etc/localtime",
+        requestedZone: "Antarctica/Coyhaique",
         zone: "UTC",
         zoneOffsets: ["GMT+00:00", "GMT+00:00"],
       }),
@@ -187,13 +187,13 @@ describe("severity", () => {
       report: {
         notes: [
           {
-            expected: ":/etc/localtime",
+            expected: "Antarctica/Coyhaique",
             field: "zoneOffsets",
             observed: ["UTC", "GMT+00:00", "GMT+00:00"],
             surface: "timezone",
           },
         ],
-        tells: ["zone-unverified"],
+        tells: [],
       },
     });
   });
@@ -424,16 +424,10 @@ describe(identityRead, () => {
     });
   });
 
-  it("reads no requested offsets for a zone Intl refuses, an empty zone, or no zone", () => {
+  it("reads no requested offsets for a zone Intl refuses", () => {
     expect(
-      ["Mars/Olympus", "", undefined].map((zone) =>
-        readObservation(MEASURED, runRead(identityRead(zone), new Set())),
-      ),
-    ).toMatchObject([
-      { colorScheme: null, requestedOffsets: null, requestedZone: "Mars/Olympus" },
-      { colorScheme: null, requestedOffsets: null, requestedZone: null },
-      { colorScheme: null, requestedOffsets: null, requestedZone: null },
-    ]);
+      readObservation(MEASURED, runRead(identityRead("Mars/Olympus"), new Set())),
+    ).toMatchObject({ colorScheme: null, requestedOffsets: null, requestedZone: "Mars/Olympus" });
   });
 });
 
@@ -454,22 +448,18 @@ describe("the zone check run against the host's Intl", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    ":UTC",
-    ":America/Chicago",
-    ":Europe/Berlin",
-    "posix/America/Chicago",
-    "America/Chicago",
-    "EST5EDT",
-  ])("accepts TZ=%s, comparing the zone it names", (zone) => {
-    expect(zoneCheckUnder(zone)).toMatchObject({
-      mismatches: [],
-      observation: { requestedZone: zone },
-      report: { notes: [], tells: [] },
-    });
-  });
+  it.each(["UTC", "America/Chicago", "Europe/Berlin", "Asia/Calcutta"])(
+    "accepts TZ=%s, comparing the zone it names",
+    (zone) => {
+      expect(zoneCheckUnder(zone)).toMatchObject({
+        mismatches: [],
+        observation: { requestedZone: zone },
+        report: { notes: [], tells: [] },
+      });
+    },
+  );
 
-  it.each(["UTC0", ":/etc/localtime", "Mars/Olympus", " America/Chicago"])(
+  it.each(["UTC0", "Mars/Olympus", " America/Chicago"])(
     "fails TZ=%j, for which Intl names no default zone",
     (zone) => {
       const { mismatches, observation, report } = zoneCheckUnder(zone);
@@ -487,10 +477,10 @@ describe("the zone check run against the host's Intl", () => {
   );
 
   it("names the requested TZ when it describes a zone mismatch", () => {
-    const { mismatches, observation } = zoneCheckUnder("America/Bogota", ":America/Chicago");
+    const { mismatches, observation } = zoneCheckUnder("America/Bogota", "America/Chicago");
 
     expect(mismatches.map((mismatch) => describeMismatch(mismatch, observation))).toStrictEqual([
-      "timezone zoneOffsets (TZ=:America/Chicago)",
+      "timezone zoneOffsets (TZ=America/Chicago)",
     ]);
   });
 

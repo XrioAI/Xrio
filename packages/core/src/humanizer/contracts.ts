@@ -100,7 +100,7 @@ export interface Observation {
   readonly product: ChromeProduct;
   readonly afterCapture: AfterCapture;
   readonly zone: string | null;
-  readonly requestedZone: string | null;
+  readonly requestedZone: string;
   readonly zoneOffsets: readonly string[];
   readonly requestedOffsets: readonly string[] | null;
   readonly intlLocale: string;
