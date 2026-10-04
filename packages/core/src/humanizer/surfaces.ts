@@ -6,7 +6,9 @@ import { chromeAcceptLanguages } from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, Matcher, Observed, ObservedField } from "./verify.ts";
 
-export const DEFAULT_LOCALE = "en-US";
+const DEFAULT_LOCALE = "en-US";
+
+const Q_STEP = 0.1;
 
 const SCREEN = { height: 1080, width: 1920, workAreaInset: 40 } as const;
 
@@ -84,17 +86,29 @@ const compatible = (
   severity: Expectation["severity"],
 ): Expectation => ({ compatibility: true, field, matcher, severity });
 
-const resolveLocale = ({
-  capabilities,
-  pins,
-}: Pick<IdentityContext, "capabilities" | "pins">): Resolutions["locale"] => {
-  const tag = pins.locale ?? DEFAULT_LOCALE;
+const acceptLanguageHeader = (languages: readonly string[]): string =>
+  languages
+    .map((language, index) =>
+      index === 0 ? language : `${language};q=${(1 - index * Q_STEP).toFixed(1)}`,
+    )
+    .join(",");
+
+export const presentedLocale = ({ locale }: IdentityIntent) => {
+  const tag = locale ?? DEFAULT_LOCALE;
   const languages = chromeAcceptLanguages(tag);
 
   if (languages === undefined) {
     throw new Error(`Xrio has not measured Chrome's language list for ${tag}.`);
   }
 
+  return { header: acceptLanguageHeader(languages), languages, tag };
+};
+
+const resolveLocale = ({
+  capabilities,
+  pins,
+}: Pick<IdentityContext, "capabilities" | "pins">): Resolutions["locale"] => {
+  const { languages, tag } = presentedLocale(pins);
   const list = languages.join(",");
 
   return {

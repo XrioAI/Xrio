@@ -4,50 +4,34 @@ import type { CreateSessionOptions, Response as ClientResponse, Session } from "
 import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
-import { httpIdentity } from "../humanizer/report.ts";
+import { httpIdentity } from "../humanizer/humanizer.ts";
+import type { HttpInputs } from "../humanizer/humanizer.ts";
+import type { HttpIdentityReport } from "../humanizer/report.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
 import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";
 
-const HTTP_PROFILE = { chromeMajor: 149, platform: "linux" } as const;
-
-const chromeProfile = {
-  browser: `chrome_${HTTP_PROFILE.chromeMajor}`,
-  defaultHeaders: { Connection: "keep-alive" },
-  emulation: {
-    http2Options: {
-      enablePush: false,
-      headerTableSize: 65_536,
-      headersPseudoOrder: ["Method", "Authority", "Scheme", "Path"],
-      headersStreamDependency: { dependencyId: 0, exclusive: true, weight: 255 },
-      initialConnectionWindowSize: 15_728_640,
-      initialWindowSize: 6_291_456,
-      maxHeaderListSize: 262_144,
-      settingsOrder: ["HeaderTableSize", "EnablePush", "InitialWindowSize", "MaxHeaderListSize"],
+const chromeProfile = ({ browser, headerOrder, headers, os }: HttpInputs) =>
+  ({
+    browser,
+    defaultHeaders: { Connection: "keep-alive", ...headers },
+    emulation: {
+      http2Options: {
+        enablePush: false,
+        headerTableSize: 65_536,
+        headersPseudoOrder: ["Method", "Authority", "Scheme", "Path"],
+        headersStreamDependency: { dependencyId: 0, exclusive: true, weight: 255 },
+        initialConnectionWindowSize: 15_728_640,
+        initialWindowSize: 6_291_456,
+        maxHeaderListSize: 262_144,
+        settingsOrder: ["HeaderTableSize", "EnablePush", "InitialWindowSize", "MaxHeaderListSize"],
+      },
+      origHeaders: [...headerOrder],
     },
-    origHeaders: [
-      "Host",
-      "Connection",
-      "sec-ch-ua",
-      "sec-ch-ua-mobile",
-      "sec-ch-ua-platform",
-      "Upgrade-Insecure-Requests",
-      "User-Agent",
-      "Accept",
-      "Sec-Fetch-Site",
-      "Sec-Fetch-Mode",
-      "Sec-Fetch-User",
-      "Sec-Fetch-Dest",
-      "Accept-Encoding",
-      "Accept-Language",
-      "Priority",
-      "Cookie",
-    ],
-  },
-  os: HTTP_PROFILE.platform,
-} satisfies CreateSessionOptions;
+    os,
+  }) satisfies CreateSessionOptions;
 
 const MAX_REDIRECTS = 20;
 
@@ -130,6 +114,7 @@ interface FollowedResponse {
 const readDocument = async (
   { requestUrls, response }: FollowedResponse,
   deadline: Deadline,
+  identity: HttpIdentityReport,
 ): Promise<SourceDocument> => {
   const details = responseDetailsFrom(response.url, response.status, response.headers);
   const contentType = details.headers["content-type"] ?? "";
@@ -164,7 +149,7 @@ const readDocument = async (
     ...details,
     block: classifyResponse({ html, requestUrls, response: details }),
     html,
-    identity: httpIdentity(HTTP_PROFILE),
+    identity,
     requestUrls,
   };
 };
@@ -292,11 +277,23 @@ const fetchFollowingRedirects = async (
 
 export const loadHttpDocument = async ({
   url,
+  pins,
   proxy,
   deadline,
 }: DocumentRequest): Promise<SourceDocument> => {
-  await using relay = await startRelay(proxy, deadline);
-  await using session = await createSession({ ...chromeProfile, proxy: relay.url, timeout: 0 });
+  const { inputs, report } = httpIdentity(pins);
 
-  return await readDocument(await fetchFollowingRedirects(session, url, deadline, relay), deadline);
+  await using relay = await startRelay(proxy, deadline);
+
+  await using session = await createSession({
+    ...chromeProfile(inputs),
+    proxy: relay.url,
+    timeout: 0,
+  });
+
+  return await readDocument(
+    await fetchFollowingRedirects(session, url, deadline, relay),
+    deadline,
+    report,
+  );
 };

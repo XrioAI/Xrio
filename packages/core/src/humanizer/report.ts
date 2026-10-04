@@ -1,5 +1,4 @@
 import type { AfterCapture, ClientHints, Observation } from "./contracts.ts";
-import { DEFAULT_LOCALE } from "./surfaces.ts";
 import type { ExitChoice, IdentityContext, SurfaceChoices } from "./surfaces.ts";
 import type { IdentityMismatch, IdentityTell } from "./verify.ts";
 
@@ -206,9 +205,9 @@ export const observedOf = (observation: Observation): ObservedIdentity => {
   };
 };
 
-export const httpIdentity = (profile: HttpProfile): HttpIdentityReport => ({
+export const httpReport = (locale: string, profile: HttpProfile): HttpIdentityReport => ({
   coverage: { requestHeaders: unchecked("no-request-log") },
-  locale: DEFAULT_LOCALE,
+  locale,
   mode: "http",
   profile: { ...profile },
   tells: [],

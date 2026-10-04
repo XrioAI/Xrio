@@ -2,8 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { noPins } from "../testing/no-pins.ts";
 import type { Observation } from "./contracts.ts";
-import { planIdentity } from "./humanizer.ts";
-import { httpIdentity } from "./report.ts";
+import { httpIdentity, planIdentity } from "./humanizer.ts";
 import type { IdentityReport } from "./report.ts";
 import { evaluate } from "./verify.ts";
 
@@ -119,12 +118,19 @@ const insecureCoverage = {
 
 describe("the identity report", () => {
   it("reports an http scrape's wreq profile, with request headers unchecked", () => {
-    expect(httpIdentity({ chromeMajor: 149, platform: "linux" })).toStrictEqual({
+    expect(httpIdentity(noPins).report).toStrictEqual({
       coverage: { requestHeaders: { reason: "no-request-log", state: "unchecked" } },
       locale: "en-US",
       mode: "http",
       profile: { chromeMajor: 149, platform: "linux" },
       tells: [],
+    });
+  });
+
+  it.each(["fr-FR", "ja-JP"])("reports the locale %s an http scrape was pinned to", (locale) => {
+    expect(httpIdentity({ locale, timezone: undefined }).report).toMatchObject({
+      locale,
+      mode: "http",
     });
   });
 
@@ -348,13 +354,12 @@ describe("report independence", () => {
   });
 
   it("keeps a caller's change to an http report's profile out of the next report", () => {
-    const profile = { chromeMajor: 149, platform: "linux" } as const;
-    const first = httpIdentity(profile);
+    const first = httpIdentity(noPins).report;
 
     Object.assign(first.profile, { chromeMajor: 1 });
     Object.assign(first.coverage.requestHeaders, { state: "observed" });
 
-    expect(httpIdentity(profile)).toStrictEqual({
+    expect(httpIdentity(noPins).report).toStrictEqual({
       coverage: { requestHeaders: { reason: "no-request-log", state: "unchecked" } },
       locale: "en-US",
       mode: "http",
@@ -416,7 +421,7 @@ describe("no shared object inside one report", () => {
   });
 
   it("holds for an http report", () => {
-    expect(aliasedPaths(httpIdentity({ chromeMajor: 149, platform: "linux" }))).toStrictEqual([]);
+    expect(aliasedPaths(httpIdentity(noPins).report)).toStrictEqual([]);
   });
 });
 

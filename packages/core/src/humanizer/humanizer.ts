@@ -1,6 +1,11 @@
+import type { BrowserProfile, EmulationOS } from "wreq-js";
+
 import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
-import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
+import type { IdentityIntent } from "./intent.ts";
+import { httpReport } from "./report.ts";
+import type { HttpIdentityReport } from "./report.ts";
+import { EMISSION_ORDER, presentedLocale, resolveSurfaces } from "./surfaces.ts";
 import type { ExitChoice, IdentityContext, Resolutions, SurfaceChoices } from "./surfaces.ts";
 import { AFTER_CAPTURE_READ, identityRead } from "./verify.ts";
 import type { SurfaceExpectation } from "./verify.ts";
@@ -39,5 +44,52 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
     ),
     inputs: mergeBrowserInputs(resolutions),
     read: { afterCapture: AFTER_CAPTURE_READ, beforeNavigation: identityRead(context.hostZone) },
+  };
+};
+
+const HTTP_PROFILE = { chromeMajor: 149, platform: "linux" } as const;
+
+const HTTP_HEADER_ORDER = [
+  "Host",
+  "Connection",
+  "sec-ch-ua",
+  "sec-ch-ua-mobile",
+  "sec-ch-ua-platform",
+  "Upgrade-Insecure-Requests",
+  "User-Agent",
+  "Accept",
+  "Sec-Fetch-Site",
+  "Sec-Fetch-Mode",
+  "Sec-Fetch-User",
+  "Sec-Fetch-Dest",
+  "Accept-Encoding",
+  "Accept-Language",
+  "Priority",
+  "Cookie",
+] as const;
+
+export interface HttpInputs {
+  readonly browser: BrowserProfile;
+  readonly os: EmulationOS;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly headerOrder: readonly string[];
+}
+
+export interface HttpPlan {
+  readonly inputs: HttpInputs;
+  readonly report: HttpIdentityReport;
+}
+
+export const httpIdentity = (pins: IdentityIntent): HttpPlan => {
+  const { header, tag } = presentedLocale(pins);
+
+  return {
+    inputs: {
+      browser: `chrome_${HTTP_PROFILE.chromeMajor}`,
+      headerOrder: HTTP_HEADER_ORDER,
+      headers: { "accept-language": header },
+      os: HTTP_PROFILE.platform,
+    },
+    report: httpReport(tag, HTTP_PROFILE),
   };
 };
