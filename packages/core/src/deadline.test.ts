@@ -3,21 +3,33 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { manualClock } from "./testing/manual-clock.ts";
 
-describe(startDeadline, () => {
-  it.each([
-    { elapsedMs: 0, remainingMs: 1000, stageTimeoutMs: 250 },
-    { elapsedMs: 900, remainingMs: 100, stageTimeoutMs: 100 },
-    { elapsedMs: 999.5, remainingMs: 1, stageTimeoutMs: 1 },
-  ])(
-    "after $elapsedMs ms, $remainingMs ms remain and a 250 ms stage gets $stageTimeoutMs ms",
-    ({ elapsedMs, remainingMs, stageTimeoutMs }) => {
-      const { advance, clock } = manualClock();
-      const deadline = startDeadline(1000, undefined, clock);
+const deadlineAfter = (elapsedMs: number) => {
+  const { advance, clock } = manualClock();
+  const deadline = startDeadline(1000, undefined, clock);
 
-      advance(elapsedMs);
+  advance(elapsedMs);
+
+  return deadline;
+};
+
+describe(startDeadline, () => {
+  it("after 0 ms, 1000 ms remain and a 250 ms stage keeps its own 250 ms timer", () => {
+    const deadline = deadlineAfter(0);
+
+    expect(deadline.remainingMs()).toBe(1000);
+    expect(deadline.stageTimeout(250)).toBe(250);
+  });
+
+  it.each([
+    { elapsedMs: 900, remainingMs: 100 },
+    { elapsedMs: 999.5, remainingMs: 1 },
+  ])(
+    "after $elapsedMs ms, $remainingMs ms remain and a 250 ms stage is left to the deadline",
+    ({ elapsedMs, remainingMs }) => {
+      const deadline = deadlineAfter(elapsedMs);
 
       expect(deadline.remainingMs()).toBe(remainingMs);
-      expect(deadline.stageTimeout(250)).toBe(stageTimeoutMs);
+      expect(deadline.stageTimeout(250)).toBeUndefined();
     },
   );
 
@@ -95,6 +107,33 @@ describe("deadline stages", () => {
       message: "The stage did not finish within 250 ms.",
     });
     expect(deadline.signal.reason).toMatchObject({ code: "TIMEOUT" });
+  });
+
+  it("aborts a deadline-capped stage with TIMEOUT when timers fire just before the deadline", () => {
+    let now = 0;
+    const timers: (() => void)[] = [];
+
+    const clock = {
+      now: () => now,
+      setTimer: (_delayMs: number, onTimeout: () => void) => {
+        timers.push(onTimeout);
+
+        return () => {};
+      },
+    };
+
+    const deadline = startDeadline(1000, undefined, clock);
+
+    now = 900;
+    using stage = deadline.startStage(250);
+
+    now = 999.5;
+
+    for (const onTimeout of timers.toReversed()) {
+      onTimeout();
+    }
+
+    expect(stage.signal.reason).toMatchObject({ code: "TIMEOUT" });
   });
 
   it("aborts a stage with TIMEOUT when the deadline caps it", () => {

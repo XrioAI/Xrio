@@ -10,6 +10,7 @@ import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
+import { manualClock } from "../../testing/manual-clock.ts";
 import { scratchRoot } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { cdpDriver } from "./cdp/driver.ts";
@@ -204,6 +205,37 @@ describe("browser lifecycle on the fake browser", () => {
     expect(cleanups).toStrictEqual([{ settled: true }]);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
+
+  it.each([
+    { scenario: "slow-start", stage: "launch" },
+    { scenario: "hang-on-navigate", stage: "navigation" },
+  ])(
+    "rejects with TIMEOUT when the deadline ends a $stage that outlasts it",
+    async ({ scenario }) => {
+      const { advance, clock } = manualClock();
+      const browsers = createBrowsers(cdpDriver, 1);
+      using deadline = startDeadline(LAUNCH_DEADLINE_MS, undefined, clock);
+
+      const settled = Promise.allSettled([
+        browsers.load({
+          browserPath: await fakeChromePath(scenario),
+          deadline,
+          mode: "headless",
+          proxy: undefined,
+          url: new URL("https://fake.test/page"),
+        }),
+      ]);
+
+      await delay(4 * LAUNCH_DEADLINE_MS);
+      advance(LAUNCH_DEADLINE_MS);
+
+      await expect(settled).resolves.toMatchObject([
+        { reason: { code: "TIMEOUT" }, status: "rejected" },
+      ]);
+      await browsers.close();
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
 });
 
 const queuedRequest = async () => ({

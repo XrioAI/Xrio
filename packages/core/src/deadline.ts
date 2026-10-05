@@ -24,7 +24,7 @@ export interface Deadline extends Disposable {
   readonly signal: AbortSignal;
   readonly remainingMs: () => number;
   readonly throwIfExpired: () => void;
-  readonly stageTimeout: (capMs: number) => number;
+  readonly stageTimeout: (capMs: number) => number | undefined;
   readonly startStage: (capMs: number) => Stage;
 }
 
@@ -66,7 +66,7 @@ export const startDeadline = (
     remainingMsOrThrow();
   };
 
-  const stageTimeout = (capMs: number) => Math.max(1, Math.min(capMs, remainingMsOrThrow()));
+  const stageTimeout = (capMs: number) => (capMs < remainingMsOrThrow() ? capMs : undefined);
 
   const startStage = (capMs: number): Stage => {
     const stageMs = stageTimeout(capMs);
@@ -78,17 +78,20 @@ export const startDeadline = (
 
     signal.addEventListener("abort", abortWithDeadline, { once: true });
 
-    const cancelStageTimer = clock.setTimer(stageMs, () => {
-      if (remainingMs() === 0) {
-        expire();
-      }
+    const cancelStageTimer =
+      stageMs === undefined
+        ? undefined
+        : clock.setTimer(stageMs, () => {
+            if (remainingMs() === 0) {
+              expire();
+            }
 
-      stage.abort(new Error(`The stage did not finish within ${stageMs} ms.`));
-    });
+            stage.abort(new Error(`The stage did not finish within ${stageMs} ms.`));
+          });
 
     return {
       [Symbol.dispose]: () => {
-        cancelStageTimer();
+        cancelStageTimer?.();
         signal.removeEventListener("abort", abortWithDeadline);
       },
       signal: stage.signal,

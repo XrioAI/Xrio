@@ -18,6 +18,7 @@ const SCENARIOS = [
   "pipe-closes-on-navigate",
   "startup-blank-commit",
   "evaluate-throws",
+  "hang-on-navigate",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -449,6 +450,10 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Page.navigate": {
+      if (scenario === "hang-on-navigate") {
+        break;
+      }
+
       await answerNavigate(
         hasUrl(params) ? params.url : undefined,
         reply({ frameId: TARGET_ID, loaderId: "L1" }),
