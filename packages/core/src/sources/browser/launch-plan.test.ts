@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
-import { planLaunch } from "./launch-plan.ts";
+import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
 
 const scratchDir = "/tmp/xrio-501/bAbC123";
@@ -305,5 +305,48 @@ describe("the identity planLaunch accepts", () => {
     expect(() =>
       planLaunch({ ...request, identity: { ...request.identity, switches: ["--disable-gpu"] } }),
     ).toThrow("The launch identity must come from mergeBrowserInputs.");
+  });
+});
+
+describe(parseBrowserArgs, () => {
+  const emitted = goldenCases
+    .flatMap((goldenCase) => planLaunch(requestOf(goldenCase)).args)
+    .filter((arg) => arg.startsWith("--"));
+
+  it("refuses every switch the launch plan itself emits, by name", () => {
+    const sentOnce = new Set(baseline.filter((arg) => !arg.includes("=")));
+
+    expect(new Set(emitted).size).toBeGreaterThan(30);
+
+    for (const arg of new Set(emitted)) {
+      if (sentOnce.has(arg)) {
+        continue;
+      }
+
+      const [name] = arg.split("=", 1);
+
+      expect(() => parseBrowserArgs([arg])).toThrow(
+        `browserArgs cannot include ${name}, which Xrio manages.`,
+      );
+    }
+  });
+
+  it("drops a valueless baseline switch, which Chrome already gets, and refuses it with a value", () => {
+    const sentOnce = baseline.filter((arg) => !arg.includes("="));
+
+    expect(sentOnce).toContain("--disable-dev-shm-usage");
+
+    for (const arg of sentOnce) {
+      expect(parseBrowserArgs([arg, "--no-sandbox"])).toStrictEqual(["--no-sandbox"]);
+      expect(() => parseBrowserArgs([`${arg}=1`])).toThrow(
+        `browserArgs cannot include ${arg}, which Xrio manages.`,
+      );
+    }
+  });
+
+  it("accepts a switch the plan does not emit, with or without a value", () => {
+    expect(
+      parseBrowserArgs(["--no-sandbox", "--disable-gpu-compositing", "--x=a b=c"]),
+    ).toStrictEqual(["--no-sandbox", "--disable-gpu-compositing", "--x=a b=c"]);
   });
 });

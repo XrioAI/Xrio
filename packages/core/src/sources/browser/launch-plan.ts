@@ -3,6 +3,7 @@ import path from "node:path";
 import { invalidOptions } from "../../errors.ts";
 import { isMinted } from "../../humanizer/inputs.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
+import { isOwnedSwitch } from "../../humanizer/owned-inputs.ts";
 
 export interface LaunchRequest {
   browserPath: string;
@@ -79,6 +80,37 @@ const chromeHeadlessSwitches = [
   `--blink-settings=${HEADLESS_POINTER_SETTINGS}`,
 ] as const;
 
+const switchNameOf = (entry: string): string => entry.split("=", 1)[0];
+
+const SET_BY_BASELINE: ReadonlySet<string> = new Set(
+  chromeBaselineSwitches.filter((entry) => !entry.includes("=")),
+);
+
+const MANAGED_SWITCHES: ReadonlySet<string> = new Set([
+  ...[...chromeBaselineSwitches, ...chromeHeadlessSwitches].map(switchNameOf),
+  "--disable-features",
+  "--disable-component-update",
+  "--disable-domain-reliability",
+  "--crash-dumps-dir",
+  "--user-data-dir",
+  "--profile-directory",
+  "--guest",
+  "--incognito",
+  "--load-extension",
+  "--disable-extensions-except",
+  "--remote-allow-origins",
+  "--proxy-server",
+  "--proxy-pac-url",
+  "--proxy-auto-detect",
+  "--proxy-bypass-list",
+  "--no-proxy-server",
+]);
+
+const MANAGED_SWITCH_PREFIXES = ["--remote-debugging-"] as const;
+
+const isManagedSwitch = (name: string): boolean =>
+  MANAGED_SWITCHES.has(name) || MANAGED_SWITCH_PREFIXES.some((prefix) => name.startsWith(prefix));
+
 export const directoriesIn = (scratchDir: string): LaunchDirectories => ({
   crashes: path.join(scratchDir, "crashes"),
   downloads: path.join(scratchDir, "downloads"),
@@ -102,6 +134,16 @@ export const parseBrowserArgs = (browserArgs: readonly string[]): readonly strin
       throw invalidOptions(
         `browserArgs entry ${index} must be a switch such as --name or --name=value.`,
       );
+    }
+
+    if (SET_BY_BASELINE.has(entry)) {
+      continue;
+    }
+
+    const name = switchNameOf(entry);
+
+    if (isOwnedSwitch(name) || isManagedSwitch(name)) {
+      throw invalidOptions(`browserArgs cannot include ${name}, which Xrio manages.`);
     }
 
     args.push(entry);

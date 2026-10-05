@@ -22,6 +22,46 @@ export const OWNED_HEADERS = ["accept-language"] as const;
 
 export const FORK_SWITCH_PREFIXES = ["--pxr-", "--xrio-"] as const;
 
+const RESERVED_IDENTITY_SWITCHES = [
+  "--force-device-scale-factor",
+  "--device-scale-factor",
+  "--high-dpi-support",
+  "--window-position",
+  "--start-maximized",
+  "--start-fullscreen",
+  "--user-agent",
+  "--disable-gpu",
+  "--enable-unsafe-swiftshader",
+  "--disable-software-rasterizer",
+  "--disable-webgl",
+  "--disable-3d-apis",
+  "--hide-scrollbars",
+  "--enable-automation",
+  "--enable-blink-features",
+  "--force-dark-mode",
+  "--force-prefers-reduced-motion",
+  "--touch-events",
+  "--force-webrtc-ip-handling-policy",
+  "--webrtc-ip-handling-policy",
+  "--enforce-webrtc-ip-permission-check",
+  "--kiosk",
+  "--app",
+  "--ozone-override-screen-size",
+  "--force-prefers-no-reduced-motion",
+  "--force-high-contrast",
+  "--disable-webgl2",
+  "--disable-reading-from-canvas",
+  "--use-webgpu-adapter",
+  "--enable-unsafe-webgpu",
+  "--disable-webgpu",
+  "--js-flags",
+] as const;
+
+export const isOwnedSwitch = (name: string): boolean =>
+  OWNED_SWITCHES.some((owned) => owned === name) ||
+  RESERVED_IDENTITY_SWITCHES.some((reserved) => reserved === name) ||
+  FORK_SWITCH_PREFIXES.some((prefix) => name.startsWith(prefix));
+
 export type LaunchInput =
   | {
       readonly sink: "switch";

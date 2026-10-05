@@ -283,6 +283,103 @@ describe("browserArgs option", () => {
     );
   });
 
+  it.each([
+    "--lang=fr",
+    "--lang",
+    "--accept-lang=de",
+    "--use-gl=egl",
+    "--use-angle=metal",
+    "--window-size=1,1",
+    "--screen-info={0,0 1x1}",
+    "--pxr-seed=1",
+    "--xrio-gl-persona=x",
+    "--enable-features=X",
+    "--disable-features=X",
+    "--user-data-dir=/tmp/x",
+    "--headless",
+    "--headless=new",
+    "--proxy-server=http://user:secret@proxy.test:8000",
+    "--remote-debugging-pipe",
+    "--crash-dumps-dir=/tmp/x",
+    "--disable-blink-features=AutomationControlled",
+    "--profile-directory=Other",
+    "--proxy-pac-url=http://user:secret@proxy.test:8000/proxy.pac",
+    "--proxy-auto-detect",
+    "--proxy-bypass-list=*",
+    "--no-proxy-server",
+    "--force-device-scale-factor=3",
+    "--device-scale-factor=2",
+    "--high-dpi-support=0",
+    "--window-position=300,200",
+    "--start-maximized",
+    "--start-fullscreen",
+    "--user-agent=Audit/1.0",
+    "--disable-gpu",
+    "--enable-unsafe-swiftshader",
+    "--disable-software-rasterizer",
+    "--disable-webgl",
+    "--disable-3d-apis",
+    "--hide-scrollbars",
+    "--enable-automation",
+    "--enable-blink-features=X",
+    "--force-dark-mode",
+    "--force-prefers-reduced-motion",
+    "--touch-events=enabled",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--webrtc-ip-handling-policy=default_public_interface_only",
+    "--enforce-webrtc-ip-permission-check",
+    "--guest",
+    "--incognito",
+    "--kiosk",
+    "--app=https://example.com",
+    "--ozone-override-screen-size=800,600",
+    "--force-prefers-no-reduced-motion",
+    "--force-high-contrast",
+    "--disable-webgl2",
+    "--disable-reading-from-canvas",
+    "--use-webgpu-adapter=swiftshader",
+    "--enable-unsafe-webgpu",
+    "--disable-webgpu",
+    "--js-flags=--expose-gc",
+    "--load-extension=/tmp/extension",
+    "--disable-extensions-except=/tmp/extension",
+    "--remote-debugging-address=0.0.0.0",
+    "--remote-debugging-port=0",
+    "--remote-debugging-socket-name=x",
+    "--remote-allow-origins=*",
+    "--disable-dev-shm-usage=1",
+    "--force-color-profile",
+    "--force-color-profile=srgb",
+    "--enable-features=CDPScreenshotNewSurface",
+  ])("refuses %s and names the switch without its value", (entry) => {
+    const [name] = entry.split("=", 1);
+
+    expect(() =>
+      resolveClientOptions({ ...browser, browserArgs: ["--no-sandbox", entry] }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: `browserArgs cannot include ${name}, which Xrio manages.`,
+        name: "TypeError",
+      }),
+    );
+  });
+
+  it("accepts a valueless switch Xrio's baseline already sets and sends it once", () => {
+    const defaults = resolveClientOptions({
+      ...browser,
+      browserArgs: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu-compositing"],
+    });
+
+    expect(defaults.browserArgs).toStrictEqual(["--no-sandbox", "--disable-gpu-compositing"]);
+  });
+
+  it("reports the first managed switch when several are refused", () => {
+    expect(() =>
+      resolveClientOptions({ ...browser, browserArgs: ["--lang=fr", "--user-data-dir=/tmp/x"] }),
+    ).toThrow("browserArgs cannot include --lang, which Xrio manages.");
+  });
+
   it.each(["--no-sandbox", { 0: "--no-sandbox", length: 1 }, null])(
     "rejects %j, which is not an array",
     (value) => {
