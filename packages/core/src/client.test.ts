@@ -611,6 +611,51 @@ describe("XrioClient browser admission", () => {
     });
   });
 
+  it("sweeps no browser scratch for http scrapes, refused scrapes or a closed client", async () => {
+    await using fixture = await startFixtureServer(routes);
+    using stages = stageTimeline(new Set(["scratch-sweep"]));
+
+    await stages.recording(async () => {
+      const http = new XrioClient({ mode: "http" });
+
+      await expect(
+        http.scrape({ format: "html", url: `${fixture.origin}/pages/document` }),
+      ).resolves.toMatchObject({ status: 200 });
+      await http.close();
+
+      const browser = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        mode: "headless",
+      });
+
+      await expect(browser.scrape({ format: "html", url: "relative/path" })).rejects.toMatchObject({
+        code: "INVALID_OPTIONS",
+      });
+      await browser.close();
+      await expect(browser.scrape({ format: "html", url: fixture.origin })).rejects.toMatchObject({
+        code: "CLIENT_CLOSED",
+      });
+    });
+
+    expect(stages.timeline).toStrictEqual([]);
+  });
+
+  it("sweeps abandoned scratch once, before the first browser launch", async () => {
+    using stages = stageTimeline(new Set(["scratch-sweep", "launch"]));
+
+    await stages.recording(async () => {
+      await using client = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        mode: "headless",
+      });
+
+      await client.scrape({ format: "html", url: "https://fake.test/page" });
+      await client.scrape({ format: "html", url: "https://fake.test/page" });
+    });
+
+    expect(stages.timeline).toStrictEqual(["scratch-sweep", "launch", "launch"]);
+  });
+
   it("starts a queued scrape only after the previous visit has closed", async () => {
     using stages = stageTimeline(new Set(["launch", "teardown"]));
 

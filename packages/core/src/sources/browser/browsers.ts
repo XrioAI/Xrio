@@ -1,6 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, isXrioError, XrioError } from "../../errors.ts";
@@ -18,12 +17,7 @@ import type { Slot } from "../../slot.ts";
 import type { SourceDocument } from "../../types.ts";
 import type { Visit, VisitPlan } from "../visit.ts";
 import type { ScratchDir } from "./browser-process.ts";
-import {
-  createScratchDir,
-  prepareProfile,
-  scratchRoot,
-  sweepAbandonedScratch,
-} from "./browser-process.ts";
+import { prepareProfile } from "./browser-process.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import type { Closed, RetireSteps } from "./chrome-scope.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -31,6 +25,7 @@ import type { LaunchPlan } from "./launch-plan.ts";
 import { DriverError } from "./port.ts";
 import type { BrowserDriver, ChromeProduct, DriverBrowser } from "./port.ts";
 import { renderDocument } from "./render.ts";
+import { ScratchRegistry } from "./scratch-registry.ts";
 
 const STDERR_TAIL_CHARS = 8192;
 
@@ -44,26 +39,8 @@ const AFTER_CAPTURE_CAP_MS = 250;
 
 const AFTER_CAPTURE_FLOOR_MS = 50;
 
-let swept: Promise<void> | undefined;
-
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
-
-const sweepReportingFailure = async (): Promise<void> => {
-  try {
-    await sweepAbandonedScratch(scratchRoot(), Date.now());
-  } catch (error) {
-    publishInternalEvent({
-      detail: `The startup sweep failed: ${messageOf(error)}`,
-      event: "sweep-incomplete",
-    });
-  }
-};
-
-const sweepOnce = async (): Promise<void> => {
-  swept ??= sweepReportingFailure();
-  await swept;
-};
 
 const launchFailed = (message: string, stderr: string, cause?: unknown): XrioError =>
   new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { mismatches: [], stderr } });
@@ -83,12 +60,17 @@ const assertProbedVersion = ({ version }: ChromeProduct, { fork }: HostCapabilit
   }
 };
 
-const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
-  await untilDeadline(sweepOnce, deadline);
-
+const createOwnedScratch = async (
+  registry: ScratchRegistry,
+  deadline: Deadline,
+): Promise<ScratchDir> => {
   try {
-    return await createScratchDir(Date.now());
+    return await registry.create(deadline);
   } catch (error) {
+    if (deadline.signal.aborted) {
+      throw error;
+    }
+
     throw launchFailed("Xrio could not create a scratch directory for Chrome.", "", error);
   }
 };
@@ -282,6 +264,7 @@ const renderInScope = async (
 export const createBrowsers = (
   driver: BrowserDriver,
   steps: Partial<RetireSteps> = {},
+  registry = new ScratchRegistry(),
 ): Browsers => {
   const visits = new Set<Promise<Closed>>();
   let closed = false;
@@ -300,7 +283,7 @@ export const createBrowsers = (
         throw clientClosed();
       }
 
-      const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
+      const scope = new ChromeScope(await createOwnedScratch(registry, deadline), steps);
 
       return await renderInScope(driver, plan, slot, deadline, scope, document);
     } catch (error) {
@@ -330,7 +313,7 @@ export const createBrowsers = (
   const close = async () => {
     closed = true;
     await Promise.allSettled(visits);
-    await swept;
+    await registry.settle();
   };
 
   return { close, start };

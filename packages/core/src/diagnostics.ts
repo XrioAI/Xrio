@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 
 export type Stage =
+  | "scratch-sweep"
   | "queue"
   | "identity"
   | "launch"
@@ -42,6 +43,8 @@ const context = new AsyncLocalStorage<ScrapeContext>();
 
 export const inScrapeContext = <Result>(scrapeId: string, run: () => Result): Result =>
   context.run({ scrapeId }, run);
+
+export const outsideScrapeContext = <Result>(run: () => Result): Result => context.exit(run);
 
 const timings = channel("xrio:stage");
 
