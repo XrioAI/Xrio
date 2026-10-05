@@ -1,0 +1,33 @@
+{
+  "browser": "Chromium 154.0.8037.57, Xrio fork 1.1 (812fdf5), Linux x86_64, headless",
+  "binarySha256": "7c5096f49e4d59f4a0c17329c32d1997d9955e26ade27e4ca5abca4b167f11c1",
+  "capturedAt": "2026-10-01",
+  "echo": "https://tls.peet.ws/api/all",
+  "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+  "ja4R": "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,ca34,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
+  "http2Fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+  "headersPriority": {
+    "weight": 256,
+    "depends_on": 0,
+    "exclusive": 1
+  },
+  "headerOrder": [
+    ":method",
+    ":authority",
+    ":scheme",
+    ":path",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "upgrade-insecure-requests",
+    "user-agent",
+    "accept",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-user",
+    "sec-fetch-dest",
+    "accept-encoding",
+    "accept-language",
+    "priority"
+  ]
+}

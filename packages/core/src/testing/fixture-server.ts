@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import type { Server } from "node:net";
 
 export interface FixtureOrigins {
@@ -16,7 +17,7 @@ export type FixtureHandler = (
 
 export interface FixtureServer extends FixtureOrigins, AsyncDisposable {}
 
-const listenOnLoopback = async (server: Server): Promise<number> => {
+export const listenOnLoopback = async (server: Server): Promise<number> => {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -27,6 +28,17 @@ const listenOnLoopback = async (server: Server): Promise<number> => {
   }
 
   return address.port;
+};
+
+export const closedLoopbackPort = async (): Promise<number> => {
+  const server = createTcpServer();
+  const port = await listenOnLoopback(server);
+  const closed = once(server, "close");
+
+  server.close();
+  await closed;
+
+  return port;
 };
 
 const listen = async (server: Server): Promise<string> =>
