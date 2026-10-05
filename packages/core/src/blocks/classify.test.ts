@@ -1,0 +1,530 @@
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+
+import { describe, expect, it } from "vite-plus/test";
+
+import type { ResponseDetails } from "../types.ts";
+import { classifyResponse } from "./classify.ts";
+import type { BlockInput, BlockReport, BlockVerdict } from "./classify.ts";
+import { gates, rules } from "./rules.ts";
+
+interface Fixture {
+  id: string;
+  url: string;
+  status: number;
+  headers: Record<string, string>;
+  cookies: string[];
+  requestUrls: string[];
+  htmlSha256: string;
+  internalFailure?: boolean;
+  expect: {
+    verdict: BlockVerdict;
+    vendor: string | null;
+    ruleIds: string[];
+    passedChallenges: string[];
+  };
+}
+
+const FIXTURES = new URL("fixtures/", import.meta.url);
+
+const VERDICTS = new Set(["ok", "suspect", "blocked", "queued", "unknown"]);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isStringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(isString);
+
+const isExpectation = (value: unknown): value is Fixture["expect"] =>
+  typeof value === "object" &&
+  value !== null &&
+  "verdict" in value &&
+  typeof value.verdict === "string" &&
+  VERDICTS.has(value.verdict) &&
+  "vendor" in value &&
+  (value.vendor === null || typeof value.vendor === "string") &&
+  "ruleIds" in value &&
+  isStringList(value.ruleIds) &&
+  "passedChallenges" in value &&
+  isStringList(value.passedChallenges);
+
+const isFixture = (value: unknown): value is Fixture =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "url" in value &&
+  typeof value.url === "string" &&
+  "status" in value &&
+  typeof value.status === "number" &&
+  "headers" in value &&
+  typeof value.headers === "object" &&
+  value.headers !== null &&
+  Object.values(value.headers).every(isString) &&
+  "cookies" in value &&
+  isStringList(value.cookies) &&
+  "requestUrls" in value &&
+  isStringList(value.requestUrls) &&
+  "htmlSha256" in value &&
+  typeof value.htmlSha256 === "string" &&
+  "expect" in value &&
+  isExpectation(value.expect);
+
+const loadFixture = (file: string): Fixture & { html: string } => {
+  const fixture: unknown = JSON.parse(readFileSync(new URL(file, FIXTURES), "utf-8"));
+
+  if (!isFixture(fixture)) {
+    throw new Error(`${file} is not a block fixture.`);
+  }
+
+  return { ...fixture, html: readFileSync(new URL(`${fixture.id}.html`, FIXTURES), "utf-8") };
+};
+
+const fixtures = readdirSync(FIXTURES)
+  .filter((file) => file.endsWith(".json") && file !== "non-signals.json")
+  .toSorted()
+  .map(loadFixture);
+
+const inputFor = (fixture: Fixture & { html: string }): BlockInput => {
+  const response: ResponseDetails = {
+    cookies: fixture.cookies,
+    headers: fixture.headers,
+    status: fixture.status,
+    url: fixture.url,
+  };
+
+  if (fixture.internalFailure === true) {
+    return {
+      html: fixture.html,
+      get requestUrls(): string[] {
+        throw new Error("The facts could not be read.");
+      },
+      response,
+    };
+  }
+
+  return { html: fixture.html, requestUrls: fixture.requestUrls, response };
+};
+
+const summarize = (report: BlockReport) => ({
+  passedChallenges: report.passedChallenges.toSorted(),
+  ruleIds: [...new Set(report.evidence.map((entry) => entry.rule))].toSorted(),
+  vendor: report.vendor,
+  verdict: report.verdict,
+});
+
+const page = (body: string) =>
+  `<!doctype html><html><head><title>Catalog</title></head><body>${body}</body></html>`;
+
+const prose = `<main>${"<p>A long paragraph about the products this shop sells, written for people.</p>".repeat(80)}</main>`;
+
+const SELF_NAMING_RULES = new Set(["ticketmaster_eps_block", "linkedin_authwall_canonical"]);
+
+const EMPTY_SHELL = "<!doctype html><html><head></head><body></body></html>";
+
+const HOSTILE_DOCUMENT_BUDGET_MS = 250;
+
+const MAXIMUM_INPUT_BUDGET_MS = 2000;
+
+const CHROME_MAX_URL_CHARS = 2_097_152;
+
+const COOKIE_HEADER_CHARS = 262_144;
+
+const atTextPassLimit = (unit: string, codePoints = unit.length): string =>
+  unit.repeat(Math.floor(gates.interstitialMaxHtmlChars / codePoints));
+
+const repeatedTo = (length: number, unit: string): string =>
+  unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
+
+const ruleIdsOf = (report: BlockReport): string[] => report.evidence.map((entry) => entry.rule);
+
+const sensorPage = (text: string) =>
+  `<html><head><script>window._pxAppId = 'PXtest';</script></head><body><p>${text}</p></body></html>`;
+
+const paddedTo = (length: number, head: string): string => {
+  const shell = `<html><head>${head}</head><body><!----></body></html>`;
+
+  return shell.replace("<!---->", `<!--${"x".repeat(length - shell.length)}-->`);
+};
+
+const challengeRules = new Set(
+  rules.flatMap((rule) =>
+    "proves" in rule && rule.proves === "challenge_issued" ? [rule.id] : [],
+  ),
+);
+
+const htmlResponse = (overrides: Partial<ResponseDetails> = {}): ResponseDetails => ({
+  cookies: [],
+  headers: { "content-type": "text/html; charset=utf-8" },
+  status: 200,
+  url: "https://shop.example/",
+  ...overrides,
+});
+
+const CHALLENGES_WITHOUT_FIXTURES = new Map<string, BlockInput>([
+  [
+    "imperva_captcha_request",
+    {
+      html: EMPTY_SHELL,
+      requestUrls: ["https://shop.example/_Incapsula_Resource?SWCGHOEL=v2&cb=1"],
+      response: htmlResponse(),
+    },
+  ],
+  [
+    "perimeterx_gt_header",
+    {
+      html: EMPTY_SHELL,
+      requestUrls: [],
+      response: htmlResponse({ headers: { "content-type": "text/html", "x-px-gt": "1" } }),
+    },
+  ],
+]);
+
+const challengeInputFor = (rule: string): BlockInput | undefined => {
+  const fixture = fixtures.find(
+    (candidate) =>
+      candidate.internalFailure !== true &&
+      candidate.expect.verdict === "blocked" &&
+      candidate.expect.ruleIds.includes(rule),
+  );
+
+  return fixture === undefined ? CHALLENGES_WITHOUT_FIXTURES.get(rule) : inputFor(fixture);
+};
+
+const challengeCases = () =>
+  [...challengeRules].map((rule) => {
+    const input = challengeInputFor(rule);
+
+    if (input === undefined) {
+      throw new Error(`No challenge case covers ${rule}.`);
+    }
+
+    return { input, rule };
+  });
+
+describe("the block fixture corpus", () => {
+  it("holds every fixture case", () => {
+    expect(fixtures).toHaveLength(52);
+  });
+
+  it.each(fixtures)("classifies $id", (fixture) => {
+    const report = summarize(classifyResponse(inputFor(fixture)));
+
+    expect(report).toStrictEqual({
+      ...fixture.expect,
+      ruleIds: fixture.expect.ruleIds.toSorted(),
+    });
+  });
+
+  it("keeps at most one evidence item per rule", () => {
+    const duplicated = fixtures.flatMap((fixture) => {
+      const rulesSeen = classifyResponse(inputFor(fixture)).evidence.map((entry) => entry.rule);
+
+      return rulesSeen.length === new Set(rulesSeen).size ? [] : [fixture.id];
+    });
+
+    expect(duplicated).toStrictEqual([]);
+  });
+
+  it.each(
+    fixtures.filter((fixture) =>
+      fixture.expect.ruleIds.some((rule) => SELF_NAMING_RULES.has(rule)),
+    ),
+  )("decides $id at a served page's size, past the interstitial gate", (fixture) => {
+    const served = fixture.html.replace(/<\/body>/iu, `${prose.repeat(10)}</body>`);
+    const report = classifyResponse({ ...inputFor(fixture), html: served });
+
+    expect(served.length).toBeGreaterThan(gates.interstitialMaxHtmlChars);
+    expect(report.verdict).toBe("blocked");
+    expect(report.evidence.some((entry) => SELF_NAMING_RULES.has(entry.rule))).toBeTruthy();
+  });
+
+  it.each(challengeCases())(
+    "withholds $rule on a served page and decides on an empty shell",
+    ({ input, rule }) => {
+      const served = classifyResponse({ ...input, html: page(prose.repeat(10)) });
+      const shell = classifyResponse({ ...input, html: EMPTY_SHELL });
+
+      expect(served.passedChallenges).toContain(rule);
+      expect(shell.passedChallenges).not.toContain(rule);
+      expect(shell.verdict).toBe("blocked");
+      expect(shell.evidence.map((entry) => entry.rule)).toContain(rule);
+    },
+  );
+
+  it("keeps every fixture document byte for byte as converted", () => {
+    const changed = fixtures.filter(
+      (fixture) => createHash("sha256").update(fixture.html).digest("hex") !== fixture.htmlSha256,
+    );
+
+    expect(changed.map((fixture) => fixture.id)).toStrictEqual([]);
+  });
+
+  it("orders evidence by tier and keeps every detail within 160 characters", () => {
+    const reports = fixtures.map((fixture) => classifyResponse(inputFor(fixture)));
+
+    const misordered = reports.filter((report) => {
+      const tiers = report.evidence.map((entry) => entry.tier);
+
+      return tiers.join(",") !== tiers.toSorted().join(",");
+    });
+
+    expect(misordered).toStrictEqual([]);
+    expect(
+      reports.flatMap((report) => report.evidence).filter((entry) => entry.detail.length > 160),
+    ).toStrictEqual([]);
+  });
+});
+
+describe(classifyResponse, () => {
+  const challengeRequest = "https://geo.captcha-delivery.com/captcha/?initialCid=REDACTED";
+
+  it("withholds a passed challenge on a page with content and decides on an interstitial", () => {
+    const served = classifyResponse({
+      html: page(prose),
+      requestUrls: [challengeRequest],
+      response: htmlResponse(),
+    });
+
+    const interstitial = classifyResponse({
+      html: page("<p>One moment.</p>"),
+      requestUrls: [challengeRequest],
+      response: htmlResponse(),
+    });
+
+    expect(served).toMatchObject({
+      passedChallenges: ["datadome_captcha_delivery_request"],
+      verdict: "ok",
+    });
+    expect(interstitial).toMatchObject({
+      passedChallenges: [],
+      vendor: "datadome",
+      verdict: "blocked",
+    });
+  });
+
+  it("drops a logged challenge without a capture but still decides on a header challenge", () => {
+    const json = htmlResponse({ headers: { "content-type": "application/json" }, status: 403 });
+
+    const logged = classifyResponse({
+      html: undefined,
+      requestUrls: [challengeRequest],
+      response: json,
+    });
+
+    const header = classifyResponse({
+      html: undefined,
+      requestUrls: [],
+      response: { ...json, headers: { ...json.headers, "cf-mitigated": "challenge" } },
+    });
+
+    expect(logged).toMatchObject({ passedChallenges: [], verdict: "ok" });
+    expect(header).toMatchObject({ vendor: "cloudflare", verdict: "blocked" });
+  });
+
+  it("promotes two weak signals only when they come from different families", () => {
+    const titled = page("<p>Checking your browser before you continue.</p>").replace(
+      "Catalog",
+      "Just a moment...",
+    );
+
+    expect(
+      classifyResponse({ html: titled, requestUrls: [], response: htmlResponse({ status: 403 }) })
+        .verdict,
+    ).toBe("blocked");
+    expect(
+      classifyResponse({ html: titled, requestUrls: [], response: htmlResponse() }).verdict,
+    ).toBe("suspect");
+    expect(
+      classifyResponse({
+        html: page(prose),
+        requestUrls: [],
+        response: htmlResponse({ status: 403 }),
+      }).verdict,
+    ).toBe("suspect");
+  });
+
+  it("redacts cookie values from evidence", () => {
+    const report = classifyResponse({
+      html: page("<p>One moment.</p>"),
+      requestUrls: [],
+      response: htmlResponse({
+        cookies: ["__cf_bm=normal-traffic", "cf_chl_2=session-secret-value; Path=/"],
+      }),
+    });
+
+    expect(report.evidence).toContainEqual(
+      expect.objectContaining({ detail: "set-cookie #2 of 2: cf_chl_2 (value redacted)" }),
+    );
+    expect(JSON.stringify(report)).not.toContain("session-secret-value");
+  });
+
+  it("reports a waiting room as queued, unless a block signal is also present", () => {
+    const queued = htmlResponse({ url: "https://shop.queue-it.net/?c=shop&e=summer" });
+
+    expect(classifyResponse({ html: page(prose), requestUrls: [], response: queued }).verdict).toBe(
+      "queued",
+    );
+    expect(
+      classifyResponse({
+        html: page("<p>You are in line.</p>"),
+        requestUrls: [],
+        response: { ...queued, headers: { ...queued.headers, "x-vercel-mitigated": "challenge" } },
+      }),
+    ).toMatchObject({ vendor: "vercel", verdict: "blocked" });
+    expect(
+      classifyResponse({
+        html: page(prose),
+        requestUrls: [],
+        response: htmlResponse({ url: "https://notqueue-it.net/" }),
+      }).verdict,
+    ).toBe("ok");
+  });
+
+  it.each([
+    { html: "[".repeat(100_000), name: "deeply nested brackets" },
+    { html: page("&#99999999; &#x110000; &bogus; &amp;"), name: "out-of-range entities" },
+    { html: "<script>".repeat(10_000), name: "unclosed scripts" },
+    { html: undefined, name: "no capture" },
+  ])("returns a verdict for $name without throwing", ({ html }) => {
+    const report = classifyResponse({
+      html,
+      requestUrls: ["not a url", ""],
+      response: htmlResponse({ url: "not a url" }),
+    });
+
+    expect(report.verdict).toBe("ok");
+  });
+
+  it.each([
+    { html: atTextPassLimit("<"), name: "unclosed tag openers" },
+    { html: atTextPassLimit("<\u{1F600}", 2), name: "tag openers between emoji" },
+    { html: atTextPassLimit("<script "), name: "unclosed script tags" },
+    { html: atTextPassLimit("<script>"), name: "unclosed scripts" },
+    { html: atTextPassLimit("<style "), name: "unclosed style tags" },
+    { html: atTextPassLimit("<!--"), name: "unclosed comments" },
+    { html: atTextPassLimit("&am"), name: "unterminated entities" },
+  ])("classifies a document of $name within the text-pass limit promptly", ({ html }) => {
+    const started = performance.now();
+
+    classifyResponse({ html, requestUrls: [], response: htmlResponse() });
+
+    expect(performance.now() - started).toBeLessThan(HOSTILE_DOCUMENT_BUDGET_MS);
+  });
+
+  it.each([
+    {
+      input: { html: repeatedTo(gates.domScanMaxChars, "<abuse-component ") },
+      name: "a megabyte of unclosed vendor tags",
+    },
+    { input: { html: repeatedTo(gates.domScanMaxChars, "<title") }, name: "unclosed titles" },
+    ...["token.awswaf.com/", "/_Incapsula_Resource?"].map((unit) => ({
+      input: { requestUrls: [repeatedTo(CHROME_MAX_URL_CHARS, unit)] },
+      name: `a request URL of Chrome's maximum length repeating ${unit}`,
+    })),
+    {
+      input: { response: htmlResponse({ cookies: [repeatedTo(COOKIE_HEADER_CHARS, "cf_chl_")] }) },
+      name: "a repeated challenge cookie prefix",
+    },
+  ])("classifies $name in bounded time", ({ input }) => {
+    const started = performance.now();
+
+    classifyResponse({ html: EMPTY_SHELL, requestUrls: [], response: htmlResponse(), ...input });
+
+    expect(performance.now() - started).toBeLessThan(MAXIMUM_INPUT_BUDGET_MS);
+  });
+
+  it.each([
+    { decides: true, textChars: gates.minProseChars - 1 },
+    { decides: false, textChars: gates.minProseChars },
+  ])(
+    "lets a sensor decide only below 100 text characters ($textChars)",
+    ({ decides, textChars }) => {
+      const report = classifyResponse({
+        html: sensorPage("a".repeat(textChars)),
+        requestUrls: [],
+        response: htmlResponse(),
+      });
+
+      expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
+    },
+  );
+
+  it.each([
+    { decides: true, label: "99 named entities", text: "&eacute;".repeat(gates.minProseChars - 1) },
+    { decides: false, label: "100 named entities", text: "&eacute;".repeat(gates.minProseChars) },
+    { decides: true, label: "99 emoji", text: "\u{1F600}".repeat(gates.minProseChars - 1) },
+    { decides: false, label: "20 unknown entities", text: "&zzzz;".repeat(20) },
+    { decides: true, label: "99 legacy entities", text: "&copy".repeat(gates.minProseChars - 1) },
+  ])("counts $label as visible characters", ({ decides, text }) => {
+    const report = classifyResponse({
+      html: sensorPage(text),
+      requestUrls: [],
+      response: htmlResponse(),
+    });
+
+    expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
+  });
+
+  it.each([
+    { emoji: gates.minScriptChars - "<script></script>".length - 1, fires: false },
+    { emoji: gates.minScriptChars - "<script></script>".length, fires: true },
+  ])("counts $emoji emoji of script as code points: heavy script $fires", ({ emoji, fires }) => {
+    const report = classifyResponse({
+      html: `<html><body><script>${"\u{1F600}".repeat(emoji)}</script></body></html>`,
+      requestUrls: [],
+      response: htmlResponse({ status: 403 }),
+    });
+
+    expect(ruleIdsOf(report).includes("thin_text_heavy_script")).toBe(fires);
+  });
+
+  it("lets nothing weak decide when the response was not captured as HTML", () => {
+    const report = classifyResponse({
+      html: undefined,
+      requestUrls: [],
+      response: htmlResponse({
+        cookies: ["cf_chl_rc_m=1; Path=/"],
+        headers: { "content-type": "application/xhtml+xml" },
+        status: 403,
+      }),
+    });
+
+    expect(report.verdict).toBe("ok");
+    expect(ruleIdsOf(report)).toContain("waf_status");
+  });
+
+  it.each([
+    { decides: true, htmlChars: gates.interstitialMaxHtmlChars },
+    { decides: false, htmlChars: gates.interstitialMaxHtmlChars + 1 },
+  ])(
+    "treats a $htmlChars character document as interstitial-shaped: $decides",
+    ({ decides, htmlChars }) => {
+      const report = classifyResponse({
+        html: paddedTo(htmlChars, "<script>window._cf_chl_opt = {};</script>"),
+        requestUrls: [],
+        response: htmlResponse(),
+      });
+
+      expect(ruleIdsOf(report).includes("cf_chl_opt")).toBe(decides);
+    },
+  );
+
+  it("keeps query values and token headers out of evidence", () => {
+    const report = classifyResponse({
+      html: page("<p>One moment.</p>"),
+      requestUrls: [
+        "https://geo.captcha-delivery.com/captcha/?SECRETTOKEN&initialCid=a&cid=SECRETCOOKIE",
+      ],
+      response: htmlResponse({
+        headers: { "content-type": "text/html", "x-kpsdk-ct": "SECRETTOKEN" },
+      }),
+    });
+
+    expect(JSON.stringify(report)).not.toMatch(/SECRET/u);
+    expect(report.evidence).toContainEqual(
+      expect.objectContaining({
+        detail: "requested https://geo.captcha-delivery.com/captcha/?initialCid&cid",
+      }),
+    );
+  });
+});

@@ -157,6 +157,7 @@ describe(XrioClient, () => {
       const result = await new XrioClient().scrape({ format, url: `${origin}/redirect` });
 
       expect(Object.keys(result).toSorted()).toStrictEqual([
+        "block",
         "cookies",
         "data",
         "format",

@@ -2,6 +2,12 @@ import { describe, expectTypeOf, it } from "vite-plus/test";
 
 import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import type {
+  BlockEvidence,
+  BlockReport,
+  BlockVerdict,
+  ChallengeOutcome,
+  ChallengeReport,
+  ChallengeRound,
   ClientOptions,
   ErrorCode,
   InvalidOptionsError,
@@ -77,6 +83,24 @@ describe("XrioClient types", () => {
         url: "https://example.com",
       }),
     ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
+  });
+
+  it("reports a block on every result and on unsupported-content errors", () => {
+    expectTypeOf<ScrapeResult["block"]>().toEqualTypeOf<BlockReport>();
+    expectTypeOf<BlockReport["verdict"]>().toEqualTypeOf<BlockVerdict>();
+    expectTypeOf<BlockVerdict>().toEqualTypeOf<
+      "ok" | "suspect" | "blocked" | "queued" | "unknown"
+    >();
+    expectTypeOf<BlockReport["evidence"]>().toEqualTypeOf<BlockEvidence[]>();
+    expectTypeOf<BlockEvidence["tier"]>().toEqualTypeOf<"E0" | "E1" | "E2" | "E3">();
+    expectTypeOf<BlockReport["challenge"]>().toEqualTypeOf<ChallengeReport | null>();
+    expectTypeOf<ChallengeReport["rounds"]>().toEqualTypeOf<ChallengeRound[]>();
+    expectTypeOf<ChallengeOutcome>().toEqualTypeOf<
+      "passed" | "passed_in_place" | "rounds_exhausted" | "budget_exhausted" | "deadline"
+    >();
+    expectTypeOf<
+      XrioError<"UNSUPPORTED_CONTENT_TYPE">["details"]["block"]
+    >().toEqualTypeOf<BlockReport>();
   });
 
   it("narrows errors and their details by code", () => {

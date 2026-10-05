@@ -132,6 +132,14 @@ const routes = (request: IncomingMessage, response: ServerResponse) => {
       .end(html("<p>moved</p>"));
   } else if (url.pathname === "/large") {
     writeLargeBody(response);
+  } else if (url.pathname === "/challenge") {
+    response
+      .writeHead(403, { "cf-mitigated": "challenge", "content-type": "text/html" })
+      .end(html("<p>Just a moment...</p>"));
+  } else if (url.pathname === "/challenge.json") {
+    response
+      .writeHead(403, { "cf-mitigated": "challenge", "content-type": "application/json" })
+      .end('{"error":"challenge"}');
   } else {
     response
       .writeHead(200, { "content-type": "text/html" })
@@ -192,6 +200,26 @@ describe("http mode", () => {
     );
     await expect(client.scrape({ format: "html", url: `${origin}/hop/21` })).rejects.toMatchObject({
       code: "TOO_MANY_REDIRECTS",
+    });
+  });
+
+  it("reports a block on results and on unsupported-content errors", async () => {
+    const page = await client.scrape({ format: "html", url: `${origin}/challenge` });
+    const delivered = await client.scrape({ format: "html", url: `${origin}/hop/1` });
+
+    expect(page.block).toMatchObject({ vendor: "cloudflare", verdict: "blocked" });
+    expect(delivered.block).toStrictEqual({
+      challenge: null,
+      evidence: [],
+      passedChallenges: [],
+      vendor: null,
+      verdict: "ok",
+    });
+    await expect(
+      client.scrape({ format: "html", url: `${origin}/challenge.json` }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { block: { vendor: "cloudflare", verdict: "blocked" } },
     });
   });
 
