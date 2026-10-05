@@ -91,7 +91,7 @@ const Magnifier = (
   </Icon>
 );
 
-const Persona = (
+const Profile = (
   <Icon>
     <circle {...S} cx="20" cy="15" r="6.5" />
     <path {...S} d="M8 34a12 12 0 0 1 24 0" />
@@ -106,7 +106,6 @@ const Cell = ({
   title,
   body,
   tint = false,
-  numeral,
   fill = false,
   children,
 }: {
@@ -118,7 +117,6 @@ const Cell = ({
   title: string;
   body?: string;
   tint?: boolean;
-  numeral?: string;
   /* Let the body take the cell's slack instead of leaving it under the content. md and up
      only: stacked on a phone the cell has no height to give, and a basis-0 child of an
      auto-height column resolves to nothing. */
@@ -163,25 +161,6 @@ const Cell = ({
 
   const copy = (
     <div style={align === "right" ? { textAlign: "right" } : undefined}>
-      {Boolean(numeral) && (
-        <p
-          aria-label={`${numeral} patches`}
-          className="mb-5"
-          style={{
-            /* Optical, not geometric — the display face carries a sidebearing, so flush
-               measured on the box sits the numeral visibly inside the edge it is set against. */
-            [align === "right" ? "marginRight" : "marginLeft"]: "-0.045em",
-            fontFamily:
-              "var(--xrio-display-font, var(--font-space-grotesk), system-ui, sans-serif)",
-            fontSize: "clamp(64px, 8vw, 112px)",
-            fontWeight: 700,
-            letterSpacing: "-.055em",
-            lineHeight: 0.82,
-          }}
-        >
-          {numeral}
-        </p>
-      )}
       {icon === undefined ? (
         words
       ) : (
@@ -217,7 +196,7 @@ const Cell = ({
         </>
       ) : (
         /* Two equal columns, so the gutter falls on the cell's centre — which is where the
-           rule between humanize and the 45 column lands in the band above. An uneven split
+           rule between the locale cell and the patch column lands in the band above. An uneven split
            gives the commands more measure but puts this division out of the grid. */
         <div className="grid flex-1 gap-10 md:grid-cols-2 md:gap-12">
           {/* Three blocks — title, subtext, bars — spread down the column by
@@ -292,14 +271,14 @@ export const FeatureGrid = () => {
         }}
       >
         {/* Band 1 — the belt over a block of four, with the patch column running the full
-            height of both beside them. The 45 is the only vertical thing in the section, so it
+            height of both beside them. It is the only vertical thing in the section, so it
             gets the one column that is taller than it is wide. */}
         <div className="flex flex-col md:flex-row">
           <div className="md:w-2/3 flex flex-col">
             <div ref={beltRef} className="flex flex-col">
               <Cell
-                title="Every anti-bot system."
-                body="Cloudflare, Akamai, and DataDome fingerprint the browser engine, not the automation on top of it. Xrio patches the engine directly, so the fingerprints read clean."
+                title="Pages that need a real browser."
+                body="Modern, JavaScript-heavy sites render in a full Chromium, so your agent reads the page a visitor would see."
               >
                 <GauntletRail />
               </Cell>
@@ -313,9 +292,9 @@ export const FeatureGrid = () => {
               />
               <Cell
                 className="border-t md:border-t-0 md:border-l"
-                icon={Persona}
-                title="Humanize."
-                body="Each persona carries a full fingerprint — fonts, WebGL, canvas, audio, voices — not a blank profile. Xrio matches it to the locale of your proxy."
+                icon={Profile}
+                title="Locale-matched browsers."
+                body="Each browser profile is fully configured — fonts, WebGL, canvas, audio, voices — and matched to the locale of your proxy."
               />
               <Cell
                 className="border-t"
@@ -337,15 +316,14 @@ export const FeatureGrid = () => {
             fill
             align="right"
             title="C++ patches to Chromium."
-            body="Applied in the engine itself, below the JavaScript layer where detection scripts run."
-            numeral="45"
+            body="Applied in the engine itself, so every setting a page reads is consistent and correctly configured."
           >
             <PatchMarquee fill align="right" />
           </Cell>
         </div>
 
         {/* Band 2 — the format cell is one search cell wide, so its right edge lands on the
-            rule between search and humanize above it. Its pills are flush on the bottom border,
+            rule between search and the locale cell above it. Its pills are flush on the bottom border,
             divided like everything else here. */}
         <div
           ref={closeRef}
@@ -364,8 +342,8 @@ export const FeatureGrid = () => {
           <Cell
             className="md:w-2/3 border-t md:border-t-0 md:border-l"
             tint
-            title="Any agent, no key."
-            body="Connect through an MCP server or a one-file skill. Either way your agent gets a real browser, with no key to issue or rotate."
+            title="Any agent, no account."
+            body="Connect through an MCP server or a one-file skill. Either way your agent gets a real browser, with no account needed."
             columns={AGENTS}
           >
             <div className="flex flex-col gap-3">

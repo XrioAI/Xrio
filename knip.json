@@ -2,7 +2,11 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     "apps/landing": {
-      "entry": ["src/components/sections/design-panel.tsx!", "src/components/sections/pricing.tsx!"]
+      "entry": [
+        "src/components/sections/benchmarks.tsx!",
+        "src/components/sections/design-panel.tsx!",
+        "src/components/sections/pricing.tsx!"
+      ]
     },
     "packages/core": {
       "entry": ["src/client.ts!", "examples/*.ts"]

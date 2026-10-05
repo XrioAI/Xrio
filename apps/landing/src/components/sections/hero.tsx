@@ -138,9 +138,9 @@ export const Hero = () => {
                 maxWidth: 360,
               }}
             >
-              One line and your agent is pulling structured data off any site — through Cloudflare,
-              Akamai and DataDome, no key and no quota. And it&apos;s all open source: read the
-              patches, audit the evasion, run it on your own hardware.
+              One line and your agent is pulling structured data off any public page — modern,
+              JavaScript-heavy sites included, no account needed. And it&apos;s all open source:
+              read the code, audit it, run it on your own hardware.
             </p>
 
             {/* mb-10 is for MOBILE only — BlackholeFigure below sits on it (its -mt-8 eats 32 of

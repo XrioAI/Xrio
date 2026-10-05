@@ -18,7 +18,7 @@ export const ClosingCTA = () => (
           lineHeight: 1.05,
         }}
       >
-        The whole web,
+        Public web data,
         <br />
         in one command.
       </h2>

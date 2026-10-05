@@ -1,7 +1,7 @@
 // import { DesignPanel } from "@/components/sections/design-panel";  // hidden
 import { ShaderOverlay } from "@/components/canvas/shader-overlay";
 import { AgentHookup } from "@/components/sections/agent-hookup";
-import { Benchmarks } from "@/components/sections/benchmarks";
+// import { Benchmarks } from "@/components/sections/benchmarks";  // hidden
 // import { Pricing }    from "@/components/sections/pricing";   // hidden
 import { ClosingCTA } from "@/components/sections/closing-cta";
 import { DataStream } from "@/components/sections/data-stream";
@@ -29,7 +29,7 @@ const Home = () => (
           <Nav />
           <main>
             <Hero />
-            {/* The feature run is one block. FeatureGrid carries the anti-bot belt, the
+            {/* The feature run is one block. FeatureGrid carries the page belt, the
                 patch column, the format glyph and the command card, so the bands that used
                 to hold them one apiece — PatchCount, Gauntlet, RuntimeRail, OutputFormats —
                 are gone, and so is the Features table that repeated two of its cells.
@@ -41,8 +41,8 @@ const Home = () => (
             <Hr />
             <DataStream />
             <Hr />
-            <Benchmarks />
-            <Hr />
+            {/* <Benchmarks />
+            <Hr /> */}
             {/* <Pricing /> */}
             <AgentHookup />
             <Hr />

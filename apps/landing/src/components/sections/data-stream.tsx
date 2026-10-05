@@ -286,9 +286,8 @@ export const DataStream = () => (
             maxWidth: 400,
           }}
         >
-          Every layer is open source — the stealth engine, session handling, proxy rotation, the
-          patch set itself. Read exactly how the evasion works, audit it, fork it, or self-host the
-          whole stack.
+          Every layer is open source — the browser engine, session handling, proxy routing, the
+          patch set itself. Read the code, audit it, fork it, or self-host the whole stack.
         </p>
         <div className="mt-8 flex items-center gap-6 md:justify-end">
           <span
