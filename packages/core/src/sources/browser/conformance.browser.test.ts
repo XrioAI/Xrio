@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
+import { knobOf } from "../../humanizer/contracts.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityIntent } from "../../humanizer/intent.ts";
@@ -467,8 +468,13 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
-  it("reads the launch's languages, zone offsets and automation flag on /identity", async () => {
-    const { html } = await load(mode, "/identity");
+  it("reads the launch's languages, zone offsets, automation flag and infobar tell on /identity", async () => {
+    const capabilities = await createCapabilityProbe()(chromePath());
+    const { html, identity } = await load(mode, "/identity");
+
+    const infobarShown =
+      mode === "headed" && knobOf(capabilities, "suppress-startup-infobars") !== "true";
+
     const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
 
     expect(report).toMatchObject({
@@ -478,6 +484,7 @@ describe.each(MODES)("documents captured, %s", (mode) => {
       webdriver: false,
       windowSizeWait: "settled",
     });
+    expect(identity.tells.includes("flag-infobar")).toBe(infobarShown);
   });
 
   it.runIf(mode === "headless")(
