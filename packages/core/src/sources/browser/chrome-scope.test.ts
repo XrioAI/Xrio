@@ -43,6 +43,7 @@ else:
     while True:
         try: os.kill(-leader, 0)
         except ProcessLookupError: break
+        except PermissionError: pass
         time.sleep(0.01)
 `;
 
