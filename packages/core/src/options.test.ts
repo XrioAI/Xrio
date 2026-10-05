@@ -76,30 +76,6 @@ const inspectedFailure = (run: () => object): string => {
   return "";
 };
 
-describe("browserDriver option", () => {
-  it("defaults to Patchright and selects our CDP client with any default mode", () => {
-    expect(resolveClientOptions({ browserPath: "/browser" }).browserDriver).toBe("patchright");
-    expect(
-      resolveClientOptions({ browserDriver: "cdp", browserPath: "/browser", mode: "headless" })
-        .browserDriver,
-    ).toBe("cdp");
-    expect(resolveClientOptions({ browserDriver: "cdp", mode: "http" }).browserDriver).toBe("cdp");
-  });
-
-  it("rejects an unknown driver", () => {
-    expect(() =>
-      // @ts-expect-error JavaScript callers can name drivers that do not exist.
-      resolveClientOptions({ browserDriver: "puppeteer", browserPath: "/browser" }),
-    ).toThrow(
-      expect.objectContaining({
-        code: "INVALID_OPTIONS",
-        message: 'browserDriver must be "cdp" or "patchright".',
-        name: "TypeError",
-      }),
-    );
-  });
-});
-
 describe("proxy option", () => {
   it.each([
     {

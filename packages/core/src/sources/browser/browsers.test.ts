@@ -12,9 +12,7 @@ import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { findBrowserPid, killProcessGroup, scratchRoot, waitForExit } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
-import { BROWSER_DRIVERS, isBrowserDriverName } from "./drivers.ts";
-import type { BrowserDriverName } from "./drivers.ts";
-import { patchrightDriver } from "./patchright/driver.ts";
+import { cdpDriver } from "./cdp/driver.ts";
 import type { BrowserDriver } from "./port.ts";
 
 const ABORT_DURING_LAUNCH_MS = 200;
@@ -22,8 +20,6 @@ const ABORT_DURING_LAUNCH_MS = 200;
 const LAUNCH_DEADLINE_MS = 500;
 
 const TEARDOWN_SETTLED_WITHIN_MS = 11_500;
-
-const DRIVER_NAMES = Object.keys(BROWSER_DRIVERS).filter(isBrowserDriverName);
 
 const DEAD_PIPE_TEARDOWN_BOUND_MS = 1000;
 
@@ -87,13 +83,8 @@ const removeLeftoverScratch = async (): Promise<void> => {
   );
 };
 
-const load = async (
-  driver: BrowserDriverName,
-  scenario: string,
-  timeoutMs = 10_000,
-  signal?: AbortSignal,
-) => {
-  const browsers = createBrowsers(BROWSER_DRIVERS[driver], 2);
+const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) => {
+  const browsers = createBrowsers(cdpDriver, 2);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -109,9 +100,9 @@ const load = async (
   }
 };
 
-describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver) => {
+describe("browser lifecycle on the fake browser", () => {
   it.each(["normal", "fragmented"])("renders over the pipe with %s framing", async (scenario) => {
-    const document = await load(driver, scenario);
+    const document = await load(scenario);
 
     expect(document).toMatchObject({
       cookies: ["a=1", "b=2"],
@@ -124,7 +115,7 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
   });
 
   it("reports a launch failure with the end of Chrome's stderr", async () => {
-    await expect(load(driver, "no-start")).rejects.toSatisfy(
+    await expect(load("no-start")).rejects.toSatisfy(
       (error) =>
         isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
         error.details.stderr.includes("fake chrome cannot start"),
@@ -133,7 +124,7 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
   });
 
   it("refuses a Chrome older than the supported range", async () => {
-    await expect(load(driver, "old")).rejects.toSatisfy(
+    await expect(load("old")).rejects.toSatisfy(
       (error) =>
         isXrioError(error, "BROWSER_LAUNCH_FAILED") && error.message.includes("older than 150"),
     );
@@ -141,14 +132,14 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
   });
 
   it("reports a browser that dies mid-scrape", async () => {
-    await expect(load(driver, "crash-on-navigate")).rejects.toMatchObject({
+    await expect(load("crash-on-navigate")).rejects.toMatchObject({
       code: "BROWSER_CRASHED",
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
   it("kills a browser whose pipe closed while it kept running, without waiting out the close budget", async () => {
-    await expect(load(driver, "pipe-closes-on-navigate")).rejects.toMatchObject({
+    await expect(load("pipe-closes-on-navigate")).rejects.toMatchObject({
       code: "BROWSER_CRASHED",
     });
     expect(teardownStages.at(-1)).toBeLessThan(DEAD_PIPE_TEARDOWN_BOUND_MS);
@@ -156,21 +147,21 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
   });
 
   it("kills a browser that ignores Browser.close", async () => {
-    await expect(load(driver, "ignore-close")).resolves.toMatchObject({ status: 200 });
+    await expect(load("ignore-close")).resolves.toMatchObject({ status: 200 });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
   it("cleans up after a caller abort during launch", async () => {
     const reason = new Error("Stopped by caller");
     const controller = new AbortController();
-    const loading = load(driver, "slow-start", 10_000, controller.signal);
+    const loading = load("slow-start", 10_000, controller.signal);
 
     setTimeout(() => {
       controller.abort(reason);
     }, ABORT_DURING_LAUNCH_MS);
     await expect(loading).rejects.toBe(reason);
     await expect(
-      load(driver, "slow-start", 10_000, AbortSignal.timeout(ABORT_DURING_LAUNCH_MS)),
+      load("slow-start", 10_000, AbortSignal.timeout(ABORT_DURING_LAUNCH_MS)),
     ).rejects.toMatchObject({
       name: "TimeoutError",
     });
@@ -182,7 +173,7 @@ describe.each(DRIVER_NAMES)("browser lifecycle on the fake browser, %s", (driver
 
     const observedDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) =>
-        await BROWSER_DRIVERS[driver].launch(plan, deadline, (cleanup) => {
+        await cdpDriver.launch(plan, deadline, (cleanup) => {
           const observed = { settled: false };
 
           cleanups.push(observed);
@@ -221,9 +212,9 @@ const queuedRequest = async () => ({
   url: new URL("https://fake.test/"),
 });
 
-describe.each(DRIVER_NAMES)("createBrowsers on %s", (driver) => {
+describe(createBrowsers, () => {
   it("queues past maxBrowsers and counts the wait against the deadline", async () => {
-    const browsers = createBrowsers(BROWSER_DRIVERS[driver], 1);
+    const browsers = createBrowsers(cdpDriver, 1);
     const request = await queuedRequest();
     using held = startDeadline(1500);
     using queued = startDeadline(200);
@@ -240,7 +231,7 @@ describe.each(DRIVER_NAMES)("createBrowsers on %s", (driver) => {
   });
 
   it("lets accepted work finish when closed, and rejects new work afterwards", async () => {
-    const browsers = createBrowsers(BROWSER_DRIVERS[driver], 1);
+    const browsers = createBrowsers(cdpDriver, 1);
     const request = await queuedRequest();
     const normal = { ...request, browserPath: await fakeChromePath("normal") };
     using held = startDeadline(1000);
@@ -289,7 +280,7 @@ describe("bounded teardown on the fake browser", () => {
 
     const failedCloseDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) => {
-        const browser = await patchrightDriver.launch(plan, deadline, deferCleanup);
+        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
 
         pids.push(browser.pid);
 
@@ -339,7 +330,7 @@ describe("bounded teardown on the fake browser", () => {
 
     const failedLaunchDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) => {
-        const browser = await patchrightDriver.launch(plan, deadline, deferCleanup);
+        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
 
         launches += 1;
 
@@ -395,7 +386,7 @@ describe("bounded teardown on the fake browser", () => {
 
     const failedLaunchDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) => {
-        const browser = await patchrightDriver.launch(plan, deadline, deferCleanup);
+        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
 
         launched.push({ pid: browser.pid, scratch: path.dirname(plan.directories.profile) });
 
@@ -476,7 +467,7 @@ describe("bounded teardown on the fake browser", () => {
 
     const hungCloseDriver: BrowserDriver = {
       launch: async (plan, deadline, deferCleanup) => {
-        const browser = await patchrightDriver.launch(plan, deadline, deferCleanup);
+        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
 
         launches += 1;
 
@@ -517,7 +508,7 @@ describe("bounded teardown on the fake browser", () => {
     const hangingExit = Promise.withResolvers<boolean>();
     const reported = incompleteTeardowns.length;
 
-    const browsers = createBrowsers(patchrightDriver, 1, {
+    const browsers = createBrowsers(cdpDriver, 1, {
       waitForExit: async () => await hangingExit.promise,
     });
 
@@ -549,7 +540,7 @@ describe("bounded teardown on the fake browser", () => {
     const removals: { directory: string; signal: AbortSignal | undefined }[] = [];
     const reported = incompleteTeardowns.length;
 
-    const browsers = createBrowsers(patchrightDriver, 1, {
+    const browsers = createBrowsers(cdpDriver, 1, {
       removeScratchDir: async (scratch, signal) => {
         removals.push({ directory: scratch.path, signal });
         await hangingRemoval.promise;

@@ -20,7 +20,6 @@
   "dependencies": {
     "@mdream/js": "1.7.2",
     "entities": "8.1.0",
-    "patchright-core": "1.61.1",
     "socks": "2.8.10",
     "wreq-js": "3.2.0"
   },

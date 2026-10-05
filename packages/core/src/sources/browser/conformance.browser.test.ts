@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
-import { once } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { text } from "node:stream/consumers";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
@@ -30,8 +28,7 @@ import {
   waitForExit,
 } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
-import { BROWSER_DRIVERS } from "./drivers.ts";
-import type { BrowserDriverName } from "./drivers.ts";
+import { cdpDriver } from "./cdp/driver.ts";
 import { planLaunch } from "./launch-plan.ts";
 import { CLOSE_BUDGET_MS } from "./port.ts";
 import type { DriverBrowser } from "./port.ts";
@@ -55,42 +52,6 @@ const PROBE =
   /<output id="probe" data-webdriver="(?<webdriver>\w+)" data-focus="(?<focus>\w+)" data-visibility="(?<visibility>\w+)"/u;
 
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-
-const KNOWN_PATCHRIGHT_COMMANDS = new Set([
-  "browser Browser.getVersion",
-  "browser Browser.setDownloadBehavior",
-  "browser Target.attachToBrowserTarget",
-  "browser Target.attachToTarget",
-  "browser Target.detachFromTarget",
-  "browser Target.getTargetInfo",
-  "browser Target.setAutoAttach",
-  "browser>page Network.enable",
-  "browser>page Page.enable",
-  "browser>page Page.getFrameTree",
-  "browser>page Page.setLifecycleEventsEnabled",
-  "page DOM.getDocument",
-  "page DOM.getFrameOwner",
-  "page DOM.querySelectorAll",
-  "page Emulation.setEmulatedMedia",
-  "page Emulation.setFocusEmulationEnabled",
-  "page Fetch.continueRequest",
-  "page Fetch.enable",
-  "page Fetch.failRequest",
-  "page Log.enable",
-  "page Network.enable",
-  "page Network.setCacheDisabled",
-  "page Page.addScriptToEvaluateOnNewDocument",
-  "page Page.createIsolatedWorld",
-  "page Page.enable",
-  "page Page.getFrameTree",
-  "page Page.navigate",
-  "page Page.setFontFamilies",
-  "page Page.setLifecycleEventsEnabled",
-  "page Runtime.callFunctionOn",
-  "page Runtime.evaluate",
-  "page Runtime.runIfWaitingForDebugger",
-  "page Target.setAutoAttach",
-]);
 
 const capturedPages = [
   { landsOn: ["static"], path: "/static" },
@@ -165,39 +126,6 @@ const isLaunchLine = (value: unknown): value is { launched: number } =>
   "launched" in value &&
   typeof value.launched === "number";
 
-const SENT = /pw:protocol SEND ► \{"id":-?\d+,"method":"(?<method>[^"]+)"/u;
-
-const ATTACHED =
-  /pw:protocol ◀ RECV \{"method":"Target\.attachedToTarget","params":\{"sessionId":"(?<attached>[^"]+)","targetInfo":\{"targetId":"[^"]+","type":"(?<type>[^"]+)"/u;
-
-const OUTER_SESSION = /,"sessionId":"(?<session>[^"]+)"\}$/u;
-
-const ADAPTER_SESSIONS = new Set(["browser", "page", "browser>page"]);
-
-const sentCommands = (trace: string): string[] => {
-  const sessions = new Map<string, string>();
-  const commands = new Set<string>();
-
-  for (const line of trace.split("\n")) {
-    const outer = OUTER_SESSION.exec(line)?.groups?.session;
-    const session = outer === undefined ? "browser" : (sessions.get(outer) ?? "other");
-    const attached = ATTACHED.exec(line)?.groups;
-    const method = SENT.exec(line)?.groups?.method;
-
-    if (attached?.attached !== undefined) {
-      const type = attached.type ?? "other";
-
-      sessions.set(attached.attached, outer === undefined ? type : `${session}>${type}`);
-    }
-
-    if (method !== undefined && ADAPTER_SESSIONS.has(session)) {
-      commands.add(`${session} ${method}`);
-    }
-  }
-
-  return [...commands].toSorted();
-};
-
 const SETTLE_SLACK_MS = 500;
 
 const SCRAPE_STAGES = new Set(["queue", "launch", "navigation", "capture"]);
@@ -254,14 +182,8 @@ const recordStages = () => {
   };
 };
 
-const runChildScrape = (
-  driver: BrowserDriverName,
-  mode: "headless" | "headed",
-  url: string,
-  env: NodeJS.ProcessEnv = {},
-) =>
-  spawn(process.execPath, [SCRAPE_CHILD, mode, chromePath(), url, driver], {
-    env: { ...process.env, ...env },
+const runChildScrape = (mode: "headless" | "headed", url: string) =>
+  spawn(process.execPath, [SCRAPE_CHILD, mode, chromePath(), url], {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -295,28 +217,17 @@ if (MODES.length === 0) {
   );
 }
 
-const DRIVERS_UNDER_TEST = [
-  { driver: "cdp", probe: { visibility: "visible", webdriver: "false" } },
-  { driver: "patchright", probe: { focus: "true", visibility: "visible", webdriver: "false" } },
-] as const satisfies readonly {
-  driver: BrowserDriverName;
-  probe: Readonly<Record<string, string>>;
-}[];
-
-const RUNS = DRIVERS_UNDER_TEST.flatMap((driver) => MODES.map((mode) => ({ ...driver, mode })));
-
-const DRIVER_RUNS = RUNS.map(({ driver, mode }) => ({ driver, mode }));
+const PROBE_EXPECTED = { visibility: "visible", webdriver: "false" } as const;
 
 let server: FixtureServer;
 
 const load = async (
-  driver: BrowserDriverName,
   mode: Mode,
   route: string,
   timeoutMs = 20_000,
   signal?: AbortSignal,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(BROWSER_DRIVERS[driver], 1);
+  const browsers = createBrowsers(cdpDriver, 1);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
@@ -364,7 +275,7 @@ const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<st
   try {
     for (const route of routes) {
       // oxlint-disable-next-line eslint/no-await-in-loop
-      await load("cdp", mode, route);
+      await load(mode, route);
     }
   } finally {
     unsubscribe("xrio:cdp-command", record);
@@ -381,7 +292,6 @@ const PLATFORM_READ =
   'navigator.userAgentData.getHighEntropyValues(["platform"]).then(({ platform }) => platform)';
 
 const withBrowser = async <Result>(
-  driver: BrowserDriverName,
   mode: Mode,
   run: (browser: DriverBrowser, deadline: Deadline) => Promise<Result>,
 ): Promise<Result> => {
@@ -400,7 +310,7 @@ const withBrowser = async <Result>(
   using deadline = startDeadline(20_000);
 
   await prepareProfile(plan);
-  const browser = await BROWSER_DRIVERS[driver].launch(plan, deadline, () => {});
+  const browser = await cdpDriver.launch(plan, deadline, () => {});
 
   try {
     return await run(browser, deadline);
@@ -418,13 +328,13 @@ const probed = (html: string, keys: readonly string[]) => {
   return Object.fromEntries(keys.map((key) => [key, groups[key]]));
 };
 
-describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, probe }) => {
+describe.each(MODES)("documents captured, %s", (mode) => {
   serveFixturePages();
 
   it.each(capturedPages)(
     "binds $path's response to the document it captured",
     async ({ landsOn, path: route }) => {
-      const document = await load(driver, mode, route);
+      const document = await load(mode, route);
       const marker = markerOf(document.html) ?? "";
 
       expect(landsOn).toContain(marker);
@@ -434,13 +344,13 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
         status: 200,
       });
       expect(pathOf(document.url)).toBe(marker === "landing" ? "/landing" : `/${marker}`);
-      expect(probed(document.html, Object.keys(probe))).toStrictEqual(probe);
+      expect(probed(document.html, Object.keys(PROBE_EXPECTED))).toStrictEqual(PROBE_EXPECTED);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
 
   it("reads the startup page before navigating, then captures the page it navigates to", async () => {
-    await withBrowser(driver, mode, async (browser, deadline) => {
+    await withBrowser(mode, async (browser, deadline) => {
       await expect(browser.evaluateIsolated("location.href", isText, deadline)).resolves.toBe(
         "about:blank",
       );
@@ -449,13 +359,13 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
 
       expect(document).toMatchObject({ headers: { "x-page": "static" }, status: 200 });
       expect(markerOf(document.html)).toBe("static");
-      expect(probed(document.html, Object.keys(probe))).toStrictEqual(probe);
+      expect(probed(document.html, Object.keys(PROBE_EXPECTED))).toStrictEqual(PROBE_EXPECTED);
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
   it("awaits promises in isolated reads after a capture", async () => {
-    await withBrowser(driver, mode, async (browser, deadline) => {
+    await withBrowser(mode, async (browser, deadline) => {
       await renderDocument(browser, new URL("/static", server.origin), deadline);
 
       await expect(
@@ -469,7 +379,7 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   });
 
   it("sends cookies set on each redirect hop to the next", async () => {
-    const document = await load(driver, mode, "/redirect/1");
+    const document = await load(mode, "/redirect/1");
 
     expect(document.html).toContain('<p id="sent-cookies">hop1=1; hop2=1</p>');
     expect(document.requestUrls.map(pathOf).filter((visited) => visited !== FAVICON)).toStrictEqual(
@@ -478,8 +388,8 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   });
 
   it("logs requests from cross-origin frames and workers, but not from Chrome's own extensions", async () => {
-    const framed = await load(driver, mode, "/iframe");
-    const worker = await load(driver, mode, "/worker");
+    const framed = await load(mode, "/iframe");
+    const worker = await load(mode, "/worker");
 
     expect(framed.requestUrls).toContain(`${server.crossOrigin}/framed`);
     expect(framed.requestUrls).toContain(`${server.crossOrigin}/framed-pixel`);
@@ -492,7 +402,7 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   });
 
   it("logs requests from workers that nested workers make", async () => {
-    const document = await load(driver, mode, "/nested-worker");
+    const document = await load(mode, "/nested-worker");
 
     expect(document.requestUrls).toStrictEqual(
       expect.arrayContaining([`${server.origin}/outer-worker.js`, `${server.origin}/from-nested`]),
@@ -500,21 +410,21 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   });
 
   it("returns a 401 with WWW-Authenticate as data", async () => {
-    const document = await load(driver, mode, "/basic-auth");
+    const document = await load(mode, "/basic-auth");
 
     expect(document).toMatchObject({ headers: { "x-page": "basic-auth" }, status: 401 });
     expect(markerOf(document.html)).toBe("basic-auth");
   });
 
   it("captures a page over 4 Mi code units in slices, whole", async () => {
-    const document = await load(driver, mode, "/sliced");
+    const document = await load(mode, "/sliced");
 
     expect(document.html).toHaveLength(4_194_432);
     expect(document.html.endsWith('<p id="last">sliced-end</p></body></html>')).toBeTruthy();
   });
 
   it("refuses a page over 32 Mi code units as too large", async () => {
-    await expect(load(driver, mode, "/too-large")).rejects.toMatchObject({
+    await expect(load(mode, "/too-large")).rejects.toMatchObject({
       code: "RESPONSE_TOO_LARGE",
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -523,7 +433,7 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   it.each(["/redirect-to-closed-port", "/replace-with-blank"])(
     "fails %s, which commits a document with no response, as a network error",
     async (route) => {
-      await expect(load(driver, mode, route)).rejects.toMatchObject({
+      await expect(load(mode, route)).rejects.toMatchObject({
         code: "NETWORK_ERROR",
         message: "The page committed a document that had no HTTP response.",
       });
@@ -532,7 +442,7 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   );
 
   it("returns a 403 with an empty body as data", async () => {
-    const document = await load(driver, mode, "/empty-403");
+    const document = await load(mode, "/empty-403");
 
     expect(document).toMatchObject({
       cookies: ["empty-403=1; Path=/"],
@@ -542,9 +452,9 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   });
 
   it("reads pages under a strict CSP, in legacy charsets and as XHTML", async () => {
-    const strict = await load(driver, mode, "/strict-csp");
-    const legacy = await load(driver, mode, "/legacy-charset");
-    const xhtml = await load(driver, mode, "/xhtml");
+    const strict = await load(mode, "/strict-csp");
+    const legacy = await load(mode, "/legacy-charset");
+    const xhtml = await load(mode, "/xhtml");
 
     expect(markerOf(strict.html)).toBe("strict-csp");
     expect(legacy.html).toContain('<p id="text">Привет</p>');
@@ -554,9 +464,9 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
 
   it("captures Chrome's viewers for JSON, XML and PDF until Phase 4 gates them", async () => {
     const [json, xml, pdf] = [
-      await load(driver, mode, "/json"),
-      await load(driver, mode, "/xml"),
-      await load(driver, mode, "/pdf"),
+      await load(mode, "/json"),
+      await load(mode, "/xml"),
+      await load(mode, "/pdf"),
     ];
 
     expect(json.html).toContain('<pre>{"page":"json"}</pre>');
@@ -566,11 +476,11 @@ describe.each(RUNS)("documents captured on $driver, $mode", ({ driver, mode, pro
   });
 });
 
-describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mode }) => {
+describe.each(MODES)("browser lifecycle, %s", (mode) => {
   serveFixturePages();
 
   it.each(["/download", "/no-content"])("reports %s as an aborted navigation", async (route) => {
-    await expect(load(driver, mode, route)).rejects.toMatchObject({
+    await expect(load(mode, route)).rejects.toMatchObject({
       code: "NETWORK_ERROR",
       details: { netError: "net::ERR_ABORTED" },
     });
@@ -580,7 +490,7 @@ describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mod
   it("times out a capture the page never answers, and leaves nothing behind", async () => {
     using stages = recordStages();
 
-    await expect(load(driver, mode, "/busy", BUSY_TIMEOUT_MS)).rejects.toMatchObject({
+    await expect(load(mode, "/busy", BUSY_TIMEOUT_MS)).rejects.toMatchObject({
       code: "TIMEOUT",
     });
     expect([...stages.timings.keys()]).toContain("capture");
@@ -590,7 +500,7 @@ describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mod
 
   it("launches Chrome with exactly the planned argv", async () => {
     const controller = new AbortController();
-    const loading = load(driver, mode, "/busy", 20_000, controller.signal);
+    const loading = load(mode, "/busy", 20_000, controller.signal);
 
     await busyPageStarted();
     const pid = lastLaunchedPid() ?? 0;
@@ -619,7 +529,7 @@ describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mod
     const before = SIGNALS.map((signal) => process.listenerCount(signal));
     const controller = new AbortController();
     const reason = new Error("Stopped by caller");
-    const loading = load(driver, mode, "/busy", 20_000, controller.signal);
+    const loading = load(mode, "/busy", 20_000, controller.signal);
 
     await busyPageStarted();
     expect(SIGNALS.map((signal) => process.listenerCount(signal))).toStrictEqual(before);
@@ -631,7 +541,7 @@ describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mod
 
   it("reports a renderer that dies mid-capture as BROWSER_CRASHED", async () => {
     using stages = recordStages();
-    const loading = load(driver, mode, "/busy");
+    const loading = load(mode, "/busy");
 
     await stages.ended("navigation");
     const profile = await profileOf(lastLaunchedPid() ?? 0);
@@ -643,7 +553,7 @@ describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mod
   });
 
   it("leaves no Chrome process when its Node owner is killed, and the sweep removes its directory", async () => {
-    const child = runChildScrape(driver, mode, `${server.origin}/busy`);
+    const child = runChildScrape(mode, `${server.origin}/busy`);
     const lines = createInterface({ input: child.stdout });
 
     const [launchLine] = await Promise.all([
@@ -668,36 +578,13 @@ describe.each(DRIVER_RUNS)("browser lifecycle on $driver, $mode", ({ driver, mod
   });
 });
 
-describe.each(MODES)("commands Patchright sends, %s", (mode) => {
-  serveFixturePages();
-
-  it("sends Chrome only the commands in the known Patchright set", async () => {
-    const child = runChildScrape("patchright", mode, `${server.origin}/static`, {
-      DEBUG: "pw:protocol",
-    });
-
-    const [trace, output] = await Promise.all([
-      text(child.stderr),
-      text(child.stdout),
-      once(child, "exit"),
-    ]);
-
-    expect(child.exitCode).toBe(0);
-    expect(output).toContain('{"status":200}');
-    expect(
-      sentCommands(trace).filter((command) => !KNOWN_PATCHRIGHT_COMMANDS.has(command)),
-    ).toStrictEqual([]);
-    expect(sentCommands(trace)).toContain("browser>page Page.setLifecycleEventsEnabled");
-  });
-});
-
 describe.each(MODES)("downloads on our CDP client, %s", (mode) => {
   serveFixturePages();
 
   it("lets a denied download settle, so teardown finishes well within its budget", async () => {
     using stages = recordStages();
 
-    await expect(load("cdp", mode, "/download")).rejects.toMatchObject({
+    await expect(load(mode, "/download")).rejects.toMatchObject({
       details: { netError: "net::ERR_ABORTED" },
     });
     expect(stages.timings.get("teardown")).toBeLessThan(DOWNLOAD_TEARDOWN_BOUND_MS);

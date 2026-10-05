@@ -6,9 +6,8 @@ import { parseArgs } from "node:util";
 
 import { startDeadline } from "../src/deadline.ts";
 import { createBrowsers } from "../src/sources/browser/browsers.ts";
-import { BROWSER_DRIVERS, isBrowserDriverName } from "../src/sources/browser/drivers.ts";
+import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
-import type { BrowserDriver } from "../src/sources/browser/port.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
 import { conformancePages } from "../src/testing/conformance-pages.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
@@ -25,7 +24,6 @@ type Sample = Record<Measure, number>;
 
 const { values } = parseArgs({
   options: {
-    drivers: { default: Object.keys(BROWSER_DRIVERS).join(","), type: "string" },
     mode: { default: "headless", type: "string" },
     out: { type: "string" },
     route: { default: "/static", type: "string" },
@@ -55,16 +53,6 @@ const mode = parseMode(values.mode);
 
 const runs = parseRuns(values.runs);
 
-const requestedDrivers = values.drivers.split(",");
-
-const unknownDrivers = requestedDrivers.filter((name) => !isBrowserDriverName(name));
-
-if (unknownDrivers.length > 0) {
-  throw new Error(`Unknown drivers: ${unknownDrivers.join(", ")}`);
-}
-
-const driverNames = requestedDrivers.filter(isBrowserDriverName);
-
 const isStageTiming = (message: unknown): message is { stage: string; durationMs: number } =>
   typeof message === "object" &&
   message !== null &&
@@ -80,23 +68,9 @@ const sha256Of = async (file: string): Promise<string> =>
     .update(await readFile(file))
     .digest("hex");
 
-const hasVersion = (manifest: unknown): manifest is { version: string } =>
-  typeof manifest === "object" &&
-  manifest !== null &&
-  "version" in manifest &&
-  typeof manifest.version === "string";
-
-const packageVersion = async (name: string): Promise<string> => {
-  const manifest: unknown = JSON.parse(
-    await readFile(new URL(import.meta.resolve(`${name}/package.json`)), "utf-8"),
-  );
-
-  return hasVersion(manifest) ? manifest.version : "unknown";
-};
-
 const server = await startFixtureServer(conformancePages);
 
-const scrapeOnce = async (driver: BrowserDriver): Promise<Sample> => {
+const scrapeOnce = async (): Promise<Sample> => {
   const sample: Sample = { answer: 0, capture: 0, exit: 0, launch: 0, navigation: 0, teardown: 0 };
 
   const record: ChannelListener = (message) => {
@@ -106,7 +80,7 @@ const scrapeOnce = async (driver: BrowserDriver): Promise<Sample> => {
   };
 
   subscribe("xrio:stage", record);
-  const browsers = createBrowsers(driver, 1);
+  const browsers = createBrowsers(cdpDriver, 1);
   const started = performance.now();
 
   try {
@@ -146,15 +120,11 @@ const summarise = (samples: readonly Sample[]) =>
     }),
   );
 
-const samples = new Map<string, Sample[]>(driverNames.map((name) => [name, []]));
+const samples: Sample[] = [];
 
 for (let run = 0; run < runs; run += 1) {
-  const order = run % 2 === 0 ? driverNames : driverNames.toReversed();
-
-  for (const name of order) {
-    // oxlint-disable-next-line eslint/no-await-in-loop
-    samples.get(name)?.push(await scrapeOnce(BROWSER_DRIVERS[name]));
-  }
+  // oxlint-disable-next-line eslint/no-await-in-loop
+  samples.push(await scrapeOnce());
 }
 
 await server[Symbol.asyncDispose]();
@@ -176,29 +146,15 @@ const report = {
     browserSha256: await sha256Of(chromePath()),
     mode,
     node: process.version,
-    patchrightCore: await packageVersion("patchright-core"),
     platform: `${process.platform}-${process.arch}`,
     route: values.route,
     runs,
   },
-  results: Object.fromEntries(
-    [...samples].map(([name, driverSamples]) => [
-      name,
-      { samples: driverSamples, summary: summarise(driverSamples) },
-    ]),
-  ),
+  results: { samples, summary: summarise(samples) },
 };
 
 if (values.out !== undefined) {
   await writeFile(values.out, `${JSON.stringify(report, undefined, 2)}\n`);
 }
 
-process.stdout.write(
-  `${JSON.stringify(
-    Object.fromEntries(
-      Object.entries(report.results).map(([name, result]) => [name, result.summary]),
-    ),
-    undefined,
-    2,
-  )}\n`,
-);
+process.stdout.write(`${JSON.stringify(report.results.summary, undefined, 2)}\n`);
