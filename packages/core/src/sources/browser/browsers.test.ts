@@ -1654,6 +1654,10 @@ describe("a named session's device record", () => {
         },
         bind: (request: Deadline) => new HeldDeadline(request, new AbortController().signal),
         device: { kind: "record" as const, record },
+        finish: async () => {
+          await Promise.resolve();
+        },
+        revisitWanted: () => false,
       });
     },
   };

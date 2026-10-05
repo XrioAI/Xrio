@@ -1,4 +1,4 @@
-import type { HostCapabilities } from "../humanizer/contracts.ts";
+import type { DeviceRecord, HostCapabilities } from "../humanizer/contracts.ts";
 import type { HttpPlan, IdentityPlan } from "../humanizer/humanizer.ts";
 import type { ScrapeIntent } from "../intent.ts";
 import type { HeldDeadline } from "../lifetime.ts";
@@ -29,6 +29,11 @@ export type VisitPlan =
       readonly identity: HttpPlan;
       readonly proxy: ProxyEndpoint | undefined;
     };
+
+export interface FinishedVisit {
+  readonly record: DeviceRecord | null;
+  readonly closed: Closed;
+}
 
 export interface Sources {
   readonly start: (plan: VisitPlan, slot: Slot, deadline: HeldDeadline) => Visit;

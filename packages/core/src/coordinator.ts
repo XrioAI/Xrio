@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 
 import type { Admission } from "./admission.ts";
+import { createAnswer } from "./answer.ts";
+import type { Answer } from "./answer.ts";
 import type { Deadline } from "./deadline.ts";
 import { timeStage } from "./diagnostics.ts";
 import { clientClosed } from "./errors.ts";
@@ -12,11 +14,13 @@ import { presentedLocale } from "./humanizer/surfaces.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import type { HeldDeadline } from "./lifetime.ts";
 import { refuseRecordOverrides } from "./options.ts";
+import { outcomeOf, scrapeError } from "./outcome.ts";
+import type { ScrapeOutcome } from "./outcome.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
 import type { SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
-import type { Sources, VisitPlan } from "./sources/visit.ts";
+import type { FinishedVisit, Sources, VisitPlan } from "./sources/visit.ts";
 import type { SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
@@ -41,6 +45,7 @@ interface Dependencies {
 }
 
 interface VisitContext {
+  readonly answer: Answer;
   readonly intent: ScrapeIntent;
   readonly hold: SessionHold;
   readonly held: HeldDeadline;
@@ -109,11 +114,17 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   }
 };
 
-const visitOnce = async (
-  context: VisitContext,
-  answer: PromiseWithResolvers<SourceDocument>,
-): Promise<void> => {
-  const { dependencies, held, intent } = context;
+interface VisitResult extends FinishedVisit {
+  readonly revisit: boolean;
+}
+
+const recordOf = (outcome: ScrapeOutcome): FinishedVisit["record"] =>
+  outcome.kind === "document" && outcome.document.identity.mode !== "http"
+    ? outcome.document.identity.record
+    : null;
+
+const visitOnce = async (context: VisitContext, terminal: boolean): Promise<VisitResult> => {
+  const { answer, dependencies, held, hold, intent } = context;
 
   await using slot = await timeStage(
     "queue",
@@ -128,13 +139,12 @@ const visitOnce = async (
 
     transferred = true;
 
-    try {
-      answer.resolve(await visit.document);
-    } catch (error) {
-      answer.reject(error);
-    }
+    const outcome = await outcomeOf(visit.document);
+    const revisit = !terminal && outcome.kind === "document" && hold.revisitWanted(outcome);
 
-    await visit.closed;
+    answer.offer(outcome, !revisit);
+
+    return { closed: await visit.closed, record: recordOf(outcome), revisit };
   } finally {
     if (!transferred && plan.kind === "browser") {
       await plan.fonts.settle(null);
@@ -146,7 +156,7 @@ const coordinate = async (
   intent: ScrapeIntent,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: PromiseWithResolvers<SourceDocument>,
+  answer: Answer,
 ): Promise<void> => {
   try {
     await using hold = await dependencies.sessions.hold(
@@ -159,9 +169,18 @@ const coordinate = async (
       deadline,
     );
 
-    await visitOnce({ dependencies, held: hold.bind(deadline), hold, intent }, answer);
+    const context = { answer, dependencies, held: hold.bind(deadline), hold, intent };
+    const first = await visitOnce(context, false);
+
+    await hold.finish(first);
+
+    if (first.revisit) {
+      await hold.finish(await visitOnce(context, true));
+    }
   } catch (error) {
-    answer.reject(error);
+    answer.fail(scrapeError(error));
+  } finally {
+    answer.settleWithFallback();
   }
 };
 
@@ -182,10 +201,9 @@ export const createScrapes = (
   const start: Scrapes["start"] = (intent, deadline) => {
     assertOpen();
 
-    const answer = Promise.withResolvers<SourceDocument>();
+    const answer = createAnswer();
     const settled = coordinate(intent, deadline, managers, answer);
 
-    void Promise.allSettled([answer.promise]);
     runs.add(settled);
 
     const forgetSettled = async () => {

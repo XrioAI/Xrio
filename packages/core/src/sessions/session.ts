@@ -4,6 +4,8 @@ import type { IdentityIntent } from "../humanizer/intent.ts";
 import type { IdentityContext } from "../humanizer/surfaces.ts";
 import type { ScrapeIntent } from "../intent.ts";
 import { HeldDeadline } from "../lifetime.ts";
+import type { ScrapeOutcome } from "../outcome.ts";
+import type { FinishedVisit } from "../sources/visit.ts";
 
 export type SessionId = string;
 
@@ -97,6 +99,8 @@ export const profileAfterVisit = (closed: Closed): ProfileAfterVisit =>
 export interface SessionHold extends AsyncDisposable {
   readonly device: IdentityContext["device"];
   readonly bind: (deadline: Deadline) => HeldDeadline;
+  readonly revisitWanted: (outcome: ScrapeOutcome) => boolean;
+  readonly finish: (visit: FinishedVisit) => Promise<void>;
 }
 
 interface ClaimChecks {
@@ -130,6 +134,10 @@ export const anonymousSessions = (): SessionManager => ({
       },
       bind: (request) => new HeldDeadline(request, ownership.signal),
       device: { kind: "fresh", seed: checks.seed() },
+      finish: async () => {
+        await Promise.resolve();
+      },
+      revisitWanted: () => false,
     });
   },
 });
