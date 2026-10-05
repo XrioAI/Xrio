@@ -1,10 +1,12 @@
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
+import { startDeadline } from "./deadline.ts";
 import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
 import { loadHeadedDocument, loadHeadlessDocument } from "./sources/browser.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type {
+  ClientDefaults,
+  ClientOptions,
   DocumentRequest,
-  ModeOptions,
   ResolvedMode,
   ScrapeFormat,
   ScrapeOptions,
@@ -12,7 +14,12 @@ import type {
   SourceDocument,
 } from "./types.ts";
 
+export { isXrioError, XrioError } from "./errors.ts";
+
+export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
+
 export type {
+  ClientOptions,
   ModeOptions,
   ScrapeFormat,
   ScrapeOptions,
@@ -26,6 +33,15 @@ const sources = {
   http: loadHttpDocument,
 } satisfies Record<ResolvedMode["mode"], (request: DocumentRequest) => Promise<SourceDocument>>;
 
+const loadDocument = async (request: DocumentRequest): Promise<SourceDocument> => {
+  try {
+    return await sources[request.mode](request);
+  } catch (error) {
+    request.deadline.throwIfExpired();
+    throw error;
+  }
+};
+
 const formats = {
   html: (document) => ({ data: getHtml(document), format: "html" }),
   json: (document) => ({ data: extractContent(document), format: "json" }),
@@ -37,24 +53,27 @@ const formats = {
 };
 
 export class XrioClient {
-  readonly #mode: ResolvedMode;
+  readonly #defaults: ClientDefaults;
 
-  constructor(options: ModeOptions = {}) {
-    this.#mode = resolveClientOptions(options);
+  constructor(options: ClientOptions = {}) {
+    this.#defaults = resolveClientOptions(options);
   }
 
   scrape<Format extends ScrapeFormat>(
     options: ScrapeOptions<Format>,
   ): Promise<ScrapeResult<Format>>;
   async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
-    const request = resolveScrapeOptions(options, this.#mode);
-    const loadDocument = sources[request.mode];
-    const renderContent = formats[request.format];
+    const { format, signal, source, timeoutMs } = resolveScrapeOptions(options, this.#defaults);
+    using deadline = startDeadline(timeoutMs, signal);
 
-    const document = await loadDocument(request);
+    const document = await loadDocument({ ...source, deadline });
+
+    deadline.throwIfExpired();
+    const content = formats[format](document);
+    deadline.throwIfExpired();
 
     return {
-      ...renderContent(document),
+      ...content,
       cookies: document.cookies,
       headers: document.headers,
       status: document.status,

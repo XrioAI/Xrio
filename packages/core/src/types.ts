@@ -1,12 +1,17 @@
+import type { Deadline } from "./deadline.ts";
+
 export type ScrapeFormat = "html" | "markdown" | "json";
 
 export type ModeOptions =
   | { mode?: "http"; browserPath?: never }
   | { mode: "headless" | "headed"; browserPath: string };
 
+export type ClientOptions = ModeOptions & { proxy?: string };
+
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOptions & {
   url: string;
   format: Format;
+  proxy?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -46,8 +51,29 @@ export interface SourceDocument extends ResponseDetails {
 
 export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
 
-export type DocumentRequest = ResolvedMode & {
+export interface ProxyEndpoint {
+  protocol: "http" | "https" | "socks5";
+  hostname: string;
+  port: number;
+  credentials: { username: string; password: string } | undefined;
+  redactedUrl: string;
+}
+
+export interface ClientDefaults {
+  mode: ResolvedMode;
+  proxy: ProxyEndpoint | undefined;
+}
+
+type SourceRequest = ResolvedMode & {
   url: URL;
-  timeoutMs: number;
-  signal?: AbortSignal;
+  proxy: ProxyEndpoint | undefined;
 };
+
+export type DocumentRequest = SourceRequest & { deadline: Deadline };
+
+export interface ScrapeRequest {
+  format: ScrapeFormat;
+  signal: AbortSignal | undefined;
+  source: SourceRequest;
+  timeoutMs: number;
+}

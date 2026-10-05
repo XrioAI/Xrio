@@ -1,9 +1,11 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { inspect } from "node:util";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
-import { XrioClient } from "./client.ts";
+import { isXrioError, XrioClient, XrioError } from "./client.ts";
+import { startFixtureServer } from "./testing/fixture-server.ts";
+import type { FixtureServer } from "./testing/fixture-server.ts";
 
 const html = `<!doctype html>
 <html lang="en">
@@ -38,7 +40,12 @@ const cookies = [
 
 const previewBytes = 65_536;
 
-const server = createServer((request, response) => {
+let onRequest: (() => void) | undefined;
+
+const routes = (request: IncomingMessage, response: ServerResponse) => {
+  onRequest?.();
+  onRequest = undefined;
+
   const url = new URL(request.url ?? "/", "http://localhost");
   const status = Number(url.searchParams.get("status") ?? 200);
 
@@ -129,29 +136,19 @@ const server = createServer((request, response) => {
         .end(html);
     }
   }
-});
+};
 
 describe(XrioClient, () => {
+  let server: FixtureServer;
   let origin: string;
 
   beforeAll(async () => {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Node returns either a TCP address, a pipe path, or null.
-    if (address === null || typeof address === "string") {
-      throw new Error("Test server did not receive a TCP port.");
-    }
-
-    origin = `http://127.0.0.1:${address.port}`;
+    server = await startFixtureServer(routes);
+    ({ origin } = server);
   });
 
   afterAll(async () => {
-    const closed = once(server, "close");
-    server.close();
-    server.closeAllConnections();
-    await closed;
+    await server[Symbol.asyncDispose]();
   });
 
   it.each(["html", "markdown", "json"] as const)(
@@ -262,7 +259,7 @@ describe(XrioClient, () => {
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
       code: "MODE_NOT_IMPLEMENTED",
       message: "The headed mode is not implemented.",
-      name: "Error",
+      name: "XrioError",
     });
     await expect(client.scrape({ format: "html", mode: "http", url })).resolves.toMatchObject({
       data: "<p>Body only</p>",
@@ -279,7 +276,7 @@ describe(XrioClient, () => {
     ).rejects.toMatchObject({
       code: "MODE_NOT_IMPLEMENTED",
       message: "The headless mode is not implemented.",
-      name: "Error",
+      name: "XrioError",
     });
   });
 
@@ -319,11 +316,9 @@ describe(XrioClient, () => {
       await expect(
         new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
       ).rejects.toMatchObject({
-        body,
         code: "UNSUPPORTED_CONTENT_TYPE",
-        name: "Error",
-        status,
-        url: `${origin}${path}`,
+        details: { body, status, url: `${origin}${path}` },
+        name: "XrioError",
       });
     },
   );
@@ -332,10 +327,9 @@ describe(XrioClient, () => {
     const rejection = new XrioClient().scrape({ format: "html", url: `${origin}/json` });
 
     await expect(rejection).rejects.toMatchObject({
-      cookies,
-      headers: { "content-type": "application/json" },
+      details: { cookies, headers: { "content-type": "application/json" } },
     });
-    await expect(rejection).rejects.not.toHaveProperty(["headers", "set-cookie"]);
+    await expect(rejection).rejects.not.toHaveProperty(["details", "headers", "set-cookie"]);
   });
 
   it("validates URLs before fetching", async () => {
@@ -348,9 +342,19 @@ describe(XrioClient, () => {
       name: "TypeError",
     });
     await expect(client.scrape({ format: "html", url: "relative/path" })).rejects.toMatchObject({
-      code: "ERR_INVALID_URL",
+      code: "INVALID_OPTIONS",
       name: "TypeError",
     });
+
+    const withCredentials = client.scrape({
+      format: "html",
+      url: "https://user:secret@xrio.invalid/",
+    });
+
+    await expect(withCredentials).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+    await expect(withCredentials).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Number.POSITIVE_INFINITY }).includes("secret"),
+    );
   });
 
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
@@ -362,39 +366,18 @@ describe(XrioClient, () => {
     },
   );
 
-  it("defaults to 60 seconds and allows a per-call timeout", async () => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
-    const client = new XrioClient();
-
-    try {
-      await client.scrape({ format: "html", url: `${origin}/fragment` });
-      expect(timeout).toHaveBeenCalledWith(60_000);
-      await expect(
-        client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/slow` }),
-      ).rejects.toThrow(/abort|timeout/iu);
-      expect(timeout).toHaveBeenLastCalledWith(100);
-    } finally {
-      timeout.mockRestore();
-    }
-  });
-
-  it("propagates native network and timeout errors", async () => {
-    const client = new XrioClient();
-
+  it("propagates native network errors", async () => {
     await expect(
-      client.scrape({ format: "html", url: `${origin}/disconnect` }),
+      new XrioClient().scrape({ format: "html", url: `${origin}/disconnect` }),
     ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKET" }, name: "TypeError" });
-    await expect(
-      client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/waiting` }),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
   });
 
   it("allows callers to abort before fetching or during a request", async () => {
     const client = new XrioClient();
     const controller = new AbortController();
-    server.once("request", () => {
+    onRequest = () => {
       controller.abort();
-    });
+    };
 
     const pending = client.scrape({
       format: "html",
@@ -416,5 +399,56 @@ describe(XrioClient, () => {
     ).resolves.toMatchObject({
       data: "<p>Body only</p>",
     });
+  });
+});
+
+describe("XrioClient errors", () => {
+  let server: FixtureServer;
+  let origin: string;
+
+  beforeAll(async () => {
+    server = await startFixtureServer(routes);
+    ({ origin } = server);
+  });
+
+  afterAll(async () => {
+    await server[Symbol.asyncDispose]();
+  });
+
+  it.each(["/waiting", "/slow"])(
+    "rejects with TIMEOUT when the deadline passes while loading %s",
+    async (path) => {
+      const rejection = new XrioClient().scrape({
+        format: "html",
+        timeoutMs: 100,
+        url: `${origin}${path}`,
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(XrioError);
+      await expect(rejection).rejects.toMatchObject({ code: "TIMEOUT", name: "XrioError" });
+    },
+  );
+
+  it("refuses a proxy in http mode until it can be used, without echoing its credentials", async () => {
+    const rejection = new XrioClient({ proxy: "http://user:secret@proxy.test:8000" }).scrape({
+      format: "html",
+      url: origin,
+    });
+
+    await expect(rejection).rejects.toMatchObject({ code: "INVALID_OPTIONS", name: "TypeError" });
+    await expect(rejection).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Number.POSITIVE_INFINITY }).includes("secret"),
+    );
+  });
+
+  it("rejects with errors that isXrioError recognizes by code", async () => {
+    const client = new XrioClient();
+
+    await expect(client.scrape({ format: "html", url: `${origin}/plain` })).rejects.toSatisfy(
+      (error) => isXrioError(error, "UNSUPPORTED_CONTENT_TYPE"),
+    );
+    await expect(client.scrape({ format: "html", url: "ftp://xrio.invalid" })).rejects.toSatisfy(
+      (error) => isXrioError(error, "INVALID_OPTIONS"),
+    );
   });
 });
