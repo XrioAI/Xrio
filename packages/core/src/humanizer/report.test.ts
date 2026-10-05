@@ -147,6 +147,7 @@ const forkAt = (version: string, build: RecordedBuild = NO_BUILD): HostCapabilit
     personas: { speech: [] },
     version,
   },
+  permittedCpus: 32,
   platform: "linux",
 });
 
@@ -188,7 +189,11 @@ describe("the identity report", () => {
 
   it.each([
     { client: null, tells: [], version: "no browser" },
-    { client: { platform: "linux" as const }, tells: [], version: "a stock binary" },
+    {
+      client: { permittedCpus: 32, platform: "linux" as const },
+      tells: [],
+      version: "a stock binary",
+    },
     { client: forkAt("149.0.7800.10"), tells: [], version: "a fork on Chrome 149" },
     {
       client: forkAt("154.0.8037.57"),
@@ -204,7 +209,7 @@ describe("the identity report", () => {
 
   it("reports a headless stock scrape on Linux", () => {
     const plan = planIdentity({
-      capabilities: { platform: "linux" },
+      capabilities: { permittedCpus: 32, platform: "linux" },
       device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
@@ -290,6 +295,7 @@ describe("the identity report", () => {
           personas: { speech: [] },
           version: "154.0.8037.57",
         },
+        permittedCpus: 32,
         platform: "linux",
       },
       device: fixedDevice,
@@ -362,9 +368,9 @@ describe("the identity report", () => {
       ].map((report) => report.digests);
 
       expect(digests.map(({ host }) => host)).toStrictEqual([
-        "8db4de099293e4d6b78a986dde3e75f783b9bb760d6589f99e41ca857e49b804",
-        "3c73050c049807ba2368456ef1825e4e2ae6ec4db3196d40a9d62e9623615e44",
-        "bc241838a7791d63c0e94b0cb2b7f663e2bbf2ae9d3690cf6a42fac686b9a463",
+        "cd2978d6ab4db4a257ee232d8d2b7fd6543b7702a09bf972691354600f33f78f",
+        "bcb7b6a17c82dbb2998924e123ac25ec30016ef576d5980614501fdc96ba0db9",
+        "006d43d8bf963dc75c9de54ef6fc705dfc9eea6382470fb8933851a9ef625d88",
       ]);
       expect(digests.map(({ device }) => device)).toStrictEqual([
         DEVICE_DIGEST,
@@ -376,7 +382,7 @@ describe("the identity report", () => {
 
   it("reports a headed stock scrape of a non-secure page on macOS, with no secure-context surface read", () => {
     const plan = planIdentity({
-      capabilities: { platform: "darwin" },
+      capabilities: { permittedCpus: 32, platform: "darwin" },
       device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "America/Toronto",
@@ -467,7 +473,7 @@ describe("the identity report", () => {
 
 describe("the secure-context surfaces' coverage", () => {
   const plan = planIdentity({
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
@@ -500,7 +506,7 @@ describe("the secure-context surfaces' coverage", () => {
 describe("a secure origin whose individual reads gave nothing", () => {
   it("marks only those surfaces unchecked with read-failed", () => {
     const plan = planIdentity({
-      capabilities: { platform: "linux" },
+      capabilities: { permittedCpus: 32, platform: "linux" },
       device: fixedDevice,
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
@@ -535,7 +541,7 @@ describe("a secure origin whose individual reads gave nothing", () => {
 
 describe("report independence", () => {
   const plan = planIdentity({
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
@@ -610,7 +616,7 @@ const aliasedPaths = (report: IdentityReport): string[][] => {
 
 describe("no shared object inside one report", () => {
   const plan = planIdentity({
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
@@ -642,7 +648,7 @@ describe("no shared object inside one report", () => {
 
 describe("coverage backed by timezone reads", () => {
   const plan = planIdentity({
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",

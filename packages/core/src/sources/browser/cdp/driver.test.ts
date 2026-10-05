@@ -124,7 +124,7 @@ describe("the CDP driver's documents", () => {
       display: undefined,
       headless: true,
       identity: planIdentity({
-        capabilities: { platform: process.platform },
+        capabilities: { permittedCpus: 32, platform: process.platform },
         device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
@@ -165,7 +165,7 @@ describe("the CDP driver's documents", () => {
       display: undefined,
       headless: true,
       identity: planIdentity({
-        capabilities: { platform: process.platform },
+        capabilities: { permittedCpus: 32, platform: process.platform },
         device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",

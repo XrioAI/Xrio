@@ -25,7 +25,11 @@ const GATHERED: FontEvidenceOutcome = {
   sentinel: "c6755abb",
 };
 
-const WITH_STACK: HostCapabilities = { fontStack: CHECKED_FONT_STACK, platform: "linux" };
+const WITH_STACK: HostCapabilities = {
+  fontStack: CHECKED_FONT_STACK,
+  permittedCpus: 32,
+  platform: "linux",
+};
 
 type StoreOverrides = Parameters<typeof createFontEvidenceStore>[0];
 
@@ -205,16 +209,21 @@ describe("the fonts evidence store, keys", () => {
     {
       capabilities: {
         fontStack: { ...CHECKED_FONT_STACK, payload: "0".repeat(64) },
+        permittedCpus: 32,
         platform: "linux" as const,
       },
       change: "a stack with another payload",
     },
     {
-      capabilities: { platform: "linux" as const },
+      capabilities: { permittedCpus: 32, platform: "linux" as const },
       change: "the host fonts instead of a checked stack",
     },
     {
-      capabilities: { fontStack: CHECKED_FONT_STACK, platform: "darwin" as const },
+      capabilities: {
+        fontStack: CHECKED_FONT_STACK,
+        permittedCpus: 32,
+        platform: "darwin" as const,
+      },
       change: "another platform",
     },
   ])("gathers again for $change", async ({ capabilities }) => {

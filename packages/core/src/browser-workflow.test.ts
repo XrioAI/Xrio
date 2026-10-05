@@ -1244,7 +1244,12 @@ describe("the identity a visit launches Chrome with", () => {
     using deadline = startDeadline(10_000);
 
     const browsers = plannedVisits(readingDriver, 1, {
-      host: async () => await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" }),
+      host: async () =>
+        await Promise.resolve({
+          fontStack: CHECKED_FONT_STACK,
+          permittedCpus: 32,
+          platform: "linux",
+        }),
     });
 
     await browsers.visit(await normalRequest(deadline)).document;
@@ -1257,7 +1262,7 @@ describe("the identity a visit launches Chrome with", () => {
 
   it.each([
     {
-      capabilities: { platform: "linux" },
+      capabilities: { permittedCpus: 32, platform: "linux" },
       host: "Linux",
       switches: [
         "--enable-unsafe-swiftshader",
@@ -1265,7 +1270,7 @@ describe("the identity a visit launches Chrome with", () => {
       ],
     },
     {
-      capabilities: { platform: "linux", readableRenderNode: true },
+      capabilities: { permittedCpus: 32, platform: "linux", readableRenderNode: true },
       host: "Linux with a render node",
       switches: [
         "--use-gl=angle",
@@ -1273,7 +1278,7 @@ describe("the identity a visit launches Chrome with", () => {
         "--use-fake-device-for-media-stream=device-count=0",
       ],
     },
-    { capabilities: { platform: "darwin" }, host: "darwin", switches: [] },
+    { capabilities: { permittedCpus: 32, platform: "darwin" }, host: "darwin", switches: [] },
   ] satisfies readonly {
     readonly capabilities: HostCapabilities;
     readonly host: string;
@@ -1346,7 +1351,7 @@ describe("the launch identity check", () => {
     vi.stubEnv("TZ", "UTC");
 
     const browsers = plannedVisits(cdpDriver, 1, {
-      host: async () => await Promise.resolve({ platform: "linux" }),
+      host: async () => await Promise.resolve({ permittedCpus: 32, platform: "linux" }),
       random: fixedRandom,
     });
 
@@ -1384,7 +1389,7 @@ describe("the launch identity check", () => {
     vi.stubEnv("TZ", "UTC");
 
     const browsers = plannedVisits(cdpDriver, 1, {
-      host: async () => await Promise.resolve({ platform: "linux" }),
+      host: async () => await Promise.resolve({ permittedCpus: 32, platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
@@ -1484,7 +1489,7 @@ describe("the launch identity check", () => {
 
   it("rejects a Chrome that ignores the pinned locale before navigation", async () => {
     const browsers = plannedVisits(cdpDriver, 1, {
-      host: async () => await Promise.resolve({ platform: "linux" }),
+      host: async () => await Promise.resolve({ permittedCpus: 32, platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
@@ -1660,7 +1665,7 @@ describe("a named session's device record", () => {
 
   it("presents the stored device instead of drawing a seed", async () => {
     const browsers = plannedVisits(cdpDriver, 1, {
-      host: async () => await Promise.resolve({ platform: "linux" }),
+      host: async () => await Promise.resolve({ permittedCpus: 32, platform: "linux" }),
       random: () => {
         throw new Error("A named session draws no seed.");
       },
@@ -1750,7 +1755,7 @@ describe("the identity-chosen event", () => {
       };
 
       const browsers = plannedVisits(cdpDriver, 1, {
-        host: async () => await Promise.resolve({ platform: "linux" }),
+        host: async () => await Promise.resolve({ permittedCpus: 32, platform: "linux" }),
         random: fixedRandom,
       });
 
@@ -2011,10 +2016,15 @@ describe("the after-capture read", () => {
   );
 });
 
-const LINUX_HOST = async () => await Promise.resolve({ platform: "linux" as const });
+const LINUX_HOST = async () =>
+  await Promise.resolve({ permittedCpus: 32, platform: "linux" as const });
 
 const PINNED_HOST = async () =>
-  await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" as const });
+  await Promise.resolve({
+    fontStack: CHECKED_FONT_STACK,
+    permittedCpus: 32,
+    platform: "linux" as const,
+  });
 
 const fontsOf = async (browsers: PlannedScrapes, browserPath: string) => {
   using deadline = startDeadline(10_000);
@@ -2086,7 +2096,12 @@ describe("the fonts evidence across visits", () => {
   it("notes a sentinel that drifted from the stored evidence, tells fonts-drift, and gathers again", async () => {
     using seeding = startDeadline(10_000);
 
-    const claim = await storeAt().claim(drifting, { platform: "linux" }, "en-US", seeding);
+    const claim = await storeAt().claim(
+      drifting,
+      { permittedCpus: 32, platform: "linux" },
+      "en-US",
+      seeding,
+    );
 
     await claim.settle({ digest: "c41f09a2", kind: "gathered", sentinel: "5e17a1b2" });
 

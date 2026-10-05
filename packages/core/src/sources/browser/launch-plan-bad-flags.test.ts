@@ -10,7 +10,7 @@ const SCRATCH = "/tmp/xrio-501/bAbC123";
 
 const launchOf = (headless: boolean, browserArgs: readonly string[]) => {
   const identity = planIdentity({
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "America/Chicago",

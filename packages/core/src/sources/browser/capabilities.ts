@@ -3,6 +3,7 @@ import type { ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { access, constants, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { text } from "node:stream/consumers";
@@ -63,6 +64,14 @@ const STDERR_TAIL_CHARS = 2048;
 const FACTS_FORMAT = 1;
 
 const RENDER_NODE_DIRECTORY = "/dev/dri";
+
+const PROCESS_STATUS_FILE = "/proc/self/status";
+
+const ONLINE_CPUS_FILE = "/sys/devices/system/cpu/online";
+
+const CPUS_ALLOWED_LINE = /^Cpus_allowed_list:[ \t]*(?<list>[^\r\n]*?)[ \t]*$/mu;
+
+const CPU_RANGE = /^(?<first>\d+)(?:-(?<last>\d+))?$/u;
 
 const RENDER_NODE_NAME = /^renderD\d+$/u;
 
@@ -132,6 +141,9 @@ interface ProbeOptions {
   readonly fcList: string;
   readonly now: () => number;
   readonly renderNodeDirectory: string;
+  readonly onlineCpusFile: string;
+  readonly processStatusFile: string;
+  readonly parallelism: () => number;
   readonly platform: NodeJS.Platform;
   readonly root: string;
   readonly scratchRoot: string;
@@ -278,6 +290,68 @@ const hasReadableRenderNode = async (directory: string): Promise<boolean> => {
 
   return readable.includes(true);
 };
+
+const cpusInList = (list: string): ReadonlySet<number> | undefined => {
+  const cpus = new Set<number>();
+
+  for (const part of list.split(",")) {
+    const { first, last = first } = CPU_RANGE.exec(part)?.groups ?? {};
+
+    if (first === undefined || Number(last) < Number(first)) {
+      return undefined;
+    }
+
+    for (let cpu = Number(first); cpu <= Number(last); cpu += 1) {
+      cpus.add(cpu);
+    }
+  }
+
+  return cpus;
+};
+
+const readCpuList = async (
+  file: string,
+  listOf: (content: string) => string | undefined,
+): Promise<ReadonlySet<number> | undefined> => {
+  try {
+    const list = listOf(await readFile(file, "utf-8"));
+
+    return list === undefined ? undefined : cpusInList(list);
+  } catch {
+    return undefined;
+  }
+};
+
+const allowedCpusIn = async ({
+  onlineCpusFile,
+  processStatusFile,
+}: Pick<ProbeOptions, "onlineCpusFile" | "processStatusFile">): Promise<number | undefined> => {
+  const allowed = await readCpuList(
+    processStatusFile,
+    (content) => CPUS_ALLOWED_LINE.exec(content)?.groups?.list,
+  );
+
+  if (allowed === undefined) {
+    return undefined;
+  }
+
+  const online = await readCpuList(onlineCpusFile, (content) => content.trim());
+
+  const counted =
+    online === undefined ? allowed : new Set([...allowed].filter((cpu) => online.has(cpu)));
+
+  return counted.size > 0 ? counted.size : allowed.size;
+};
+
+const permittedCpusOf = async ({
+  parallelism,
+  platform,
+  ...files
+}: Pick<
+  ProbeOptions,
+  "onlineCpusFile" | "parallelism" | "platform" | "processStatusFile"
+>): Promise<number> =>
+  (platform === "linux" ? await allowedCpusIn(files) : undefined) ?? parallelism();
 
 const readVersions = async (versions: string): Promise<string | null> => {
   if (!(await isFile(versions))) {
@@ -754,7 +828,10 @@ export const createCapabilityProbe = (
     budgetSignal: (budgetMs) => AbortSignal.timeout(budgetMs),
     fcList: "fc-list",
     now: Date.now,
+    onlineCpusFile: ONLINE_CPUS_FILE,
+    parallelism: availableParallelism,
     platform: process.platform,
+    processStatusFile: PROCESS_STATUS_FILE,
     renderNodeDirectory: RENDER_NODE_DIRECTORY,
     root: hostCacheRoot(),
     scratchRoot: overrides.root ?? scratchRoot(),
@@ -859,9 +936,11 @@ export const createCapabilityProbe = (
   };
 
   const probeFork: HostCapabilityProbe = async (browserPath, deadline) => {
+    const permittedCpus = await permittedCpusOf(options);
+
     const host: HostCapabilities = (await hasReadableRenderNode(options.renderNodeDirectory))
-      ? { platform: options.platform, readableRenderNode: true }
-      : { platform: options.platform };
+      ? { permittedCpus, platform: options.platform, readableRenderNode: true }
+      : { permittedCpus, platform: options.platform };
 
     const fork = browserPath === undefined ? undefined : await forkPackageOf(browserPath);
 

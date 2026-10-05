@@ -58,6 +58,8 @@ const HOUR_MS = 60 * 60 * 1000;
 
 const FAILED_PROBE_TTL_MS = 60_000;
 
+const PARALLELISM = 12;
+
 const KIT_PERSONAS = {
   speech: [
     {
@@ -158,6 +160,17 @@ const ownedBy = async (root: string, prefix: string, pid: number): Promise<strin
   return directory;
 };
 
+const writeStatus = async (directory: string, cpusAllowed: string): Promise<string> => {
+  const file = path.join(directory, "status");
+
+  await writeFile(
+    file,
+    `Name:\tnode\nCpus_allowed:\tffffffff\nCpus_allowed_list:\t${cpusAllowed}\nMems_allowed:\t1\n`,
+  );
+
+  return file;
+};
+
 describe("hostCapabilities", () => {
   let root = "";
   let probed: string[] = [];
@@ -184,10 +197,37 @@ describe("hostCapabilities", () => {
   const dri = () => path.join(root, "dri");
 
   const probeWith = (
-    overrides: { now?: () => number; budgetMs?: number; renderNodeDirectory?: string } = {},
-  ) => createCapabilityProbe({ renderNodeDirectory: dri(), root: scratch(), ...overrides });
+    overrides: {
+      now?: () => number;
+      budgetMs?: number;
+      renderNodeDirectory?: string;
+      platform?: NodeJS.Platform;
+      processStatusFile?: string;
+      onlineCpusFile?: string;
+    } = {},
+  ) =>
+    createCapabilityProbe({
+      onlineCpusFile: path.join(root, "no-online"),
+      parallelism: () => PARALLELISM,
+      processStatusFile: path.join(root, "no-status"),
+      renderNodeDirectory: dri(),
+      root: scratch(),
+      ...overrides,
+    });
 
   const forkAt = async (scenario: FakeForkScenario) => await fakeForkPath(scenario, { root });
+
+  const permittedOn = async (
+    platform: NodeJS.Platform,
+    processStatusFile: string,
+    onlineCpusFile = path.join(root, "no-online"),
+  ) => {
+    const { permittedCpus } = await probeWith({ onlineCpusFile, platform, processStatusFile })(
+      path.join(root, "chrome"),
+    );
+
+    return permittedCpus;
+  };
 
   const buildRecordedBy = async (versionsLines: string) => {
     const { fork } = await probeWith()(await fakeForkPath("kit", { root, versionsLines }));
@@ -416,7 +456,10 @@ describe("hostCapabilities", () => {
       async (scenario) => {
         const trap = await forkAt(scenario);
 
-        await expect(probeWith()(trap)).resolves.toStrictEqual({ platform: process.platform });
+        await expect(probeWith()(trap)).resolves.toStrictEqual({
+          permittedCpus: PARALLELISM,
+          platform: process.platform,
+        });
         expect(existsSync(trapExecuted(trap))).toBeFalsy();
         expect(probed).toStrictEqual([]);
       },
@@ -424,6 +467,7 @@ describe("hostCapabilities", () => {
 
     it("treats a browser path that does not resolve as stock", async () => {
       await expect(probeWith()(path.join(root, "missing", "chrome"))).resolves.toStrictEqual({
+        permittedCpus: PARALLELISM,
         platform: process.platform,
       });
     });
@@ -450,6 +494,7 @@ describe("hostCapabilities", () => {
   describe("the render node", () => {
     it("is absent where the host has no /dev/dri", async () => {
       await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        permittedCpus: PARALLELISM,
         platform: process.platform,
       });
     });
@@ -462,6 +507,7 @@ describe("hostCapabilities", () => {
       });
 
       await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        permittedCpus: PARALLELISM,
         platform: process.platform,
       });
     });
@@ -470,6 +516,7 @@ describe("hostCapabilities", () => {
       await driWith(dri(), { card0: "readable", renderD128: "dangling", renderD129: "readable" });
 
       await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        permittedCpus: PARALLELISM,
         platform: process.platform,
         readableRenderNode: true,
       });
@@ -479,6 +526,7 @@ describe("hostCapabilities", () => {
       await driWith(dri(), { renderD128: "dangling" });
 
       await expect(probeWith()(path.join(root, "chrome"))).resolves.toStrictEqual({
+        permittedCpus: PARALLELISM,
         platform: process.platform,
       });
     });
@@ -493,6 +541,67 @@ describe("hostCapabilities", () => {
         capabilities.readableRenderNode,
         capabilities.fork?.version,
       ]).toStrictEqual([process.platform, true, "154.0.8037.57"]);
+    });
+  });
+
+  describe("the permitted CPUs", () => {
+    it.each([
+      { count: 32, list: "0-31" },
+      { count: 6, list: "1,3,8-11" },
+      { count: 1, list: "5" },
+      { count: 5, list: "0-1,4-5,8" },
+    ])("counts $count CPUs in the Linux list $list", async ({ count, list }) => {
+      await expect(permittedOn("linux", await writeStatus(root, list))).resolves.toBe(count);
+    });
+
+    it.each(["", "3-1", "a-b", "1,,2", "1-"])(
+      "falls back to the host's parallelism for the list %j",
+      async (list) => {
+        await expect(permittedOn("linux", await writeStatus(root, list))).resolves.toBe(
+          PARALLELISM,
+        );
+      },
+    );
+
+    it.each([
+      { allowed: "0-15", count: 12, online: "0-11\n" },
+      { allowed: "1,3,8-11", count: 6, online: "0-31\n" },
+      { allowed: "0-15", count: 8, online: "0-3,8-11\n" },
+      { allowed: "0-31", count: 32, online: undefined },
+      { allowed: "0-31", count: 32, online: "0-x\n" },
+      { allowed: "0-31", count: 32, online: "" },
+      { allowed: "0-3", count: 4, online: "8-11\n" },
+    ])(
+      "counts $count CPUs for allowed $allowed with online $online",
+      async ({ allowed, count, online }) => {
+        const onlineFile = path.join(root, "online");
+
+        if (online !== undefined) {
+          await writeFile(onlineFile, online);
+        }
+
+        await expect(
+          permittedOn("linux", await writeStatus(root, allowed), onlineFile),
+        ).resolves.toBe(count);
+      },
+    );
+
+    it("falls back to the host's parallelism where /proc/self/status is unreadable", async () => {
+      await expect(permittedOn("linux", path.join(root, "absent"))).resolves.toBe(PARALLELISM);
+    });
+
+    it("falls back to the host's parallelism when the status file has no list", async () => {
+      const file = path.join(root, "status");
+
+      await writeFile(file, "Name:\tnode\n");
+
+      await expect(permittedOn("linux", file)).resolves.toBe(PARALLELISM);
+    });
+
+    it("reads no status file off Linux", async () => {
+      await expect(permittedOn("darwin", await writeStatus(root, "0-1"))).resolves.toBe(
+        PARALLELISM,
+      );
     });
   });
 
@@ -795,7 +904,9 @@ const useFontStack = () => {
   const probeOn = (overrides: StackProbeOverrides = {}) =>
     createCapabilityProbe({
       fcList: fixture().fcList,
+      parallelism: () => PARALLELISM,
       platform: "linux",
+      processStatusFile: path.join(fixture().directory, "no-status"),
       root: scratch(),
       ...overrides,
     });
@@ -976,6 +1087,7 @@ describe("hostCapabilities font stack", () => {
     await rm(path.join(fixture().directory, "stack.json"));
 
     await expect(probeOn()(fixture().binary)).resolves.toStrictEqual({
+      permittedCpus: PARALLELISM,
       platform: "linux",
     });
     await expect(fcListRuns(fixture())).resolves.toStrictEqual([]);
@@ -983,6 +1095,7 @@ describe("hostCapabilities font stack", () => {
 
   it("looks for no stack off Linux", async () => {
     await expect(probeOn({ platform: "darwin" })(fixture().binary)).resolves.toStrictEqual({
+      permittedCpus: PARALLELISM,
       platform: "darwin",
     });
     await expect(fcListRuns(fixture())).resolves.toStrictEqual([]);

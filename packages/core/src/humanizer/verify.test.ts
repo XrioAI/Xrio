@@ -59,7 +59,7 @@ const linuxHeadless: Observation = {
 };
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
-  capabilities: { fontStack: CHECKED_FONT_STACK, platform: "linux" },
+  capabilities: { fontStack: CHECKED_FONT_STACK, permittedCpus: 32, platform: "linux" },
   device: fixedDevice,
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "Asia/Kolkata",
@@ -79,7 +79,12 @@ const planFor = (overrides: Partial<IdentityContext> = {}) => planIdentity(conte
 
 const planWithEvidence = () =>
   planFor({
-    capabilities: { fontEvidence: EVIDENCE, fontStack: CHECKED_FONT_STACK, platform: "linux" },
+    capabilities: {
+      fontEvidence: EVIDENCE,
+      fontStack: CHECKED_FONT_STACK,
+      permittedCpus: 32,
+      platform: "linux",
+    },
   });
 
 const planWith = (expected: readonly SurfaceExpectation[]) => ({ ...planFor(), expected });
@@ -269,7 +274,7 @@ describe("severity", () => {
 
   it("only notes an Intl language off the plan on macOS", () => {
     expect(
-      evaluate(planFor({ capabilities: { platform: "darwin" } }), {
+      evaluate(planFor({ capabilities: { permittedCpus: 32, platform: "darwin" } }), {
         ...linuxHeadless,
         colorScheme: "dark",
         intlLocale: "fr-CA",
@@ -516,12 +521,13 @@ describe("the fonts evidence", () => {
   });
 
   it("expects the sentinel to resolve only where the stack is pinned", () => {
-    const hostFonts = planFor({ capabilities: { platform: "linux" } });
+    const hostFonts = planFor({ capabilities: { permittedCpus: 32, platform: "linux" } });
     const unresolved = { ...linuxHeadless, fontsSentinelResolved: false };
 
     expect([
       evaluate(hostFonts, unresolved).report.notes,
-      evaluate(planFor({ capabilities: { platform: "darwin" } }), unresolved).report.notes,
+      evaluate(planFor({ capabilities: { permittedCpus: 32, platform: "darwin" } }), unresolved)
+        .report.notes,
     ]).toStrictEqual([[], []]);
   });
 
@@ -636,7 +642,9 @@ const readInPage = (
   fontEvidence?: FontEvidence,
 ): string => {
   const capabilities: HostCapabilities =
-    fontEvidence === undefined ? { platform: "linux" } : { fontEvidence, platform: "linux" };
+    fontEvidence === undefined
+      ? { permittedCpus: 32, platform: "linux" }
+      : { fontEvidence, permittedCpus: 32, platform: "linux" };
 
   return runRead(
     planIdentity(contextOf({ capabilities, hostZone })).read.beforeNavigation,

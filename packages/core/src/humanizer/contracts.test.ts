@@ -62,7 +62,7 @@ const STACK: FontStackFacts = {
   rules: ["10-antialias.conf", "60-latin.conf"],
 };
 
-const HOST_WITH_STACK = "b23631b565ac1284e141281ef6c93ec583d27f47f9bcfabfad7a64cad11d1dd5";
+const HOST_WITH_STACK = "4b3efd7a8fde068a0ec642f1738c86671da37d249ba422a33ed2a8c2db2dcce5";
 
 const FORK: ForkFacts = {
   buildUnreadable: false,
@@ -79,9 +79,17 @@ const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
 describe(hostDigest, () => {
   it("hashes the canonical JSON of the host capabilities", () => {
-    expect(hostDigest({ platform: "linux" })).toBe(
-      "a0bda0c198f101a78089a967aeea62b5b2250dc77f0f96a254078494e9af9831",
+    expect(hostDigest({ permittedCpus: 32, platform: "linux" })).toBe(
+      "552ef7a2d12ce590b366a06f4d069fdb8a62f7a08aa8fa0be33011854f612c9c",
     );
+  });
+
+  it("gives hosts that permit other CPUs other digests, because they present other hardware", () => {
+    const digests = [32, 6].map((permittedCpus) =>
+      hostDigest({ permittedCpus, platform: "linux" }),
+    );
+
+    expect(new Set(digests).size).toBe(2);
   });
 
   it("names a checked font stack by its content, wherever it and its cache live", () => {
@@ -92,7 +100,9 @@ describe(hostDigest, () => {
     };
 
     expect(
-      [STACK, moved].map((fontStack) => hostDigest({ fontStack, platform: "linux" })),
+      [STACK, moved].map((fontStack) =>
+        hostDigest({ fontStack, permittedCpus: 32, platform: "linux" }),
+      ),
     ).toStrictEqual([HOST_WITH_STACK, HOST_WITH_STACK]);
   });
 
@@ -103,14 +113,14 @@ describe(hostDigest, () => {
       { ...FORK, commit: COMMIT, dirty: 2 },
       { ...FORK, commit: "fedcba9876543210fedcba9876543210fedcba98", dirty: 0 },
       { ...FORK, buildUnreadable: true },
-    ].map((fork) => hostDigest({ fork, platform: "linux" }));
+    ].map((fork) => hostDigest({ fork, permittedCpus: 32, platform: "linux" }));
 
     expect(hosts).toStrictEqual([
-      "8db4de099293e4d6b78a986dde3e75f783b9bb760d6589f99e41ca857e49b804",
-      "3c73050c049807ba2368456ef1825e4e2ae6ec4db3196d40a9d62e9623615e44",
-      "1466f9367bb9942baca106a02686665f4b531c75966c4a674cd740d35824442b",
-      "2ffa0f9fe4db2466ddff3bf5d4de4a34fb2fc7b7e15a6cd771afb0f26d375719",
-      "93761b029d0715e395d2202434453a3f6437241aa046fdbcfc3e833f6a2131ef",
+      "cd2978d6ab4db4a257ee232d8d2b7fd6543b7702a09bf972691354600f33f78f",
+      "bcb7b6a17c82dbb2998924e123ac25ec30016ef576d5980614501fdc96ba0db9",
+      "c763a12297711f8436a3bd74f02b386da7af556b25d668b3c820320ca40411c9",
+      "b07cb85ae1e5da77f3f626dff7dfbcc6dbb2aa263c8505d7caaa7a41476e4f19",
+      "b13c969f40a474cca7dbd3f2e243337596f677da1c51cbc0b050c4fc7150e81a",
     ]);
   });
 
@@ -125,6 +135,7 @@ describe(hostDigest, () => {
             sentinel: "5e17a1b2",
           },
           fontStack: STACK,
+          permittedCpus: 32,
           platform: "linux",
         }),
       ),

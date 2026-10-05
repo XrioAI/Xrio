@@ -13,7 +13,7 @@ import { noPins } from "./testing/no-pins.ts";
 const browserPlan: VisitPlan = {
   browserArgs: [],
   browserPath: "/unused-browser",
-  capabilities: { platform: "linux" },
+  capabilities: { permittedCpus: 32, platform: "linux" },
   fonts: {
     evidence: undefined,
     settle: async () => {
@@ -21,7 +21,7 @@ const browserPlan: VisitPlan = {
     },
   },
   identity: planIdentity({
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",

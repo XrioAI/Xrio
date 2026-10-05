@@ -23,7 +23,10 @@ interface IdentityChoice {
 
 const identityFor = ({ fontStack, headless, platform, timezone }: IdentityChoice): BrowserInputs =>
   planIdentity({
-    capabilities: fontStack === undefined ? { platform } : { fontStack, platform },
+    capabilities:
+      fontStack === undefined
+        ? { permittedCpus: 32, platform }
+        : { fontStack, permittedCpus: 32, platform },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: timezone,
@@ -104,7 +107,7 @@ describe(planLaunch, () => {
       display: ":99",
       headless: false,
       identity: planIdentity({
-        capabilities: { platform: "linux", readableRenderNode: true },
+        capabilities: { permittedCpus: 32, platform: "linux", readableRenderNode: true },
         device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
@@ -322,7 +325,7 @@ describe(planLaunch, () => {
       display: undefined,
       headless: true,
       identity: planIdentity({
-        capabilities: { platform: "linux" },
+        capabilities: { permittedCpus: 32, platform: "linux" },
         device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",

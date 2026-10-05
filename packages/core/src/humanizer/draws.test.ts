@@ -195,7 +195,7 @@ const fixedRecord: DeviceRecord = {
 
 describe("the device record", () => {
   const context: IdentityContext = {
-    capabilities: { platform: "linux" },
+    capabilities: { permittedCpus: 32, platform: "linux" },
     device: fixedDevice,
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: "UTC",
@@ -297,7 +297,7 @@ const hostScreen: Observation = {
 };
 
 const headedContext: IdentityContext = {
-  capabilities: { platform: "linux" },
+  capabilities: { permittedCpus: 32, platform: "linux" },
   device: fixedDevice,
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "UTC",
@@ -410,7 +410,7 @@ describe("a record replayed on another host", () => {
   it("keeps the stored device and tells that the host's GPU or voices differ", () => {
     const replayed = planIdentity({
       ...headedContext,
-      capabilities: { platform: "darwin" },
+      capabilities: { permittedCpus: 32, platform: "darwin" },
       device: { kind: "record", record: fixedRecord },
       mode: "headless",
     });
@@ -429,7 +429,7 @@ describe("a record replayed on another host", () => {
   it("records the checked font stack and tells when a host without it replays the record", () => {
     const stacked = planIdentity({
       ...headedContext,
-      capabilities: { fontStack: CHECKED_FONT_STACK, platform: "linux" },
+      capabilities: { fontStack: CHECKED_FONT_STACK, permittedCpus: 32, platform: "linux" },
       mode: "headless",
     }).chosen.record;
 

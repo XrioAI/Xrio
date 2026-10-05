@@ -36,7 +36,7 @@ const documentFor = (html: string): SourceDocument => {
     ...response,
     block: classifyResponse({ html, requestUrls: [response.url], response }),
     html,
-    identity: httpIdentity(noPins).report({ platform: "linux" }),
+    identity: httpIdentity(noPins).report({ permittedCpus: 32, platform: "linux" }),
     requestUrls: [response.url],
   };
 };
@@ -103,7 +103,7 @@ const harness = (options: HarnessOptions = {}) => {
         stage("host");
         events.push(`binary:${binary ?? "none"}`);
 
-        return await Promise.resolve({ platform: "linux" });
+        return await Promise.resolve({ permittedCpus: 32, platform: "linux" });
       },
     },
     random: fixedRandom,

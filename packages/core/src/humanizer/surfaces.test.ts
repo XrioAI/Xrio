@@ -11,7 +11,7 @@ import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
-  capabilities: { platform: "linux" },
+  capabilities: { permittedCpus: 32, platform: "linux" },
   device: fixedDevice,
   exit: { facts: { kind: "unknown" }, route: "direct" },
   hostZone: "America/Chicago",
@@ -69,6 +69,7 @@ const forkWith = (
     },
     version: "154.0.8037.57",
   },
+  permittedCpus: 32,
   platform: "linux",
 });
 
@@ -84,6 +85,7 @@ const STACK: FontStack = {
 
 const withStack = (platform: NodeJS.Platform = "linux"): HostCapabilities => ({
   fontStack: { ...STACK, kind: "checked" },
+  permittedCpus: 32,
   platform,
 });
 
@@ -153,8 +155,12 @@ describe("the locale surface", () => {
 
   it("only notes an Intl language off the plan on macOS, where Intl follows the host", () => {
     expect(
-      resolveSurfaces(contextOf({ ...pinnedTo("de-DE"), capabilities: { platform: "darwin" } }))
-        .locale.expected,
+      resolveSurfaces(
+        contextOf({
+          ...pinnedTo("de-DE"),
+          capabilities: { permittedCpus: 32, platform: "darwin" },
+        }),
+      ).locale.expected,
     ).toStrictEqual(expectedLocale("de-DE", ["de-DE", "de", "en-US", "en"], "note"));
   });
 
@@ -390,8 +396,11 @@ describe("the gpu surface", () => {
 
   it("selects ANGLE on Vulkan on Linux when a render node is readable", () => {
     expect(
-      resolveSurfaces(contextOf({ capabilities: { platform: "linux", readableRenderNode: true } }))
-        .gpu,
+      resolveSurfaces(
+        contextOf({
+          capabilities: { permittedCpus: 32, platform: "linux", readableRenderNode: true },
+        }),
+      ).gpu,
     ).toStrictEqual({
       expected: [webglContext],
       inputs: [
@@ -403,7 +412,9 @@ describe("the gpu surface", () => {
   });
 
   it.each(["darwin", "win32"] as const)("leaves the system's backend alone on %s", (platform) => {
-    expect(resolveSurfaces(contextOf({ capabilities: { platform } })).gpu).toStrictEqual({
+    expect(
+      resolveSurfaces(contextOf({ capabilities: { permittedCpus: 32, platform } })).gpu,
+    ).toStrictEqual({
       expected: [webglContext],
       inputs: [],
       value: { backend: "native" },
@@ -548,7 +559,9 @@ describe("the media surface", () => {
   });
 
   it.each(["darwin", "win32"] as const)("leaves the host's own devices alone on %s", (platform) => {
-    expect(resolveSurfaces(contextOf({ capabilities: { platform } })).media).toStrictEqual({
+    expect(
+      resolveSurfaces(contextOf({ capabilities: { permittedCpus: 32, platform } })).media,
+    ).toStrictEqual({
       expected: [],
       inputs: [],
       value: { source: "host" },
@@ -625,7 +638,11 @@ describe("the fonts surface", () => {
     const digests = [STACK, moved].map((stack) => {
       const { fonts } = resolveSurfaces(
         contextOf({
-          capabilities: { fontStack: { ...stack, kind: "checked" }, platform: "linux" },
+          capabilities: {
+            fontStack: { ...stack, kind: "checked" },
+            permittedCpus: 32,
+            platform: "linux",
+          },
         }),
       );
 
@@ -645,6 +662,7 @@ describe("the fonts surface", () => {
       contextOf({
         capabilities: {
           fontStack: { ...STACK, kind: "checked", rules: [...STACK.rules, "70-extra.conf"] },
+          permittedCpus: 32,
           platform: "linux",
         },
       }),
@@ -667,6 +685,7 @@ describe("the fonts surface", () => {
   it("tells host-fonts with the reason a stack failed its check, and emits nothing", () => {
     const capabilities: HostCapabilities = {
       fontStack: { kind: "refused", reason: "fc-list printed 0 families, the manifest lists 175" },
+      permittedCpus: 32,
       platform: "linux",
     };
 
@@ -680,8 +699,11 @@ describe("the fonts surface", () => {
 
   it.each([
     { capabilities: withStack(), name: "with a checked stack on Linux" },
-    { capabilities: { platform: "linux" as const }, name: "with no stack on Linux" },
-    { capabilities: { platform: "darwin" as const }, name: "on macOS" },
+    {
+      capabilities: { permittedCpus: 32, platform: "linux" as const },
+      name: "with no stack on Linux",
+    },
+    { capabilities: { permittedCpus: 32, platform: "darwin" as const }, name: "on macOS" },
   ])(
     "expects a note on the stored sentinel $name, and none without evidence",
     ({ capabilities }) => {
@@ -706,7 +728,8 @@ describe("the fonts surface", () => {
 
     expect([
       resolveSurfaces(contextOf({ capabilities: withStack() })).fonts.expected,
-      resolveSurfaces(contextOf({ capabilities: { platform: "linux" } })).fonts.expected,
+      resolveSurfaces(contextOf({ capabilities: { permittedCpus: 32, platform: "linux" } })).fonts
+        .expected,
       resolveSurfaces(contextOf({ capabilities: withStack("darwin") })).fonts.expected,
     ]).toStrictEqual([[resolves], [], []]);
   });
@@ -815,7 +838,8 @@ describe("the automation surface", () => {
 
   it("expects no colour scheme on macOS, where it follows the host", () => {
     expect(
-      resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).automation,
+      resolveSurfaces(contextOf({ capabilities: { permittedCpus: 32, platform: "darwin" } }))
+        .automation,
     ).toStrictEqual({ expected: [noWebdriver], inputs: [], tells: [], value: null });
   });
 });
@@ -843,7 +867,7 @@ describe("the flag-infobar tell", () => {
   it("marks every headed stock launch, which always sends the AutomationControlled switch", () => {
     expect(flagInfobarTells({ mode: "headed" })).toStrictEqual(["flag-infobar"]);
     expect(
-      flagInfobarTells({ capabilities: { platform: "darwin" }, mode: "headed" }),
+      flagInfobarTells({ capabilities: { permittedCpus: 32, platform: "darwin" }, mode: "headed" }),
     ).toStrictEqual(["flag-infobar"]);
   });
 
@@ -919,7 +943,7 @@ describe("the chosen identity", () => {
     expect(
       planIdentity(
         contextOf({
-          capabilities: { platform: "darwin" },
+          capabilities: { permittedCpus: 32, platform: "darwin" },
           exit: { facts: { kind: "unknown" }, route: "proxy" },
           hostZone: "Europe/Berlin",
           mode: "headed",
@@ -929,7 +953,7 @@ describe("the chosen identity", () => {
       binary: { commit: null, dirty: null, fork: null },
       digests: {
         device: null,
-        host: "b764e55bf78b66aa3ae5a19887dc836c3f68fc089dd58a8247efa2e3e83d6867",
+        host: "3c671ef210d1991ead8ece83faa2e2eb5f4dbdcc60c3d57e7876227d2ff2b308",
       },
       exit: { facts: { kind: "unknown" }, route: "proxy" },
       mode: "headed",
