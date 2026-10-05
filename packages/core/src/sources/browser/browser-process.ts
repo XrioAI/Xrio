@@ -6,8 +6,8 @@ import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { text } from "node:stream/consumers";
-import { setTimeout as delay } from "node:timers/promises";
 
+import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { directoriesIn } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import { settleWithin, withinSignal } from "./lifetime.ts";
@@ -18,8 +18,6 @@ const ABANDONED_AFTER_MS = 60 * 60 * 1000;
 
 const EXIT_WAIT_MS = 5000;
 
-const EXIT_POLL_MS = 25;
-
 export const PROCESS_SCAN_BUDGET_MS = 1000;
 
 const STDERR_TAIL_BYTES = 8192;
@@ -29,8 +27,6 @@ const STDERR_DRAIN_MS = 500;
 const OWNER_PERMISSION_UNIT = 0o100;
 
 const PROCESS_ID = /^\d+$/u;
-
-const EXITED_STATES = new Set(["Z", "X", "x"]);
 
 interface Owner {
   pid: number;
@@ -149,24 +145,15 @@ export const prepareProfile = async (plan: LaunchPlan): Promise<void> => {
   );
 };
 
-const trySignal = (target: number): boolean => {
-  try {
-    return process.kill(target, "SIGKILL");
-  } catch {
-    return false;
-  }
-};
+interface ChromePipe {
+  readonly toBrowser: Writable;
+  readonly fromBrowser: Readable;
+}
 
-export const killProcessGroup = (pid: number): void => {
-  trySignal(-pid);
-  trySignal(pid);
-};
-
-export interface SpawnedBrowser {
+export interface SpawnedChrome {
   readonly pid: number;
-  readonly pipe: { readonly toBrowser: Writable; readonly fromBrowser: Readable };
-  readonly stop: (budgetMs: number) => Promise<void>;
-  readonly kill: (budgetMs: number) => Promise<void>;
+  readonly leaderExited: Promise<void>;
+  readonly pipe: ChromePipe | undefined;
   readonly stderrTail: () => Promise<string>;
 }
 
@@ -191,120 +178,45 @@ const drainTail = (stderr: Readable): (() => Promise<string>) => {
   };
 };
 
-const pipesOf = (child: ChildProcess) => {
-  const { 2: stderr, 3: toBrowser, 4: fromBrowser } = child.stdio;
+const pipeOf = (child: ChildProcess): ChromePipe | undefined => {
+  const { 3: toBrowser, 4: fromBrowser } = child.stdio;
 
-  return stderr !== null && toBrowser instanceof Writable && fromBrowser instanceof Readable
-    ? { fromBrowser, stderr, toBrowser }
+  return toBrowser instanceof Writable && fromBrowser instanceof Readable
+    ? { fromBrowser, toBrowser }
     : undefined;
 };
 
-export const spawnBrowser = async (plan: LaunchPlan): Promise<SpawnedBrowser> => {
-  const child = spawn(plan.executable, plan.args, {
+export const spawnChrome = (
+  executable: string,
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+): SpawnedChrome => {
+  const child = spawn(executable, args, {
     detached: true,
-    env: plan.env,
+    env,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
   });
 
-  await once(child, "spawn");
-  const { pid } = child;
-  const pipes = pipesOf(child);
-
-  if (pid === undefined) {
-    throw new Error("Chrome started without a process id.");
-  }
-
-  if (pipes === undefined) {
-    killProcessGroup(pid);
-    throw new Error("Chrome started without its DevTools pipe.");
-  }
-
   const exited = Promise.withResolvers<"exited">();
 
+  child.once("error", exited.reject);
   child.once("exit", () => {
     exited.resolve("exited");
   });
 
-  const isRunning = () => child.exitCode === null && child.signalCode === null;
+  const leaderExited = (async () => {
+    await exited.promise;
+  })();
 
-  const kill = async (budgetMs: number) => {
-    if (isRunning()) {
-      killProcessGroup(pid);
-      await settleWithin(exited.promise, budgetMs);
-    }
-  };
+  void Promise.allSettled([leaderExited]);
 
-  const stop = async (budgetMs: number) => {
-    await settleWithin(exited.promise, budgetMs);
-    await kill(budgetMs);
-  };
+  const { pid, stderr } = child;
 
-  return {
-    kill,
-    pid,
-    pipe: { fromBrowser: pipes.fromBrowser, toBrowser: pipes.toBrowser },
-    stderrTail: drainTail(pipes.stderr),
-    stop,
-  };
-};
-
-const linuxProcessState = async (
-  pid: string,
-  signal: AbortSignal,
-): Promise<{ state: string; group: number } | undefined> => {
-  try {
-    const stat = await readFile(`/proc/${pid}/stat`, { encoding: "utf-8", signal });
-    const [state = "", , group = ""] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-
-    return { group: Number(group), state };
-  } catch {
-    return undefined;
+  if (pid === undefined || stderr === null) {
+    throw new Error(`Chrome could not start at ${executable}.`);
   }
-};
 
-const isRunning = (entry: { state: string } | undefined): boolean =>
-  entry !== undefined && !EXITED_STATES.has(entry.state);
-
-const linuxStillRunning = async (pid: number, signal: AbortSignal): Promise<boolean> => {
-  const entries = await withinSignal(async () => await readdir("/proc"), signal);
-  signal.throwIfAborted();
-
-  const members = await Promise.all(
-    entries
-      .filter((entry) => PROCESS_ID.test(entry))
-      .map(async (entry) => await linuxProcessState(entry, signal)),
-  );
-
-  return (
-    isRunning(await linuxProcessState(String(pid), signal)) ||
-    members.some((member) => member?.group === pid && isRunning(member))
-  );
-};
-
-const stillRunning = async (pid: number, signal: AbortSignal): Promise<boolean> =>
-  process.platform === "linux"
-    ? await linuxStillRunning(pid, signal)
-    : isAlive(pid) || isAlive(-pid);
-
-export const waitForExit = async (pid: number, parent?: AbortSignal): Promise<boolean> => {
-  const timeout = AbortSignal.timeout(EXIT_WAIT_MS);
-  const signal = parent === undefined ? timeout : AbortSignal.any([timeout, parent]);
-
-  try {
-    // oxlint-disable-next-line eslint/no-await-in-loop -- a process known only by its pid has no exit event to await.
-    while (await withinSignal(async () => await stillRunning(pid, signal), signal)) {
-      // oxlint-disable-next-line eslint/no-await-in-loop -- a process known only by its pid has no exit event to await.
-      await delay(EXIT_POLL_MS, undefined, { signal });
-    }
-
-    return true;
-  } catch (error) {
-    if (signal.aborted) {
-      return false;
-    }
-
-    throw error;
-  }
+  return { leaderExited, pid, pipe: pipeOf(child), stderrTail: drainTail(stderr) };
 };
 
 const readCommandLine = async (pid: string, signal: AbortSignal): Promise<string[]> => {
@@ -422,7 +334,7 @@ const browserStopped = async (directory: string): Promise<boolean> => {
 
   killProcessGroup(scan.pid);
 
-  return await waitForExit(scan.pid);
+  return await waitForGroupExit(scan.pid, AbortSignal.timeout(EXIT_WAIT_MS));
 };
 
 const removeIfAbandoned = async (directory: string, now: number): Promise<boolean> => {

@@ -10,14 +10,13 @@ import type { ScratchDir } from "./browser-process.ts";
 import {
   createScratchDir,
   findBrowserPid,
-  killProcessGroup,
   prepareProfile,
   PROCESS_SCAN_BUDGET_MS,
   removeScratchDir,
   scratchRoot,
   sweepAbandonedScratch,
-  waitForExit,
 } from "./browser-process.ts";
+import { killProcessGroup, retireProcessGroup } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import { settleWithin, withinSignal } from "./lifetime.ts";
@@ -41,11 +40,11 @@ interface Launch {
 
 interface TeardownSteps {
   readonly findBrowserPid: typeof findBrowserPid;
-  readonly waitForExit: typeof waitForExit;
+  readonly retireProcessGroup: typeof retireProcessGroup;
   readonly removeScratchDir: typeof removeScratchDir;
 }
 
-const defaultSteps: TeardownSteps = { findBrowserPid, removeScratchDir, waitForExit };
+const defaultSteps: TeardownSteps = { findBrowserPid, removeScratchDir, retireProcessGroup };
 
 export interface Browsers {
   readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
@@ -228,9 +227,7 @@ const stopBrowser = async (
     return complete;
   }
 
-  killProcessGroup(group);
-
-  return await withinSignal(async () => await steps.waitForExit(group, signal), signal);
+  return await withinSignal(async () => await steps.retireProcessGroup(group, signal), signal);
 };
 
 const tearDown = async (

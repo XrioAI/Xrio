@@ -7,7 +7,16 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { findBrowserPid, sweepAbandonedScratch, waitForExit } from "./browser-process.ts";
+import { findBrowserPid, sweepAbandonedScratch } from "./browser-process.ts";
+import { waitForGroupExit } from "./group-lifetime.ts";
+
+const EXIT_WAIT_MS = 5000;
+
+const waitForExit = async (pid: number, parent?: AbortSignal): Promise<boolean> =>
+  await waitForGroupExit(
+    pid,
+    AbortSignal.any([AbortSignal.timeout(EXIT_WAIT_MS), ...(parent === undefined ? [] : [parent])]),
+  );
 
 const SCAN_BUDGET_MS = 1000;
 
@@ -47,7 +56,7 @@ const startChild = async (profile: string): Promise<ChildProcess> => {
   const child = spawn(
     process.execPath,
     ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${profile}`],
-    { stdio: "ignore" },
+    { detached: true, stdio: "ignore" },
   );
 
   await once(child, "spawn");

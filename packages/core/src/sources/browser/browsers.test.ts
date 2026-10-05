@@ -10,9 +10,10 @@ import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
-import { findBrowserPid, killProcessGroup, scratchRoot, waitForExit } from "./browser-process.ts";
+import { findBrowserPid, scratchRoot } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { cdpDriver } from "./cdp/driver.ts";
+import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import type { BrowserDriver } from "./port.ts";
 
 const ABORT_DURING_LAUNCH_MS = 200;
@@ -473,7 +474,9 @@ describe("bounded teardown on the fake browser", () => {
         killProcessGroup(browser.pid);
       }
 
-      await Promise.all(launched.map(async ({ pid }) => await waitForExit(pid)));
+      await Promise.all(
+        launched.map(async ({ pid }) => await waitForGroupExit(pid, AbortSignal.timeout(5000))),
+      );
       await browsers.close();
       await Promise.all(
         launched.map(async ({ scratch }) => {
@@ -533,7 +536,7 @@ describe("bounded teardown on the fake browser", () => {
     const reported = incompleteTeardowns.length;
 
     const browsers = createBrowsers(cdpDriver, 1, {
-      waitForExit: async () => await hangingExit.promise,
+      retireProcessGroup: async () => await hangingExit.promise,
     });
 
     using deadline = startDeadline(20_000);

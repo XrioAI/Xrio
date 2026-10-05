@@ -20,15 +20,14 @@ import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../te
 import type { SourceDocument } from "../../types.ts";
 import {
   createScratchDir,
-  killProcessGroup,
   prepareProfile,
   removeScratchDir,
   scratchRoot,
   sweepAbandonedScratch,
-  waitForExit,
 } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { cdpDriver } from "./cdp/driver.ts";
+import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
 import { CLOSE_BUDGET_MS } from "./port.ts";
 import type { DriverBrowser } from "./port.ts";
@@ -328,7 +327,7 @@ const withBrowser = async <Result>(
 
     if (pid !== undefined) {
       killProcessGroup(pid);
-      await waitForExit(pid);
+      await waitForGroupExit(pid, AbortSignal.timeout(5000));
     }
 
     await removeScratchDir(scratch);
