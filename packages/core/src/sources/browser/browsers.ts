@@ -23,8 +23,8 @@ import {
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import { refuseRecordOverrides } from "../../options.ts";
 import { exitFactsFor, routeFor } from "../../proxy/route.ts";
-import { sessionFor } from "../../sessions/session.ts";
-import type { SessionContext } from "../../sessions/session.ts";
+import { anonymousSessions } from "../../sessions/session.ts";
+import type { SessionHold, SessionManager } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
@@ -68,7 +68,7 @@ interface BrowserVisit {
 
 interface VisitSteps extends Partial<RetireSteps> {
   readonly random: (size: number) => Uint8Array;
-  readonly sessionFor: typeof sessionFor;
+  readonly sessions: SessionManager;
   readonly hostCapabilities: HostFacts["snapshotFor"];
   readonly fontEvidence: FontEvidenceStore;
   readonly planIdentity: typeof planIdentity;
@@ -86,7 +86,7 @@ const defaultSteps: Omit<VisitSteps, "fontEvidence" | "hostCapabilities"> = {
   evaluate,
   planIdentity,
   random: randomBytes,
-  sessionFor,
+  sessions: anonymousSessions(),
 };
 
 export interface Browsers {
@@ -144,18 +144,15 @@ const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   }
 };
 
-const deviceFor = (
-  session: SessionContext,
+const deviceOf = (
+  hold: SessionHold,
   scrape: Pick<IdentityContext, "mode" | "pins">,
-  random: VisitSteps["random"],
 ): IdentityContext["device"] => {
-  if (session.kind === "anonymous") {
-    return { kind: "fresh", seed: seedOf(random(SEED_BYTES)) };
+  if (hold.device.kind === "record") {
+    refuseRecordOverrides(hold.device.record, scrape);
   }
 
-  refuseRecordOverrides(session.record, scrape);
-
-  return { kind: "record", record: session.record };
+  return hold.device;
 };
 
 const planVisit = async (
@@ -396,14 +393,24 @@ export const createBrowsers = (
       throw clientClosed();
     }
 
-    await using _slot = await timeStage(
-      "queue",
-      async () => await admission.slotFor(request, request.deadline),
+    await using hold = await steps.sessions.hold(
+      { kind: "anonymous" },
+      {
+        identity: request.pins,
+        seed: () => seedOf(steps.random(SEED_BYTES)),
+        source: request,
+      },
+      request.deadline,
     );
 
-    const session = steps.sessionFor();
-    const deadline = request.deadline.boundTo(session.ownership.signal);
-    const target = { ...request, device: deviceFor(session, request, steps.random) };
+    const deadline = hold.bind(request.deadline);
+
+    await using _slot = await timeStage(
+      "queue",
+      async () => await admission.slotFor(request, deadline),
+    );
+
+    const target = { ...request, device: deviceOf(hold, request) };
     const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
 
     return await renderInScope(driver, steps, target, deadline, scope, document);

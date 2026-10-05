@@ -1,5 +1,9 @@
-import type { Closed, DeviceRecord } from "../humanizer/contracts.ts";
+import type { Deadline } from "../deadline.ts";
+import type { Closed, DeviceRecord, Seed } from "../humanizer/contracts.ts";
 import type { IdentityIntent } from "../humanizer/intent.ts";
+import type { IdentityContext } from "../humanizer/surfaces.ts";
+import type { ScrapeIntent } from "../intent.ts";
+import { HeldDeadline } from "../lifetime.ts";
 
 export type SessionId = string;
 
@@ -90,9 +94,44 @@ export const profileAfterVisit = (closed: Closed): ProfileAfterVisit =>
         state: "quarantined",
       };
 
-export const sessionFor = (): SessionContext => ({
-  kind: "anonymous",
-  ownership: { signal: new AbortController().signal },
+export interface SessionHold extends AsyncDisposable {
+  readonly device: IdentityContext["device"];
+  readonly bind: (deadline: Deadline) => HeldDeadline;
+}
+
+interface ClaimChecks {
+  readonly seed: () => Seed;
+  readonly identity: ScrapeIntent["identity"];
+  readonly source: ScrapeIntent["source"];
+}
+
+export interface SessionManager {
+  readonly hold: (
+    intent: ScrapeIntent["session"],
+    checks: ClaimChecks,
+    deadline: Deadline,
+  ) => Promise<SessionHold>;
+}
+
+export const anonymousSessions = (): SessionManager => ({
+  hold: async (_intent, checks, deadline) => {
+    deadline.throwIfExpired();
+    const ownership = new AbortController();
+    let released = false;
+
+    return await Promise.resolve({
+      [Symbol.asyncDispose]: async () => {
+        if (!released) {
+          released = true;
+          ownership.abort(new Error("The anonymous hold was released."));
+        }
+
+        await Promise.resolve();
+      },
+      bind: (request) => new HeldDeadline(request, ownership.signal),
+      device: { kind: "fresh", seed: checks.seed() },
+    });
+  },
 });
 
 const notImplemented = (operation: string): Error =>

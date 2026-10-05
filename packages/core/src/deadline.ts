@@ -20,7 +20,7 @@ interface Stage extends Disposable {
   readonly signal: AbortSignal;
 }
 
-type AbortReason = "expired" | "caller" | "ownership" | "client-closed";
+export type AbortReason = "expired" | "caller" | "ownership" | "client-closed";
 
 export interface Deadline {
   readonly abortReason: () => AbortReason | undefined;

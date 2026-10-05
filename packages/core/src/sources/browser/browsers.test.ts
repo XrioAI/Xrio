@@ -23,7 +23,9 @@ import { isXrioError } from "../../errors.ts";
 import type { HostCapabilities, Observation } from "../../humanizer/contracts.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import { AFTER_CAPTURE_READ, evaluate } from "../../humanizer/verify.ts";
-import { sessionFor } from "../../sessions/session.ts";
+import { HeldDeadline } from "../../lifetime.ts";
+import { anonymousSessions } from "../../sessions/session.ts";
+import type { SessionManager } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
 import { fakeForkPath } from "../../testing/fake-fork.ts";
@@ -586,21 +588,25 @@ describe("planning between admission and start", () => {
   it("releases admission when a planning step throws before start", async () => {
     let plans = 0;
 
-    const failFirstPlan = () => {
+    const anonymous = anonymousSessions();
+
+    const failFirstPlan: SessionManager["hold"] = async (intent, checks, deadline) => {
       plans += 1;
 
       if (plans === 1) {
         throw new Error("The session step failed.");
       }
 
-      return sessionFor();
+      return await anonymous.hold(intent, checks, deadline);
     };
 
-    await expect(loadTwice({ sessionFor: failFirstPlan }, "normal")).resolves.toMatchObject({
-      first: { error: { message: "The session step failed." } },
-      left: nothingLeft,
-      second: { value: { status: 200 } },
-    });
+    await expect(loadTwice({ sessions: { hold: failFirstPlan } }, "normal")).resolves.toMatchObject(
+      {
+        first: { error: { message: "The session step failed." } },
+        left: nothingLeft,
+        second: { value: { status: 200 } },
+      },
+    );
   });
 
   it("releases admission when the identity step throws before start", async () => {
@@ -626,19 +632,23 @@ describe("planning between admission and start", () => {
   it("stops a visit when its session's ownership aborts, then admits the next scrape", async () => {
     let plans = 0;
 
-    const loseFirstOwnership = () => {
+    const anonymous = anonymousSessions();
+
+    const loseFirstOwnership: SessionManager["hold"] = async (intent, checks, deadline) => {
       plans += 1;
+      const hold = await anonymous.hold(intent, checks, deadline);
 
       return plans === 1
         ? {
-            kind: "anonymous" as const,
-            ownership: { signal: AbortSignal.timeout(ABORT_DURING_LAUNCH_MS) },
+            ...hold,
+            bind: (request) =>
+              new HeldDeadline(request, AbortSignal.timeout(ABORT_DURING_LAUNCH_MS)),
           }
-        : sessionFor();
+        : hold;
     };
 
     await expect(
-      loadTwice({ sessionFor: loseFirstOwnership }, "slow-start"),
+      loadTwice({ sessions: { hold: loseFirstOwnership } }, "slow-start"),
     ).resolves.toMatchObject({
       first: { error: { name: "TimeoutError" } },
       left: nothingLeft,
@@ -1158,15 +1168,17 @@ const launchPlanOf = async (
   return launched[0];
 };
 
-const changeHostAfterSession: typeof sessionFor = () => {
-  void (async () => {
-    await nextTurn();
-    vi.stubEnv("TZ", "Europe/Berlin");
-    vi.stubEnv("DISPLAY", ":2");
-    vi.stubEnv("XAUTHORITY", "/tmp/second.Xauthority");
-  })();
+const changeHostAfterSession: SessionManager = {
+  hold: async (intent, checks, deadline) => {
+    void (async () => {
+      await nextTurn();
+      vi.stubEnv("TZ", "Europe/Berlin");
+      vi.stubEnv("DISPLAY", ":2");
+      vi.stubEnv("XAUTHORITY", "/tmp/second.Xauthority");
+    })();
 
-  return sessionFor();
+    return await anonymousSessions().hold(intent, checks, deadline);
+  },
 };
 
 describe("the identity a visit launches Chrome with", () => {
@@ -1237,7 +1249,7 @@ describe("the identity a visit launches Chrome with", () => {
     };
 
     const plan = await launchPlanOf(
-      { planIdentity: changeHostMidPlan, sessionFor: changeHostAfterSession },
+      { planIdentity: changeHostMidPlan, sessions: changeHostAfterSession },
       "headed",
     );
 
@@ -1692,17 +1704,19 @@ describe("a named session's device record", () => {
     seed: "00000000000000a1",
   } as const;
 
-  const namedSession = () => ({
-    id: "session-1",
-    kind: "named" as const,
-    ownership: {
-      epoch: 1,
-      expiresAt: Number.MAX_SAFE_INTEGER,
-      signal: new AbortController().signal,
+  const namedSession: SessionManager = {
+    hold: async (_intent, _checks, deadline) => {
+      deadline.throwIfExpired();
+
+      return await Promise.resolve({
+        [Symbol.asyncDispose]: async () => {
+          await Promise.resolve();
+        },
+        bind: (request: Deadline) => new HeldDeadline(request, new AbortController().signal),
+        device: { kind: "record" as const, record },
+      });
     },
-    pins: noPins,
-    record,
-  });
+  };
 
   it("presents the stored device instead of drawing a seed", async () => {
     const browsers = createBrowsers(cdpDriver, 1, {
@@ -1710,7 +1724,7 @@ describe("a named session's device record", () => {
       random: () => {
         throw new Error("A named session draws no seed.");
       },
-      sessionFor: namedSession,
+      sessions: namedSession,
     });
 
     using deadline = startDeadline(10_000);
@@ -1729,7 +1743,7 @@ describe("a named session's device record", () => {
   });
 
   it("refuses a headed scrape of a headless record before Chrome launches", async () => {
-    const browsers = createBrowsers(cdpDriver, 1, { sessionFor: namedSession });
+    const browsers = createBrowsers(cdpDriver, 1, { sessions: namedSession });
     using deadline = startDeadline(10_000);
 
     const document = await settledValue(
@@ -1750,7 +1764,7 @@ describe("a named session's device record", () => {
   });
 
   it("refuses a scrape that pins another zone before Chrome launches", async () => {
-    const browsers = createBrowsers(cdpDriver, 1, { sessionFor: namedSession });
+    const browsers = createBrowsers(cdpDriver, 1, { sessions: namedSession });
     using deadline = startDeadline(10_000);
 
     const document = await settledValue(
