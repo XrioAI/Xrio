@@ -18,7 +18,7 @@ const ABANDONED_AFTER_MS = 60 * 60 * 1000;
 
 const EXIT_WAIT_MS = 5000;
 
-export const PROCESS_SCAN_BUDGET_MS = 1000;
+const PROCESS_SCAN_BUDGET_MS = 1000;
 
 const STDERR_TAIL_BYTES = 8192;
 
@@ -309,16 +309,6 @@ const scanBrowserPid = async (
 
     throw error;
   }
-};
-
-export const findBrowserPid = async (
-  profileDir: string,
-  budgetMs: number,
-  signal?: AbortSignal,
-): Promise<number | undefined> => {
-  const scan = await scanBrowserPid(profileDir, budgetMs, signal);
-
-  return scan.completed ? scan.pid : undefined;
 };
 
 const browserStopped = async (directory: string): Promise<boolean> => {

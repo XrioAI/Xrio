@@ -10,7 +10,7 @@ import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
-import { findBrowserPid, scratchRoot } from "./browser-process.ts";
+import { scratchRoot } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
@@ -275,9 +275,8 @@ const normalRequest = async (deadline: Deadline) => ({
 });
 
 describe("bounded teardown on the fake browser", () => {
-  it("kills the known browser without a process scan when Browser.close fails", async () => {
+  it("kills the owned browser when Browser.close fails", async () => {
     const pids: number[] = [];
-    let scans = 0;
 
     const failedCloseDriver: BrowserDriver = {
       launch: async (plan, deadline, owned, deferCleanup) => {
@@ -304,13 +303,7 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(failedCloseDriver, 1, {
-      findBrowserPid: async () => {
-        scans += 1;
-
-        return await Promise.withResolvers<number>().promise;
-      },
-    });
+    const browsers = createBrowsers(failedCloseDriver, 1);
 
     using deadline = startDeadline(10_000);
 
@@ -322,7 +315,6 @@ describe("bounded teardown on the fake browser", () => {
         }),
       ).resolves.toMatchObject({ status: 200 });
       await browsers.close();
-      expect(scans).toBe(0);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     } finally {
       for (const pid of pids) {
@@ -335,7 +327,6 @@ describe("bounded teardown on the fake browser", () => {
 
   it("kills the owned browser after a deferred launch cleanup hangs and admits queued work", async () => {
     const hangingCleanup = Promise.withResolvers<"released">();
-    const scannedProfiles: string[] = [];
     let launches = 0;
 
     const failedLaunchDriver: BrowserDriver = {
@@ -357,13 +348,7 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(failedLaunchDriver, 1, {
-      findBrowserPid: async (profile, budgetMs, signal) => {
-        scannedProfiles.push(profile);
-
-        return await findBrowserPid(profile, budgetMs, signal);
-      },
-    });
+    const browsers = createBrowsers(failedLaunchDriver, 1);
 
     using deadline = startDeadline(10_000);
     const request = await normalRequest(deadline);
@@ -379,7 +364,6 @@ describe("bounded teardown on the fake browser", () => {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
       await expect(second).resolves.toMatchObject({ status: 200 });
       await browsers.close();
-      expect(scannedProfiles).toStrictEqual([]);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     } finally {
       hangingCleanup.resolve("released");
@@ -387,12 +371,10 @@ describe("bounded teardown on the fake browser", () => {
     }
   });
 
-  it("retains an unknown browser after launch cleanup and discovery hang while admitting queued work", async () => {
+  it("retains an unknown browser after its launch cleanup hangs while admitting queued work", async () => {
     const hangingCleanup = Promise.withResolvers<"released">();
-    const hangingScan = Promise.withResolvers<number>();
     const launched: { pid: number; scratch: string }[] = [];
     const reported = incompleteTeardowns.length;
-    let scans = 0;
 
     const failedLaunchDriver: BrowserDriver = {
       launch: async (plan, deadline, owned, deferCleanup) => {
@@ -429,16 +411,7 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(failedLaunchDriver, 1, {
-      findBrowserPid: async (profile, budgetMs, signal) => {
-        scans += 1;
-
-        return scans === 1
-          ? await hangingScan.promise
-          : await findBrowserPid(profile, budgetMs, signal);
-      },
-    });
-
+    const browsers = createBrowsers(failedLaunchDriver, 1);
     using deadline = startDeadline(15_000);
     const request = await normalRequest(deadline);
 
@@ -460,15 +433,13 @@ describe("bounded teardown on the fake browser", () => {
       }
 
       expect(incompleteTeardowns.slice(reported)).toStrictEqual([
-        `Chrome outlived its teardown; ${unconfirmed.scratch} is left for the sweep.`,
+        `Chrome's process group is unknown; ${unconfirmed.scratch} is left for the sweep.`,
       ]);
       await expect(leftovers()).resolves.toMatchObject({
         directories: [path.basename(unconfirmed.scratch)],
       });
-      expect(scans).toBe(1);
     } finally {
       hangingCleanup.resolve("released");
-      hangingScan.resolve(0);
 
       for (const browser of launched) {
         killProcessGroup(browser.pid);
@@ -607,7 +578,7 @@ describe("bounded teardown on the fake browser", () => {
 });
 
 describe("process ownership reported by the driver", () => {
-  it("refuses a driver that resolves without reporting Chrome's process", async () => {
+  it("refuses a driver that resolves without reporting Chrome's process, and keeps its scratch", async () => {
     let closes = 0;
 
     const silentDriver: BrowserDriver = {
@@ -643,9 +614,16 @@ describe("process ownership reported by the driver", () => {
       );
       await browsers.close();
       expect(closes).toBe(1);
-      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+
+      const left = await leftovers();
+
+      expect(left.processes).toStrictEqual([]);
+      expect(left.directories).toHaveLength(1);
     } finally {
       await browsers.close();
+      await removeLeftoverScratch();
     }
+
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 });

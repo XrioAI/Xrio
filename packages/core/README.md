@@ -155,7 +155,7 @@ The client resolves options, loads the document with `sources/http.ts` in http m
 - `proxy/relay.ts` owns proxy dialing, refusals, and failure attribution.
 - `blocks/rules.ts` is the ruleset as typed data; `blocks/classify.ts` turns a response into a block report.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
-- `sources/browser/` owns browser modes: `launch-plan.ts` plans Chrome's argv, environment, and profile files; `browser-process.ts` owns scratch directories, teardown, and the startup sweep; `port.ts` is the driver interface, implemented by `cdp/driver.ts` over the DevTools pipe; `render.ts` navigates and captures; `browsers.ts` limits concurrency.
+- `sources/browser/` owns browser modes: `launch-plan.ts` plans Chrome's argv, environment, and profile files; `browser-process.ts` owns scratch directories, Chrome's spawn, and the startup sweep; `group-lifetime.ts` owns Chrome's process group and counts it as gone once no member is alive, so zombies that nothing reaps do not hold up teardown; `chrome-scope.ts` owns one Chrome's scratch directory and process group and retires both; `port.ts` is the driver interface, implemented by `cdp/driver.ts` over the DevTools pipe; `render.ts` navigates and captures; `browsers.ts` limits concurrency.
 - `diagnostics.ts` publishes stage timings and internal events.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.
