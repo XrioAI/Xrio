@@ -564,3 +564,17 @@ export const hostDigest = ({
     platform,
     readableRenderNode,
   });
+
+export type ExitFacts =
+  | { readonly kind: "unknown" }
+  | {
+      readonly kind: "observed";
+      readonly address: string;
+      readonly zone: string;
+      readonly country: string;
+      readonly provider: string;
+      readonly observedAt: number;
+      readonly destination: string;
+      readonly route: string;
+      readonly generation: number;
+    };

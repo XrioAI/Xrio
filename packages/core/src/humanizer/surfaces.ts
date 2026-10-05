@@ -1,9 +1,9 @@
-import type { ExitFacts, Route } from "../proxy/route.ts";
 import type { ResolvedMode } from "../types.ts";
 import { knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
 import type {
   DeviceRecord,
   DisplayTables,
+  ExitFacts,
   GpuChoice,
   HostCapabilities,
   Insets,
@@ -32,7 +32,7 @@ const NETWORK_PREDICTION_NEVER = 2;
 const NO_FONT_STACK = "no fontstack/ beside the binary";
 
 export interface ExitChoice {
-  readonly route: Route["kind"];
+  readonly route: "direct" | "proxy";
   readonly facts: ExitFacts;
 }
 

@@ -17,34 +17,34 @@ import {
   vi,
 } from "vite-plus/test";
 
-import { startDeadline, untilDeadline } from "../../deadline.ts";
-import type { Deadline } from "../../deadline.ts";
-import { isXrioError } from "../../errors.ts";
-import type { HostCapabilities } from "../../humanizer/contracts.ts";
-import { AFTER_CAPTURE_READ } from "../../humanizer/verify.ts";
-import { HeldDeadline } from "../../lifetime.ts";
-import { anonymousSessions } from "../../sessions/session.ts";
-import type { SessionManager } from "../../sessions/session.ts";
-import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
-import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
-import { fakeForkPath } from "../../testing/fake-fork.ts";
-import type { FakeForkScenario } from "../../testing/fake-fork.ts";
-import { fixedRandom, fixedSeed } from "../../testing/fixed-seed.ts";
-import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
-import { manualClock } from "../../testing/manual-clock.ts";
-import { noPins } from "../../testing/no-pins.ts";
-import { plannedScrapes } from "../../testing/planned-scrapes.ts";
-import type { PlannedScrapes, PlanningDependencies } from "../../testing/planned-scrapes.ts";
-import { stageTimeline } from "../../testing/stage-timeline.ts";
-import { scratchRoot } from "./browser-process.ts";
-import { createCapabilityProbe } from "./capabilities.ts";
-import { cdpDriver } from "./cdp/driver.ts";
-import type { RetireSteps } from "./chrome-scope.ts";
-import { createFontEvidenceStore } from "./font-evidence.ts";
-import type { FontEvidenceStore } from "./font-evidence.ts";
-import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
-import type { LaunchPlan } from "./launch-plan.ts";
-import type { BrowserDriver } from "./port.ts";
+import { startDeadline, untilDeadline } from "./deadline.ts";
+import type { Deadline } from "./deadline.ts";
+import { isXrioError } from "./errors.ts";
+import type { HostCapabilities } from "./humanizer/contracts.ts";
+import { AFTER_CAPTURE_READ } from "./humanizer/verify.ts";
+import { HeldDeadline } from "./lifetime.ts";
+import { anonymousSessions } from "./sessions/session.ts";
+import type { SessionManager } from "./sessions/session.ts";
+import { scratchRoot } from "./sources/browser/browser-process.ts";
+import { createCapabilityProbe } from "./sources/browser/capabilities.ts";
+import { cdpDriver } from "./sources/browser/cdp/driver.ts";
+import type { RetireSteps } from "./sources/browser/chrome-scope.ts";
+import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
+import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
+import { killProcessGroup, waitForGroupExit } from "./sources/browser/group-lifetime.ts";
+import type { LaunchPlan } from "./sources/browser/launch-plan.ts";
+import type { BrowserDriver } from "./sources/browser/port.ts";
+import { fakeChromePath } from "./testing/fake-chrome-path.ts";
+import { CHECKED_FONT_STACK } from "./testing/fake-font-stack.ts";
+import { fakeForkPath } from "./testing/fake-fork.ts";
+import type { FakeForkScenario } from "./testing/fake-fork.ts";
+import { fixedRandom, fixedSeed } from "./testing/fixed-seed.ts";
+import { leftovers, nothingLeft } from "./testing/leftovers.ts";
+import { manualClock } from "./testing/manual-clock.ts";
+import { noPins } from "./testing/no-pins.ts";
+import { plannedScrapes } from "./testing/planned-scrapes.ts";
+import type { PlannedScrapes, PlanningDependencies } from "./testing/planned-scrapes.ts";
+import { stageTimeline } from "./testing/stage-timeline.ts";
 
 const plannedVisits = (
   driver: BrowserDriver,

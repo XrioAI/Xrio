@@ -57,6 +57,7 @@ export default defineConfig({
     "complexity/complexity": ["error", { cognitive: 15, cyclomatic: 20, minLines: 0 }],
     "no-restricted-imports": ["error", { paths: [DEVTOOLS], patterns: [DEVTOOLS_SUBPATHS] }],
     "vite-plus/prefer-vite-plus-imports": "error",
+    "xrio/calls-go-down": "error",
     "xrio/identity-owner": "error",
   },
   settings: { next: { rootDir: ["apps/landing/"] } },

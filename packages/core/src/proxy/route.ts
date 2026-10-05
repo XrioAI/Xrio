@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 
+import type { ExitFacts } from "../humanizer/contracts.ts";
 import type { ProxyEndpoint } from "../types.ts";
 
-export type RouteKey = string;
+type RouteKey = string;
 
 export type Route =
   | { readonly kind: "direct" }
@@ -16,20 +17,6 @@ export type Route =
         readonly expiresAt?: number;
         readonly destinations: "all" | readonly string[];
       };
-    };
-
-export type ExitFacts =
-  | { readonly kind: "unknown" }
-  | {
-      readonly kind: "observed";
-      readonly address: string;
-      readonly zone: string;
-      readonly country: string;
-      readonly provider: string;
-      readonly observedAt: number;
-      readonly destination: string;
-      readonly route: RouteKey;
-      readonly generation: number;
     };
 
 const routeKeyOf = ({ credentials, hostname, port, protocol }: ProxyEndpoint): RouteKey =>
