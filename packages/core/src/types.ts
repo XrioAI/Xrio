@@ -1,7 +1,5 @@
 import type { BlockReport } from "./blocks/classify.ts";
-import type { CacheDir } from "./cache-dir.ts";
 import type { Deadline } from "./deadline.ts";
-import type { DisplayTables } from "./humanizer/contracts.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
@@ -60,7 +58,13 @@ type ModeOverride =
   | ({ mode?: never; browserPath?: never } & BrowserChoices);
 
 export type ClientOptions = (
-  | (HttpMode & { browserArgs?: never; timezone?: never; display?: never })
+  | {
+      mode: "http";
+      browserPath?: string;
+      browserArgs?: readonly string[];
+      timezone?: never;
+      display?: never;
+    }
   | ((BrowserMode | { mode?: never; browserPath: string }) &
       BrowserChoices & { browserArgs?: readonly string[] })
 ) & { proxy?: string; maxBrowsers?: number; locale?: string; cacheDir?: string };
@@ -124,17 +128,6 @@ export interface ProxyEndpoint {
   redactedUrl: string;
 }
 
-export interface ClientDefaults {
-  cacheDir: CacheDir;
-  browserArgs: readonly string[];
-  mode: ResolvedMode;
-  proxy: ProxyEndpoint | undefined;
-  maxBrowsers: number | undefined;
-  locale: string | undefined;
-  timezone: string | undefined;
-  display: DisplayTables | undefined;
-}
-
 type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[] })) & {
   url: URL;
   proxy: ProxyEndpoint | undefined;
@@ -142,10 +135,3 @@ type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[]
 };
 
 export type DocumentRequest = SourceRequest & { deadline: Deadline };
-
-export interface ScrapeRequest {
-  format: ScrapeFormat;
-  signal: AbortSignal | undefined;
-  source: SourceRequest;
-  timeoutMs: number;
-}

@@ -2,7 +2,8 @@ import { hostCacheRoot } from "./cache-dir.ts";
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
 import { startDeadline } from "./deadline.ts";
 import { clientClosed } from "./errors.ts";
-import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
+import type { ClientDefaults } from "./intent.ts";
+import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { createBrowsers } from "./sources/browser/browsers.ts";
 import type { Browsers } from "./sources/browser/browsers.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
@@ -11,7 +12,6 @@ import { hostFactsFor } from "./sources/browser/host-facts.ts";
 import type { ClientHostFacts } from "./sources/browser/host-facts.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type {
-  ClientDefaults,
   ClientOptions,
   DocumentRequest,
   ScrapeFormat,
@@ -95,10 +95,20 @@ export class XrioClient {
       throw clientClosed();
     }
 
-    const { format, signal, source, timeoutMs } = resolveScrapeOptions(options, this.#defaults);
+    const { format, identity, route, signal, source, timeoutMs, url } = resolveScrapeIntent(
+      options,
+      this.#defaults,
+    );
+
     using deadline = startDeadline(timeoutMs, signal);
 
-    const document = await this.#loadDocument({ ...source, deadline });
+    const document = await this.#loadDocument({
+      ...source,
+      deadline,
+      pins: identity,
+      proxy: route,
+      url,
+    });
 
     deadline.throwIfExpired();
     const content = formats[format](document);
@@ -128,7 +138,7 @@ export class XrioClient {
   async #loadDocument(request: DocumentRequest): Promise<SourceDocument> {
     const loading =
       request.mode === "http"
-        ? loadHttpDocument(request, this.#hostFacts, this.#defaults.mode.browserPath)
+        ? loadHttpDocument(request, this.#hostFacts, this.#defaults.browser.browserPath)
         : this.#browsers.load(request);
 
     this.#inFlight.add(loading);

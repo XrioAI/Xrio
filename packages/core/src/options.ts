@@ -5,16 +5,15 @@ import { displayMisfit } from "./humanizer/draws.ts";
 import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import { canonicalZone } from "./humanizer/zone-name.ts";
+import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
-  ClientDefaults,
   ClientOptions,
   DisplayOptions,
   ModeOptions,
   ProxyEndpoint,
   ResolvedMode,
   ScrapeOptions,
-  ScrapeRequest,
   ScreenSize,
   Taskbar,
   WindowSize,
@@ -43,7 +42,13 @@ const defaultProxyPorts = { http: 80, https: 443, socks5: 1080 } as const satisf
   number
 >;
 
-const resolveMode = ({ mode = "headed", browserPath }: ModeOptions): ResolvedMode => {
+const resolveMode = ({
+  mode = "headed",
+  browserPath,
+}: {
+  mode?: ModeOptions["mode"];
+  browserPath?: string;
+}): ResolvedMode => {
   switch (mode) {
     case "http": {
       return { mode };
@@ -183,20 +188,8 @@ const resolveMaxBrowsers = (maxBrowsers: number | undefined): number | undefined
   return maxBrowsers;
 };
 
-const resolveBrowserArgs = (
-  browserArgs: readonly string[] | undefined,
-  { mode }: ResolvedMode,
-): readonly string[] => {
-  if (browserArgs === undefined) {
-    return [];
-  }
-
-  if (mode === "http") {
-    throw invalidOptions("browserArgs is only supported in browser modes.");
-  }
-
-  return parseBrowserArgs(browserArgs);
-};
+const resolveBrowserArgs = (browserArgs: readonly string[] | undefined): readonly string[] =>
+  browserArgs === undefined ? [] : parseBrowserArgs(browserArgs);
 
 const resolveTimezone = (
   timezone: string | undefined,
@@ -413,7 +406,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
 
   const maxBrowsers = resolveMaxBrowsers(options.maxBrowsers);
   const mode = resolveMode(options);
-  const browserArgs = resolveBrowserArgs(options.browserArgs, mode);
+  const browserArgs = resolveBrowserArgs(options.browserArgs);
   const proxy = options.proxy === undefined ? undefined : parseProxy(options.proxy);
   const locale = resolveLocale(options.locale);
   const timezone = resolveTimezone(options.timezone, mode);
@@ -423,21 +416,20 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
     options.cacheDir === undefined ? defaultCacheDir() : new CacheDir(options.cacheDir);
 
   return {
-    browserArgs,
+    browser: { browserArgs, browserPath: options.browserPath },
     cacheDir,
-    display,
-    locale,
+    identity: { display, locale, timezone },
     maxBrowsers,
-    mode,
-    proxy,
-    timezone,
+    mode: mode.mode,
+    route: proxy,
+    session: { kind: "anonymous" },
   };
 };
 
-export const resolveScrapeOptions = (
+export const resolveScrapeIntent = (
   options: ScrapeOptions,
   defaults: ClientDefaults,
-): ScrapeRequest => {
+): ScrapeIntent => {
   const { format, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
 
   if (format !== "html" && format !== "markdown" && format !== "json") {
@@ -449,8 +441,13 @@ export const resolveScrapeOptions = (
   }
 
   const url = parseTargetUrl(options.url);
-  const mode = options.mode === undefined ? defaults.mode : resolveMode(options);
-  const proxy = options.proxy === undefined ? defaults.proxy : parseProxy(options.proxy);
+
+  const mode =
+    options.mode === undefined
+      ? resolveMode({ browserPath: defaults.browser.browserPath, mode: defaults.mode })
+      : resolveMode(options);
+
+  const proxy = options.proxy === undefined ? defaults.route : parseProxy(options.proxy);
 
   if (proxy !== undefined && mode.mode !== "http") {
     throw invalidOptions('proxy is not supported in browser modes yet; use mode: "http".');
@@ -460,21 +457,31 @@ export const resolveScrapeOptions = (
     throw invalidOptions("browserArgs is a client option.");
   }
 
-  const locale = options.locale === undefined ? defaults.locale : resolveLocale(options.locale);
+  const locale =
+    options.locale === undefined ? defaults.identity.locale : resolveLocale(options.locale);
 
   const timezone =
-    options.timezone === undefined ? defaults.timezone : resolveTimezone(options.timezone, mode);
+    options.timezone === undefined
+      ? defaults.identity.timezone
+      : resolveTimezone(options.timezone, mode);
 
-  const display = resolveDisplay(options.display, mode, defaults.display);
+  const display = resolveDisplay(options.display, mode, defaults.identity.display);
 
-  const pins = { display, locale, timezone: mode.mode === "http" ? undefined : timezone };
+  const identity = { display, locale, timezone: mode.mode === "http" ? undefined : timezone };
 
   const source =
-    mode.mode === "http"
-      ? { ...mode, pins, proxy, url }
-      : { ...mode, browserArgs: defaults.browserArgs, pins, proxy, url };
+    mode.mode === "http" ? mode : { ...mode, browserArgs: defaults.browser.browserArgs };
 
-  return { format, signal, source, timeoutMs };
+  return {
+    format,
+    identity,
+    route: proxy,
+    session: defaults.session,
+    signal,
+    source,
+    timeoutMs,
+    url,
+  };
 };
 
 export const refuseRecordOverrides = (

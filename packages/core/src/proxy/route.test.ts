@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveClientOptions } from "../options.ts";
 import { exitFactsFor, routeFor } from "./route.ts";
 
-const endpointOf = (proxy?: string) => resolveClientOptions({ mode: "http", proxy }).proxy;
+const endpointOf = (proxy?: string) => resolveClientOptions({ mode: "http", proxy }).route;
 
 const keyOf = (proxy: string) => {
   const route = routeFor(endpointOf(proxy));

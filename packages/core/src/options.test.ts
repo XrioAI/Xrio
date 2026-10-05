@@ -5,7 +5,7 @@ import { inspect } from "node:util";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { DeviceRecord } from "./humanizer/contracts.ts";
-import { refuseRecordOverrides, resolveClientOptions, resolveScrapeOptions } from "./options.ts";
+import { refuseRecordOverrides, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { noPins } from "./testing/no-pins.ts";
 import type { ScrapeOptions } from "./types.ts";
 
@@ -20,8 +20,8 @@ const missingBrowserPath = {
 describe("scrape options", () => {
   it("inherits the complete client mode unless the call supplies its own", () => {
     const defaults = resolveClientOptions({ browserPath: "/client-browser", mode: "headed" });
-    const inherited = resolveScrapeOptions(page, defaults);
-    const overridden = resolveScrapeOptions({ ...page, mode: "http" }, defaults);
+    const inherited = resolveScrapeIntent(page, defaults);
+    const overridden = resolveScrapeIntent({ ...page, mode: "http" }, defaults);
 
     expect(inherited).toMatchObject({
       source: { browserPath: "/client-browser", mode: "headed" },
@@ -31,7 +31,7 @@ describe("scrape options", () => {
     expect(overridden.source).not.toHaveProperty("browserPath");
 
     // @ts-expect-error JavaScript callers can bypass the required override path.
-    expect(() => resolveScrapeOptions({ ...page, mode: "headless" }, defaults)).toThrow(
+    expect(() => resolveScrapeIntent({ ...page, mode: "headless" }, defaults)).toThrow(
       expect.objectContaining({
         code: "INVALID_OPTIONS",
         message: "browserPath is required for headless mode.",
@@ -47,16 +47,13 @@ describe("scrape options", () => {
 
       expect(() =>
         // @ts-expect-error JavaScript callers can supply unsupported formats.
-        resolveScrapeOptions({ format, url: "https://example.com" }, defaults),
+        resolveScrapeIntent({ format, url: "https://example.com" }, defaults),
       ).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS", name: "TypeError" }));
     },
   );
 
   it("defaults to headed mode, which needs a browserPath", () => {
-    expect(resolveClientOptions({ browserPath: "/browser" }).mode).toStrictEqual({
-      browserPath: "/browser",
-      mode: "headed",
-    });
+    expect(resolveClientOptions({ browserPath: "/browser" }).mode).toBe("headed");
 
     expect(() => resolveClientOptions()).toThrow(expect.objectContaining(missingBrowserPath));
     // @ts-expect-error JavaScript callers can omit the browser path.
@@ -101,7 +98,7 @@ describe("proxy option", () => {
     },
     { expected: { hostname: "[::1]", port: 8000, protocol: "http" }, proxy: "http://[::1]:8000" },
   ])("parses $proxy", ({ expected, proxy }) => {
-    expect(resolveClientOptions({ mode: "http", proxy }).proxy).toStrictEqual({
+    expect(resolveClientOptions({ mode: "http", proxy }).route).toStrictEqual({
       ...expected,
       credentials: undefined,
       redactedUrl: new URL(proxy).href,
@@ -109,7 +106,7 @@ describe("proxy option", () => {
   });
 
   it("percent-decodes credentials exactly once and redacts them", () => {
-    const { proxy } = resolveClientOptions({
+    const { route: proxy } = resolveClientOptions({
       mode: "http",
       proxy: "http://us%3Aer:p%2540ss%20word@proxy.test:8000",
     });
@@ -145,35 +142,33 @@ describe("proxy option", () => {
     { expected: "127.0.0.1", proxy: "socks5h://0x7f.1:1080" },
     { expected: "example.com", proxy: "socks5://ex%41mple.com:1080" },
   ])("normalises the SOCKS host $proxy as a browser would", ({ expected, proxy }) => {
-    expect(resolveClientOptions({ mode: "http", proxy }).proxy?.hostname).toBe(expected);
+    expect(resolveClientOptions({ mode: "http", proxy }).route?.hostname).toBe(expected);
   });
 
   it("uses the client default unless a scrape overrides it", () => {
     const defaults = resolveClientOptions({ mode: "http", proxy: "http://default.test:8000" });
 
-    expect(resolveScrapeOptions(page, defaults).source.proxy?.hostname).toBe("default.test");
+    expect(resolveScrapeIntent(page, defaults).route?.hostname).toBe("default.test");
     expect(
-      resolveScrapeOptions({ ...page, proxy: "socks5://override.test:1080" }, defaults).source.proxy
+      resolveScrapeIntent({ ...page, proxy: "socks5://override.test:1080" }, defaults).route
         ?.hostname,
     ).toBe("override.test");
-    expect(
-      resolveScrapeOptions(page, resolveClientOptions({ mode: "http" })).source.proxy,
-    ).toBeUndefined();
+    expect(resolveScrapeIntent(page, resolveClientOptions({ mode: "http" })).route).toBeUndefined();
   });
 
   it("refuses a proxy in browser modes until the browser relay exists", () => {
     const browser = resolveClientOptions({ browserPath: "/browser", mode: "headless" });
 
     expect(() =>
-      resolveScrapeOptions({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
+      resolveScrapeIntent({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
     ).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS", name: "TypeError" }));
     expect(
       inspectedFailure(() =>
-        resolveScrapeOptions({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
+        resolveScrapeIntent({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
       ),
     ).not.toContain("secret");
     expect(() =>
-      resolveScrapeOptions(
+      resolveScrapeIntent(
         { ...page, mode: "http" },
         resolveClientOptions({ browserPath: "/browser", mode: "headed", proxy: "socks5://p.test" }),
       ),
@@ -202,15 +197,15 @@ describe("timezone option", () => {
     ["Asia/Kolkata", "Asia/Calcutta"],
     ["america/chicago", "America/Chicago"],
   ])("accepts %s as a client default and resolves it to %s", (timezone, zone) => {
-    expect(resolveClientOptions({ ...browser, timezone }).timezone).toBe(zone);
+    expect(resolveClientOptions({ ...browser, timezone }).identity.timezone).toBe(zone);
   });
 
   it("defaults to no zone", () => {
-    expect(resolveClientOptions(browser).timezone).toBeUndefined();
-    expect(resolveClientOptions({ mode: "http" }).timezone).toBeUndefined();
-    expect(resolveScrapeOptions(page, resolveClientOptions(browser)).source).toMatchObject({
-      mode: "headless",
-      pins: { timezone: undefined },
+    expect(resolveClientOptions(browser).identity.timezone).toBeUndefined();
+    expect(resolveClientOptions({ mode: "http" }).identity.timezone).toBeUndefined();
+    expect(resolveScrapeIntent(page, resolveClientOptions(browser))).toMatchObject({
+      identity: { timezone: undefined },
+      source: { mode: "headless" },
     });
   });
 
@@ -221,7 +216,7 @@ describe("timezone option", () => {
         expect.objectContaining(invalidZone),
       );
       expect(() =>
-        resolveScrapeOptions({ ...page, timezone }, resolveClientOptions(browser)),
+        resolveScrapeIntent({ ...page, timezone }, resolveClientOptions(browser)),
       ).toThrow(expect.objectContaining(invalidZone));
     },
   );
@@ -236,16 +231,16 @@ describe("timezone option", () => {
   it("reaches every browser scrape of the client, and a scrape's own zone replaces it", () => {
     const defaults = resolveClientOptions({ ...browser, timezone: "Europe/Berlin" });
 
-    expect(resolveScrapeOptions(page, defaults).source).toMatchObject({
-      pins: { timezone: "Europe/Berlin" },
+    expect(resolveScrapeIntent(page, defaults)).toMatchObject({
+      identity: { timezone: "Europe/Berlin" },
+    });
+    expect(resolveScrapeIntent({ ...page, timezone: "America/New_York" }, defaults)).toMatchObject({
+      identity: { timezone: "America/New_York" },
     });
     expect(
-      resolveScrapeOptions({ ...page, timezone: "America/New_York" }, defaults).source,
-    ).toMatchObject({ pins: { timezone: "America/New_York" } });
-    expect(
-      resolveScrapeOptions({ ...page, browserPath: "/other", mode: "headed" }, defaults).source,
-    ).toMatchObject({ mode: "headed", pins: { timezone: "Europe/Berlin" } });
-    expect(resolveClientOptions({ ...browser, timezone: "Europe/Berlin" }).timezone).toBe(
+      resolveScrapeIntent({ ...page, browserPath: "/other", mode: "headed" }, defaults),
+    ).toMatchObject({ identity: { timezone: "Europe/Berlin" }, source: { mode: "headed" } });
+    expect(resolveClientOptions({ ...browser, timezone: "Europe/Berlin" }).identity.timezone).toBe(
       "Europe/Berlin",
     );
   });
@@ -253,8 +248,8 @@ describe("timezone option", () => {
   it("gives an http scrape no zone, even when the client has one", () => {
     const defaults = resolveClientOptions({ ...browser, timezone: "Europe/Berlin" });
 
-    expect(resolveScrapeOptions({ ...page, mode: "http" }, defaults).source).toMatchObject({
-      pins: { timezone: undefined },
+    expect(resolveScrapeIntent({ ...page, mode: "http" }, defaults)).toMatchObject({
+      identity: { timezone: undefined },
     });
   });
 
@@ -262,16 +257,16 @@ describe("timezone option", () => {
     const defaults = resolveClientOptions({ mode: "http" });
 
     expect(
-      resolveScrapeOptions(
+      resolveScrapeIntent(
         { ...page, browserPath: "/browser", mode: "headless", timezone: "Asia/Kolkata" },
         defaults,
-      ).source,
-    ).toMatchObject({ mode: "headless", pins: { timezone: "Asia/Calcutta" } });
+      ),
+    ).toMatchObject({ identity: { timezone: "Asia/Calcutta" }, source: { mode: "headless" } });
   });
 
   it("refuses a zone in an inherited http mode", () => {
     expect(() =>
-      resolveScrapeOptions({ ...page, timezone: "UTC" }, resolveClientOptions({ mode: "http" })),
+      resolveScrapeIntent({ ...page, timezone: "UTC" }, resolveClientOptions({ mode: "http" })),
     ).toThrow(expect.objectContaining(notInHttp));
   });
 
@@ -280,7 +275,7 @@ describe("timezone option", () => {
     const explicit = { ...page, mode: "http", timezone: "UTC" } as const;
 
     // @ts-expect-error JavaScript callers can pass a zone with mode http.
-    expect(() => resolveScrapeOptions(explicit, defaults)).toThrow(
+    expect(() => resolveScrapeIntent(explicit, defaults)).toThrow(
       expect.objectContaining(notInHttp),
     );
   });
@@ -307,33 +302,33 @@ describe("browserArgs option", () => {
 
     browserArgs.push("--lang=fr");
 
-    expect(defaults.browserArgs).toStrictEqual([
+    expect(defaults.browser.browserArgs).toStrictEqual([
       "--no-sandbox",
       "--disable-gpu-compositing",
       "--disk-cache-dir=/tmp/cache dir",
     ]);
-    expect(Object.isFrozen(defaults.browserArgs)).toBeTruthy();
+    expect(Object.isFrozen(defaults.browser.browserArgs)).toBeTruthy();
   });
 
   it("defaults to no switches", () => {
-    expect(resolveClientOptions(browser).browserArgs).toStrictEqual([]);
-    expect(resolveClientOptions({ mode: "http" }).browserArgs).toStrictEqual([]);
+    expect(resolveClientOptions(browser).browser.browserArgs).toStrictEqual([]);
+    expect(resolveClientOptions({ mode: "http" }).browser.browserArgs).toStrictEqual([]);
   });
 
   it("reaches every browser scrape of the client, whatever mode it overrides to", () => {
     const defaults = resolveClientOptions({ ...browser, browserArgs: ["--no-sandbox"] });
 
-    const headed = resolveScrapeOptions(
+    const headed = resolveScrapeIntent(
       { ...page, browserPath: "/other", mode: "headed" },
       defaults,
     );
 
-    expect(resolveScrapeOptions(page, defaults).source).toMatchObject({
+    expect(resolveScrapeIntent(page, defaults).source).toMatchObject({
       browserArgs: ["--no-sandbox"],
       mode: "headless",
     });
     expect(headed.source).toMatchObject({ browserArgs: ["--no-sandbox"], mode: "headed" });
-    expect(resolveScrapeOptions({ ...page, mode: "http" }, defaults).source).not.toHaveProperty(
+    expect(resolveScrapeIntent({ ...page, mode: "http" }, defaults).source).not.toHaveProperty(
       "browserArgs",
     );
   });
@@ -343,36 +338,39 @@ describe("browserArgs option", () => {
     const unchecked = { ...page, browserArgs: ["--no-sandbox"] };
     const absent = { ...page, browserArgs: undefined };
 
-    expect(() => resolveScrapeOptions(unchecked, defaults)).toThrow(
+    expect(() => resolveScrapeIntent(unchecked, defaults)).toThrow(
       expect.objectContaining({
         code: "INVALID_OPTIONS",
         message: "browserArgs is a client option.",
         name: "TypeError",
       }),
     );
-    expect(() => resolveScrapeOptions(absent, defaults)).not.toThrow();
+    expect(() => resolveScrapeIntent(absent, defaults)).not.toThrow();
   });
 
   it("gives a browser override of an http client no switches", () => {
     const defaults = resolveClientOptions({ mode: "http" });
 
     expect(
-      resolveScrapeOptions({ ...page, browserPath: "/browser", mode: "headless" }, defaults).source,
+      resolveScrapeIntent({ ...page, browserPath: "/browser", mode: "headless" }, defaults).source,
     ).toMatchObject({ browserArgs: [], mode: "headless" });
   });
 
-  it.each([
-    { browserArgs: [], mode: "http" },
-    { browserArgs: ["--no-sandbox"], mode: "http" },
-  ])("refuses $browserArgs in http mode", (options) => {
-    // @ts-expect-error JavaScript callers can pass browserArgs to an http client.
-    expect(() => resolveClientOptions(options)).toThrow(
-      expect.objectContaining({
-        code: "INVALID_OPTIONS",
-        message: "browserArgs is only supported in browser modes.",
-        name: "TypeError",
-      }),
-    );
+  it("keeps an http client's browser defaults for the browser scrapes it inherits them in", () => {
+    const defaults = resolveClientOptions({
+      browserArgs: ["--no-sandbox"],
+      browserPath: "/browser",
+      mode: "http",
+    });
+
+    expect(resolveScrapeIntent(page, defaults).source).toStrictEqual({ mode: "http" });
+    expect(defaults.browser).toStrictEqual({
+      browserArgs: ["--no-sandbox"],
+      browserPath: "/browser",
+    });
+    expect(
+      resolveScrapeIntent({ ...page, browserPath: "/other", mode: "headless" }, defaults).source,
+    ).toStrictEqual({ browserArgs: ["--no-sandbox"], browserPath: "/other", mode: "headless" });
   });
 
   it.each([
@@ -488,7 +486,10 @@ describe("browserArgs option", () => {
       browserArgs: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu-compositing"],
     });
 
-    expect(defaults.browserArgs).toStrictEqual(["--no-sandbox", "--disable-gpu-compositing"]);
+    expect(defaults.browser.browserArgs).toStrictEqual([
+      "--no-sandbox",
+      "--disable-gpu-compositing",
+    ]);
   });
 
   it("reports the first managed switch when several are refused", () => {
@@ -533,18 +534,18 @@ describe("locale option", () => {
     { given: "EN-au", tag: "en-AU" },
     { given: "pt-BR", tag: "pt-BR" },
   ])("canonicalizes $given to $tag", ({ given, tag }) => {
-    expect(resolveClientOptions({ locale: given, mode: "http" }).locale).toBe(tag);
+    expect(resolveClientOptions({ locale: given, mode: "http" }).identity.locale).toBe(tag);
     expect(
-      resolveScrapeOptions({ ...page, locale: given }, resolveClientOptions({ mode: "http" }))
-        .source.pins.locale,
+      resolveScrapeIntent({ ...page, locale: given }, resolveClientOptions({ mode: "http" }))
+        .identity.locale,
     ).toBe(tag);
   });
 
   it("leaves the locale unpinned until a caller pins one", () => {
     const defaults = resolveClientOptions(browser);
 
-    expect(defaults.locale).toBeUndefined();
-    expect(resolveScrapeOptions(page, defaults).source.pins).toStrictEqual({
+    expect(defaults.identity.locale).toBeUndefined();
+    expect(resolveScrapeIntent(page, defaults).identity).toStrictEqual({
       display: undefined,
       locale: undefined,
       timezone: undefined,
@@ -554,14 +555,12 @@ describe("locale option", () => {
   it("applies the client default to every mode and lets a scrape override it", () => {
     const defaults = resolveClientOptions({ ...browser, locale: "ja-JP" });
 
-    expect(resolveScrapeOptions(page, defaults).source.pins.locale).toBe("ja-JP");
-    expect(resolveScrapeOptions({ ...page, mode: "http" }, defaults).source.pins.locale).toBe(
-      "ja-JP",
-    );
-    expect(resolveScrapeOptions({ ...page, locale: "en-GB" }, defaults).source.pins.locale).toBe(
+    expect(resolveScrapeIntent(page, defaults).identity.locale).toBe("ja-JP");
+    expect(resolveScrapeIntent({ ...page, mode: "http" }, defaults).identity.locale).toBe("ja-JP");
+    expect(resolveScrapeIntent({ ...page, locale: "en-GB" }, defaults).identity.locale).toBe(
       "en-GB",
     );
-    expect(resolveScrapeOptions({ ...page, locale: undefined }, defaults).source.pins.locale).toBe(
+    expect(resolveScrapeIntent({ ...page, locale: undefined }, defaults).identity.locale).toBe(
       "ja-JP",
     );
   });
@@ -573,7 +572,7 @@ describe("locale option", () => {
         expect.objectContaining(posixLocale),
       );
       expect(() =>
-        resolveScrapeOptions({ ...page, locale }, resolveClientOptions({ mode: "http" })),
+        resolveScrapeIntent({ ...page, locale }, resolveClientOptions({ mode: "http" })),
       ).toThrow(expect.objectContaining(posixLocale));
     },
   );
@@ -585,7 +584,7 @@ describe("locale option", () => {
         expect.objectContaining(malformedLocale),
       );
       expect(() =>
-        resolveScrapeOptions({ ...page, locale }, resolveClientOptions({ mode: "http" })),
+        resolveScrapeIntent({ ...page, locale }, resolveClientOptions({ mode: "http" })),
       ).toThrow(expect.objectContaining(malformedLocale));
     },
   );
@@ -634,18 +633,20 @@ describe("display option", () => {
           taskbar: { bottom: 48 },
           window: "maximized",
         },
-      }).display,
+      }).identity.display,
     ).toStrictEqual({
       screens: [{ height: 900, weight: 1, width: 1440 }],
       taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
       windows: [{ kind: "maximized", weight: 1 }],
     });
-    expect(resolveClientOptions({ ...browser, display: { taskbar: {} } }).display).toStrictEqual({
+    expect(
+      resolveClientOptions({ ...browser, display: { taskbar: {} } }).identity.display,
+    ).toStrictEqual({
       screens: undefined,
       taskbars: [{ bottom: 0, left: 0, right: 0, top: 0, weight: 1 }],
       windows: undefined,
     });
-    expect(resolveClientOptions(browser).display).toBeUndefined();
+    expect(resolveClientOptions(browser).identity.display).toBeUndefined();
   });
 
   it("keeps weighted tables, sized windows and their positions", () => {
@@ -667,7 +668,7 @@ describe("display option", () => {
             { height: 700, weight: 1, width: 1300, x: 100, y: 120 },
           ],
         },
-      }).display,
+      }).identity.display,
     ).toStrictEqual({
       screens: [
         { height: 1080, weight: 40, width: 1920 },
@@ -692,14 +693,14 @@ describe("display option", () => {
     });
 
     expect(
-      resolveScrapeOptions({ ...page, display: { taskbar: { top: 32 } } }, defaults).source.pins
+      resolveScrapeIntent({ ...page, display: { taskbar: { top: 32 } } }, defaults).identity
         .display,
     ).toStrictEqual({
       screens: [{ height: 900, weight: 1, width: 1440 }],
       taskbars: [{ bottom: 0, left: 0, right: 0, top: 32, weight: 1 }],
       windows: undefined,
     });
-    expect(resolveScrapeOptions(page, defaults).source.pins.display).toBe(defaults.display);
+    expect(resolveScrapeIntent(page, defaults).identity.display).toBe(defaults.identity.display);
   });
 
   it.each([
@@ -768,7 +769,7 @@ describe("display option", () => {
           taskbar: {},
           window: { height: 88, width: 500 },
         },
-      }).display?.windows,
+      }).identity.display?.windows,
     ).toStrictEqual([{ height: 88, kind: "sized", weight: 1, width: 500 }]);
   });
 
@@ -779,10 +780,7 @@ describe("display option", () => {
     });
 
     expect(() =>
-      resolveScrapeOptions(
-        { ...page, display: { window: { height: 900, width: 1600 } } },
-        defaults,
-      ),
+      resolveScrapeIntent({ ...page, display: { window: { height: 900, width: 1600 } } }, defaults),
     ).toThrow(
       expect.objectContaining(
         refusal(
@@ -880,16 +878,16 @@ describe("display option", () => {
       expect.objectContaining(notInHttp),
     );
     expect(() =>
-      resolveScrapeOptions(
+      resolveScrapeIntent(
         { ...page, display: { window: "maximized" } },
         resolveClientOptions({ mode: "http" }),
       ),
     ).toThrow(expect.objectContaining(notInHttp));
     expect(
-      resolveScrapeOptions(
+      resolveScrapeIntent(
         { ...page, mode: "http" },
         resolveClientOptions({ ...browser, display: { window: "maximized" } }),
-      ).source.pins.display,
+      ).identity.display,
     ).toBeUndefined();
   });
 });
@@ -898,7 +896,7 @@ const scrapeWith = (
   choices: Pick<ScrapeOptions, "display" | "locale" | "timezone">,
   mode: "headless" | "headed" = "headless",
 ) => {
-  const { source } = resolveScrapeOptions(
+  const { identity, source } = resolveScrapeIntent(
     { ...page, ...choices },
     resolveClientOptions({ browserPath: "/browser", mode }),
   );
@@ -907,7 +905,7 @@ const scrapeWith = (
     throw new Error("A session scrape runs in a browser mode.");
   }
 
-  return { mode: source.mode, pins: source.pins };
+  return { mode: source.mode, pins: identity };
 };
 
 describe(refuseRecordOverrides, () => {

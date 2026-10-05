@@ -79,7 +79,7 @@ describe("XrioClient types", () => {
     void new XrioClient({ mode: "http", timeoutMs: 1000 });
   });
 
-  it("takes browserArgs on browser clients only, never per scrape", () => {
+  it("keeps browser defaults on every client, whatever its default mode", () => {
     const browserArgs = ["--no-sandbox"];
     const url = "https://example.com";
 
@@ -87,8 +87,8 @@ describe("XrioClient types", () => {
     void new XrioClient({ browserArgs, browserPath: "/browser" });
     void new XrioClient({ browserArgs, browserPath: "/browser", mode: "headless" });
     void new XrioClient({ browserArgs: ["--no-sandbox"] as const, browserPath: "/browser" });
-    // @ts-expect-error An http client has no browser to pass switches to.
     void new XrioClient({ browserArgs, mode: "http" });
+    void new XrioClient({ browserArgs, browserPath: "/browser", mode: "http" });
     // @ts-expect-error browserArgs needs a browser path, even with a switch list.
     void new XrioClient({ browserArgs });
     // @ts-expect-error browserArgs are switches, not one string.
