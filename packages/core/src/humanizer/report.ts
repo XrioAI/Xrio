@@ -85,6 +85,7 @@ export interface ObservedIdentity {
   readonly hover: string | null;
   readonly anyPointer: string | null;
   readonly maxTouchPoints: number;
+  readonly hardwareConcurrency: number;
   readonly deviceMemory: number | null;
   readonly clientHints: ClientHints | null;
   readonly battery: boolean | null;
@@ -186,7 +187,7 @@ export const coverageOf = (
     clientHints: readCoverage(afterCapture, clientHints !== null),
     colorDepth: observedCoverage(),
     colorScheme: observedCoverage(),
-    cores: unchecked("not-observed"),
+    cores: observedCoverage(),
     deviceMemory: readCoverage(afterCapture, deviceMemory !== null),
     devicePixelRatio: observedCoverage(),
     dns: unchecked("not-observed"),
@@ -225,6 +226,7 @@ export const observedOf = (
     colorScheme: observation.colorScheme,
     deviceMemory,
     fontsDigest: observation.fontsDigest ?? fonts?.digest ?? null,
+    hardwareConcurrency: observation.hardwareConcurrency,
     hover: observation.hover,
     intlLocale: observation.intlLocale,
     languages: [...observation.languages],

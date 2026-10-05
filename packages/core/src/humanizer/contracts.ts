@@ -208,6 +208,7 @@ export interface Observation {
   readonly fontsSentinel: string;
   readonly fontsSentinelResolved: boolean;
   readonly fontsDigest: string | null;
+  readonly hardwareConcurrency: number;
 }
 
 interface DeviceRecordRefusal {

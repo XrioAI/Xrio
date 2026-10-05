@@ -272,6 +272,11 @@ const pairOf = (name: string, fallback: readonly [number, number]): readonly [nu
   return groups === undefined ? fallback : [Number(groups.first), Number(groups.second)];
 };
 
+const HOST_CORES = 8;
+
+const knobNumber = (name: string, fallback: number): number =>
+  Number(switchValue(name) ?? fallback);
+
 const DEFAULT_SCREEN = { bottom: 40, height: 1080, left: 0, right: 0, top: 0, width: 1920 };
 
 const screenOf = () => {
@@ -305,6 +310,7 @@ const OBSERVATION = {
   fontsDigest: "c41f09a2",
   fontsSentinel: scenario === "fonts-drift" ? "dead0000" : "5e17a1b2",
   fontsSentinelResolved: scenario !== "fonts-unresolved",
+  hardwareConcurrency: knobNumber("--xrio-hardware-concurrency", HOST_CORES),
   hover: "hover",
   intlLocale: "en-US",
   languages: ["en-US", "en"],

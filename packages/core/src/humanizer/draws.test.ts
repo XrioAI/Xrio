@@ -274,6 +274,7 @@ const hostScreen: Observation = {
   fontsDigest: null,
   fontsSentinel: "0",
   fontsSentinelResolved: false,
+  hardwareConcurrency: 32,
   hover: "hover",
   intlLocale: "en-US",
   languages: ["en-US", "en"],
