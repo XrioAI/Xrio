@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { deviceDigest, hostDigest, refuseUnreplayable } from "./contracts.ts";
-import type { DeviceRecord, FontStackFacts, PresentedDevice } from "./contracts.ts";
+import type { DeviceRecord, ForkFacts, FontStackFacts, PresentedDevice } from "./contracts.ts";
 
 const DEVICE_DIGEST = "1f6fdd787bc7b99c54582d49976c95d3011f4f912126968816c30dc7c6946ed6";
 
@@ -64,6 +64,19 @@ const STACK: FontStackFacts = {
 
 const HOST_WITH_STACK = "b23631b565ac1284e141281ef6c93ec583d27f47f9bcfabfad7a64cad11d1dd5";
 
+const FORK: ForkFacts = {
+  buildUnreadable: false,
+  commit: null,
+  dialect: "xrio",
+  dirty: null,
+  knobs: {},
+  packageDir: "/opt/xrio-chrome",
+  personas: { speech: [] },
+  version: "154.0.8037.57",
+};
+
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
 describe(hostDigest, () => {
   it("hashes the canonical JSON of the host capabilities", () => {
     expect(hostDigest({ platform: "linux" })).toBe(
@@ -81,6 +94,24 @@ describe(hostDigest, () => {
     expect(
       [STACK, moved].map((fontStack) => hostDigest({ fontStack, platform: "linux" })),
     ).toStrictEqual([HOST_WITH_STACK, HOST_WITH_STACK]);
+  });
+
+  it("gives two builds of one fork package two digests, and an unrecorded build a third", () => {
+    const hosts = [
+      FORK,
+      { ...FORK, commit: COMMIT, dirty: 0 },
+      { ...FORK, commit: COMMIT, dirty: 2 },
+      { ...FORK, commit: "fedcba9876543210fedcba9876543210fedcba98", dirty: 0 },
+      { ...FORK, buildUnreadable: true },
+    ].map((fork) => hostDigest({ fork, platform: "linux" }));
+
+    expect(hosts).toStrictEqual([
+      "8db4de099293e4d6b78a986dde3e75f783b9bb760d6589f99e41ca857e49b804",
+      "3c73050c049807ba2368456ef1825e4e2ae6ec4db3196d40a9d62e9623615e44",
+      "1466f9367bb9942baca106a02686665f4b531c75966c4a674cd740d35824442b",
+      "2ffa0f9fe4db2466ddff3bf5d4de4a34fb2fc7b7e15a6cd771afb0f26d375719",
+      "93761b029d0715e395d2202434453a3f6437241aa046fdbcfc3e833f6a2131ef",
+    ]);
   });
 
   it("leaves font evidence out, so the gathering scrape and later ones share the digest", () => {

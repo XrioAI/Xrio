@@ -132,7 +132,10 @@ const insecureCoverage = {
 
 const forkAt = (version: string): HostCapabilities => ({
   fork: {
+    buildUnreadable: false,
+    commit: null,
     dialect: "xrio",
+    dirty: null,
     knobs: {},
     packageDir: "/opt/xrio-chrome",
     personas: { speech: [] },
@@ -259,7 +262,10 @@ describe("the identity report", () => {
     const plan = planIdentity({
       capabilities: {
         fork: {
+          buildUnreadable: false,
+          commit: null,
           dialect: "xrio",
+          dirty: null,
           knobs: { "speech-persona": { origin: "set", value: "basharsx4-google-linux-154" } },
           packageDir: "/opt/xrio-chrome",
           personas: { speech: [] },

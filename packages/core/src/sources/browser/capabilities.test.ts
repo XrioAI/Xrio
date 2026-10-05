@@ -4,6 +4,7 @@ import type { ChannelListener } from "node:diagnostics_channel";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import {
+  appendFile,
   chmod,
   mkdir,
   mkdtemp,
@@ -188,6 +189,12 @@ describe("hostCapabilities", () => {
 
   const forkAt = async (scenario: FakeForkScenario) => await fakeForkPath(scenario, { root });
 
+  const buildRecordedBy = async (versionsLines: string) => {
+    const { fork } = await probeWith()(await fakeForkPath("kit", { root, versionsLines }));
+
+    return [fork?.commit, fork?.dirty, fork?.buildUnreadable];
+  };
+
   const factsFiles = async () => {
     const entries = await readdir(scratch());
 
@@ -221,7 +228,10 @@ describe("hostCapabilities", () => {
 
       expect(platform).toBe(process.platform);
       expect({ ...fork, knobs: undefined }).toStrictEqual({
+        buildUnreadable: false,
+        commit: null,
         dialect: "xrio",
+        dirty: null,
         knobs: undefined,
         packageDir,
         personas: KIT_PERSONAS,
@@ -230,6 +240,136 @@ describe("hostCapabilities", () => {
       expect(probed).toStrictEqual([
         JSON.stringify({ knobs: 77, package: packageDir, version: "154.0.8037.57" }),
       ]);
+    });
+
+    describe("the build recorded in VERSIONS", () => {
+      const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
+      it("reads FORK_COMMIT and FORK_DIRTY when both lines are valid", async () => {
+        await expect(
+          buildRecordedBy(`FORK_COMMIT=${COMMIT}\nFORK_DIRTY=3\n`),
+        ).resolves.toStrictEqual([COMMIT, 3, false]);
+      });
+
+      it("reads a clean build's zero dirty count", async () => {
+        await expect(
+          buildRecordedBy(`FORK_COMMIT=${COMMIT}\nFORK_DIRTY=0\n`),
+        ).resolves.toStrictEqual([COMMIT, 0, false]);
+      });
+
+      it("reports no build, and no tell, when neither line is present", async () => {
+        await expect(buildRecordedBy("")).resolves.toStrictEqual([null, null, false]);
+      });
+
+      it("reads the commit alone when FORK_DIRTY is absent", async () => {
+        await expect(buildRecordedBy(`FORK_COMMIT=${COMMIT}\n`)).resolves.toStrictEqual([
+          COMMIT,
+          null,
+          false,
+        ]);
+      });
+
+      it.each(["unknown", COMMIT.slice(1), `${COMMIT}0`, `${COMMIT} `, ""])(
+        "treats FORK_COMMIT=%j as absent and unreadable",
+        async (commit) => {
+          await expect(
+            buildRecordedBy(`FORK_COMMIT=${commit}\nFORK_DIRTY=0\n`),
+          ).resolves.toStrictEqual([null, 0, true]);
+        },
+      );
+
+      it.each(["-1", "1.5", "two", "", "99999999999999999999"])(
+        "treats FORK_DIRTY=%j as absent and unreadable",
+        async (dirty) => {
+          await expect(
+            buildRecordedBy(`FORK_COMMIT=${COMMIT}\nFORK_DIRTY=${dirty}\n`),
+          ).resolves.toStrictEqual([COMMIT, null, true]);
+        },
+      );
+
+      it("stores an uppercase commit lowercased", async () => {
+        await expect(
+          buildRecordedBy(`FORK_COMMIT=${COMMIT.toUpperCase()}\nFORK_DIRTY=1\n`),
+        ).resolves.toStrictEqual([COMMIT, 1, false]);
+      });
+
+      it("reads a VERSIONS file with CRLF line endings", async () => {
+        await expect(
+          buildRecordedBy(`FORK_COMMIT=${COMMIT}\r\nFORK_DIRTY=4\r\n`),
+        ).resolves.toStrictEqual([COMMIT, 4, false]);
+      });
+
+      it.each([
+        {
+          lines: `FORK_COMMIT=${COMMIT}\nFORK_COMMIT=${COMMIT}\nFORK_DIRTY=0\n`,
+          name: "equal commits",
+        },
+        {
+          lines: `FORK_COMMIT=${COMMIT}\nFORK_COMMIT=unknown\nFORK_DIRTY=0\n`,
+          name: "a commit then unknown",
+        },
+      ])("treats $name as an unreadable commit and keeps the dirty count", async ({ lines }) => {
+        await expect(buildRecordedBy(lines)).resolves.toStrictEqual([null, 0, true]);
+      });
+
+      it.each([
+        { lines: `FORK_COMMIT=${COMMIT}\nFORK_DIRTY=0\nFORK_DIRTY=0\n`, name: "equal counts" },
+        {
+          lines: `FORK_COMMIT=${COMMIT}\nFORK_DIRTY=0\nFORK_DIRTY=unknown\n`,
+          name: "a count then unknown",
+        },
+      ])("treats $name as an unreadable dirty count and keeps the commit", async ({ lines }) => {
+        await expect(buildRecordedBy(lines)).resolves.toStrictEqual([COMMIT, null, true]);
+      });
+
+      it.skipIf(process.getuid?.() === 0)(
+        "reads no build and tells when VERSIONS exists but cannot be read, still detecting the fork by its knob file",
+        async () => {
+          const executable = await forkAt("kit");
+          const versions = path.join(path.dirname(executable), "VERSIONS");
+
+          await chmod(versions, 0o000);
+
+          const { fork } = await probeWith()(executable);
+
+          expect([fork?.dialect, fork?.commit, fork?.dirty, fork?.buildUnreadable]).toStrictEqual([
+            "xrio",
+            null,
+            null,
+            true,
+          ]);
+        },
+      );
+
+      it("serves the build of the VERSIONS text it read, even when a rewrite keeps its size and modification time", async () => {
+        const other = "f".repeat(40);
+
+        const executable = await fakeForkPath("kit", {
+          root,
+          versionsLines: `FORK_COMMIT=${COMMIT}\n`,
+        });
+
+        const versions = path.join(path.dirname(executable), "VERSIONS");
+        const original = await readFile(versions, "utf-8");
+        const probe = probeWith();
+        const FIXED_SECONDS = 1_700_000_000;
+
+        await utimes(versions, FIXED_SECONDS, FIXED_SECONDS);
+        await expect(probe(executable)).resolves.toMatchObject({ fork: { commit: COMMIT } });
+        await writeFile(versions, original.replace(COMMIT, other));
+        await utimes(versions, FIXED_SECONDS, FIXED_SECONDS);
+        await expect(probe(executable)).resolves.toMatchObject({ fork: { commit: other } });
+      });
+
+      it("probes a changed VERSIONS again, so a new build is never served from the old facts", async () => {
+        const executable = await forkAt("kit");
+        const versions = path.join(path.dirname(executable), "VERSIONS");
+        const probe = probeWith();
+
+        await expect(probe(executable)).resolves.toMatchObject({ fork: { commit: null } });
+        await appendFile(versions, `FORK_COMMIT=${COMMIT}\n`);
+        await expect(probe(executable)).resolves.toMatchObject({ fork: { commit: COMMIT } });
+      });
     });
 
     it("rejects a persona whose name differs from its file stem, naming the package", async () => {

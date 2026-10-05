@@ -50,7 +50,10 @@ const forkWith = (
   artifactVersions: readonly string[] = [],
 ): HostCapabilities => ({
   fork: {
+    buildUnreadable: false,
+    commit: null,
     dialect: "xrio",
+    dirty: null,
     knobs: {
       "speech-persona": { origin: speechPersona === null ? "def" : "set", value: speechPersona },
       "suppress-headless-token": { origin: "def", value: "true" },

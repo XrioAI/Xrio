@@ -103,6 +103,9 @@ export interface ForkFacts {
   readonly dialect: "xrio";
   readonly packageDir: string;
   readonly version: string;
+  readonly commit: string | null;
+  readonly dirty: number | null;
+  readonly buildUnreadable: boolean;
   readonly knobs: KnobRegistry;
   readonly personas: {
     readonly speech: readonly SpeechPersona[];

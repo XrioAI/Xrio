@@ -42,6 +42,16 @@ const PACKAGE_FILES = [VERSIONS_FILE, KNOB_FILE, PERSONA_MARKER] as const;
 
 const FORK_VERSION_LINE = /^FORK_VERSION=/mu;
 
+const FORK_COMMIT_LINE = /^FORK_COMMIT=(?<value>[^\r\n]*)\r?$/gmu;
+
+const FORK_DIRTY_LINE = /^FORK_DIRTY=(?<value>[^\r\n]*)\r?$/gmu;
+
+const COMMIT_HASH = /^[\dA-Fa-f]{40}$/u;
+
+const UNREADABLE_VERSIONS = "\0unreadable";
+
+const DIRTY_COUNT = /^\d+$/u;
+
 const PROBE_BUDGET_MS = 10_000;
 
 export const PROBE_SETTLE_BUDGET_MS = PROBE_BUDGET_MS + TEARDOWN_BUDGET_MS;
@@ -79,7 +89,10 @@ type ArtifactKind = (typeof ARTIFACT_KIND_NAMES)[number];
 interface ForkPackage {
   readonly binary: string;
   readonly directory: string;
+  readonly versions: string | null;
 }
+
+type ForkBuild = Pick<ForkFacts, "buildUnreadable" | "commit" | "dirty">;
 
 interface ArtifactText {
   readonly file: string;
@@ -266,17 +279,15 @@ const hasReadableRenderNode = async (directory: string): Promise<boolean> => {
   return readable.includes(true);
 };
 
-const declaresFork = async (versions: string): Promise<boolean> => {
+const readVersions = async (versions: string): Promise<string | null> => {
   if (!(await isFile(versions))) {
-    return false;
+    return "";
   }
 
   try {
-    const contents = await readFile(versions, "utf-8");
-
-    return FORK_VERSION_LINE.test(contents);
+    return await readFile(versions, "utf-8");
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -291,12 +302,14 @@ const forkPackageOf = async (browserPath: string): Promise<ForkPackage | undefin
 
   const directory = path.dirname(binary);
 
-  const marked = await Promise.all([
+  const [versions, hasKnobFile] = await Promise.all([
+    readVersions(path.join(directory, VERSIONS_FILE)),
     isFile(path.join(directory, KNOB_FILE)),
-    declaresFork(path.join(directory, VERSIONS_FILE)),
   ]);
 
-  return marked.includes(true) ? { binary, directory } : undefined;
+  return hasKnobFile || FORK_VERSION_LINE.test(versions ?? "")
+    ? { binary, directory, versions }
+    : undefined;
 };
 
 const statOf = async (file: string) => {
@@ -321,15 +334,20 @@ const directorySignature = async (directory: string): Promise<string> => {
   return await statsSignature([directory, ...names.map((name) => path.join(directory, name))]);
 };
 
-const packageSignature = async ({ binary, directory }: ForkPackage): Promise<string> => {
+const packageSignature = async ({ binary, directory, versions }: ForkPackage): Promise<string> => {
   const personaDir = path.join(directory, PERSONA_MARKER);
   const personas = await namesIn(personaDir);
 
-  return await statsSignature([
+  const files = await statsSignature([
     binary,
     ...PACKAGE_FILES.map((file) => path.join(directory, file)),
     ...personas.map((name) => path.join(personaDir, name)),
   ]);
+
+  return createHash("sha256")
+    .update(files)
+    .update(versions ?? UNREADABLE_VERSIONS)
+    .digest("hex");
 };
 
 const parseDump = (dump: string): KnobRegistry => {
@@ -428,6 +446,40 @@ const personaOf = ({ chrome_version: chromeVersion, digest, name, schema }: RawA
 const speechPersonaOf = (artifact: ArtifactText, knobs: KnobRegistry): SpeechPersona =>
   personaOf(auditArtifact(artifact, "speech", knobs));
 
+const lineValues = (line: RegExp, versions: string): string[] =>
+  [...versions.matchAll(line)].map((match) => match.groups?.value ?? "");
+
+const commitOf = ([recorded, ...repeated]: readonly string[]): string | null =>
+  recorded !== undefined && repeated.length === 0 && COMMIT_HASH.test(recorded)
+    ? recorded.toLowerCase()
+    : null;
+
+const dirtyOf = ([recorded, ...repeated]: readonly string[]): number | null =>
+  recorded !== undefined &&
+  repeated.length === 0 &&
+  DIRTY_COUNT.test(recorded) &&
+  Number.isSafeInteger(Number(recorded))
+    ? Number(recorded)
+    : null;
+
+const buildOf = (versions: string | null): ForkBuild => {
+  if (versions === null) {
+    return { buildUnreadable: true, commit: null, dirty: null };
+  }
+
+  const commitLines = lineValues(FORK_COMMIT_LINE, versions);
+  const dirtyLines = lineValues(FORK_DIRTY_LINE, versions);
+  const commit = commitOf(commitLines);
+  const dirty = dirtyOf(dirtyLines);
+
+  return {
+    buildUnreadable:
+      (commitLines.length > 0 && commit === null) || (dirtyLines.length > 0 && dirty === null),
+    commit,
+    dirty,
+  };
+};
+
 const factsOf = ({ artifacts, dump, version }: ProbeOutputs, fork: ForkPackage): ForkFacts => {
   const knobs = parseDump(dump);
   const speech: SpeechPersona[] = [];
@@ -441,6 +493,7 @@ const factsOf = ({ artifacts, dump, version }: ProbeOutputs, fork: ForkPackage):
   }
 
   return {
+    ...buildOf(fork.versions),
     dialect: "xrio",
     knobs,
     packageDir: fork.directory,

@@ -116,7 +116,12 @@ const writeTrap = async (directory: string, scenario: TrapScenario): Promise<voi
   await writeExecutable(path.join(directory, "chrome"), trapScript(directory));
 };
 
-const writePackage = async (directory: string, fake: FakePackage, version?: string) => {
+interface ForkOverrides {
+  readonly version?: string;
+  readonly versionsLines?: string;
+}
+
+const writePackage = async (directory: string, fake: FakePackage, overrides: ForkOverrides) => {
   const kitDump = await readFile(path.join(FIXTURES, "kit-dump.txt"), "utf-8");
 
   await mkdir(path.join(directory, "personas"), { recursive: true });
@@ -125,7 +130,7 @@ const writePackage = async (directory: string, fake: FakePackage, version?: stri
   if (fake.markers.versions) {
     await writeFile(
       path.join(directory, "VERSIONS"),
-      `CHROMIUM_VERSION=${FAKE_FORK_VERSION}\nFORK_VERSION=1.1\n`,
+      `CHROMIUM_VERSION=${FAKE_FORK_VERSION}\nFORK_VERSION=1.1\n${overrides.versionsLines ?? ""}`,
     );
   }
 
@@ -141,14 +146,25 @@ const writePackage = async (directory: string, fake: FakePackage, version?: stri
       await copyFile(path.join(FIXTURES, artifact), path.join(directory, "personas", artifact));
     }),
   );
-  await writeExecutable(path.join(directory, "chrome"), forkScript(directory, { version }));
+  await writeExecutable(path.join(directory, "chrome"), forkScript(directory, overrides));
 };
+
+const variantOf = ({ version, versionsLines }: ForkOverrides): string =>
+  [
+    version,
+    versionsLines === undefined
+      ? undefined
+      : createHash("sha256").update(versionsLines).digest("hex").slice(0, 8),
+  ]
+    .filter((part) => part !== undefined)
+    .join("-");
 
 export const fakeForkPath = async (
   scenario: FakeForkScenario,
-  { root = tmpdir(), version }: { readonly root?: string; readonly version?: string } = {},
+  { root = tmpdir(), ...overrides }: { readonly root?: string } & ForkOverrides = {},
 ): Promise<string> => {
-  const name = version === undefined ? scenario : `${scenario}-${version}`;
+  const variant = variantOf(overrides);
+  const name = variant === "" ? scenario : `${scenario}-${variant}`;
   const directory = path.join(root, `xrio-fake-fork-${process.getuid?.() ?? 0}-${CHECKOUT}`, name);
 
   await rm(directory, { force: true, recursive: true });
@@ -156,7 +172,7 @@ export const fakeForkPath = async (
 
   await (isTrap(scenario)
     ? writeTrap(directory, scenario)
-    : writePackage(directory, PACKAGES[scenario], version));
+    : writePackage(directory, PACKAGES[scenario], overrides));
 
   return path.join(directory, "chrome");
 };
