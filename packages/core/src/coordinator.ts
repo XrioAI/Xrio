@@ -4,9 +4,10 @@ import type { Admission } from "./admission.ts";
 import type { Deadline } from "./deadline.ts";
 import { timeStage } from "./diagnostics.ts";
 import { clientClosed } from "./errors.ts";
+import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
-import { planIdentity } from "./humanizer/humanizer.ts";
+import { httpIdentity, planIdentity } from "./humanizer/humanizer.ts";
 import { presentedLocale } from "./humanizer/surfaces.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import type { HeldDeadline } from "./lifetime.ts";
@@ -18,10 +19,6 @@ import type { HostFacts } from "./sources/browser/host-facts.ts";
 import type { Sources, VisitPlan } from "./sources/visit.ts";
 import type { SourceDocument } from "./types.ts";
 
-type BrowserSource = Exclude<ScrapeIntent["source"], { mode: "http" }>;
-
-type BrowserScrapeIntent = ScrapeIntent & { readonly source: BrowserSource };
-
 interface ScrapeRun {
   readonly answer: Promise<SourceDocument>;
   readonly settled: Promise<void>;
@@ -29,12 +26,13 @@ interface ScrapeRun {
 
 export interface Scrapes {
   readonly assertOpen: () => void;
-  readonly start: (intent: BrowserScrapeIntent, deadline: Deadline) => ScrapeRun;
+  readonly start: (intent: ScrapeIntent, deadline: Deadline) => ScrapeRun;
   readonly close: () => Promise<void>;
 }
 
 interface Dependencies {
   readonly host: HostFacts;
+  readonly comparisonBinary: string | undefined;
   readonly sessions: SessionManager;
   readonly admission: Admission;
   readonly sources: Sources;
@@ -43,18 +41,38 @@ interface Dependencies {
 }
 
 interface VisitContext {
-  readonly intent: BrowserScrapeIntent;
+  readonly intent: ScrapeIntent;
   readonly hold: SessionHold;
   readonly held: HeldDeadline;
   readonly dependencies: Dependencies;
 }
 
-const plannedVisit = async ({
+const comparisonFacts = async ({
   dependencies,
   held,
-  hold,
-  intent,
-}: VisitContext): Promise<VisitPlan> => {
+}: VisitContext): Promise<HostCapabilities | null> => {
+  try {
+    return await dependencies.host.snapshotFor(dependencies.comparisonBinary, held);
+  } catch {
+    held.throwIfExpired();
+
+    return null;
+  }
+};
+
+const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
+  const { dependencies, held, hold, intent } = context;
+
+  if (intent.source.mode === "http") {
+    return {
+      capabilities: await comparisonFacts(context),
+      identity: httpIdentity(intent.identity),
+      kind: "http",
+      proxy: intent.route,
+      url: intent.url,
+    };
+  }
+
   const capabilities = await dependencies.host.snapshotFor(intent.source.browserPath, held);
   const scrape = { mode: intent.source.mode, pins: intent.identity };
 
@@ -118,14 +136,14 @@ const visitOnce = async (
 
     await visit.closed;
   } finally {
-    if (!transferred) {
+    if (!transferred && plan.kind === "browser") {
       await plan.fonts.settle(null);
     }
   }
 };
 
 const coordinate = async (
-  intent: BrowserScrapeIntent,
+  intent: ScrapeIntent,
   deadline: Deadline,
   dependencies: Dependencies,
   answer: PromiseWithResolvers<SourceDocument>,

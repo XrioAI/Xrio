@@ -1,6 +1,4 @@
 import type { BlockReport } from "./blocks/classify.ts";
-import type { Deadline } from "./deadline.ts";
-import type { IdentityIntent } from "./humanizer/intent.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
@@ -127,11 +125,3 @@ export interface ProxyEndpoint {
   credentials: { username: string; password: string } | undefined;
   redactedUrl: string;
 }
-
-type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[] })) & {
-  url: URL;
-  proxy: ProxyEndpoint | undefined;
-  pins: IdentityIntent;
-};
-
-export type DocumentRequest = SourceRequest & { deadline: Deadline };

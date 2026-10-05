@@ -16,7 +16,7 @@ import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import type { HeldDeadline } from "../../lifetime.ts";
 import type { Slot } from "../../slot.ts";
 import type { SourceDocument } from "../../types.ts";
-import type { Sources, VisitPlan } from "../visit.ts";
+import type { Visit, VisitPlan } from "../visit.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
   createScratchDir,
@@ -206,6 +206,11 @@ const observeAfterCapture = async (
 
 type BrowserVisitPlan = Extract<VisitPlan, { kind: "browser" }>;
 
+export interface Browsers {
+  readonly start: (plan: BrowserVisitPlan, slot: Slot, deadline: HeldDeadline) => Visit;
+  readonly close: () => Promise<void>;
+}
+
 const settleFonts = async ({ fonts }: BrowserVisitPlan): Promise<void> => {
   try {
     await fonts.settle(null);
@@ -271,7 +276,7 @@ const renderInScope = async (
 export const createBrowsers = (
   driver: BrowserDriver,
   steps: Partial<RetireSteps> = {},
-): Sources => {
+): Browsers => {
   const visits = new Set<Promise<Closed>>();
   let closed = false;
 
@@ -306,7 +311,7 @@ export const createBrowsers = (
     visits.delete(closing);
   };
 
-  const start: Sources["start"] = (plan, slot, deadline) => {
+  const start: Browsers["start"] = (plan, slot, deadline) => {
     const document = Promise.withResolvers<SourceDocument>();
     const closing = visit(plan, slot, deadline, document);
 

@@ -6,12 +6,12 @@ import type { IdentityIntent } from "../humanizer/intent.ts";
 import type { HeldDeadline } from "../lifetime.ts";
 import { anonymousSessions } from "../sessions/session.ts";
 import type { SessionManager } from "../sessions/session.ts";
-import { createBrowsers } from "../sources/browser/browsers.ts";
 import type { Closed, RetireSteps } from "../sources/browser/chrome-scope.ts";
 import { createFontEvidenceStore } from "../sources/browser/font-evidence.ts";
 import { hostFactsFor } from "../sources/browser/host-facts.ts";
 import type { HostFacts } from "../sources/browser/host-facts.ts";
 import type { BrowserDriver } from "../sources/browser/port.ts";
+import { createSources } from "../sources/source.ts";
 import type { Sources } from "../sources/visit.ts";
 import type { ProxyEndpoint, SourceDocument } from "../types.ts";
 
@@ -48,15 +48,15 @@ export const plannedScrapes = (
   capacity = 1,
   overrides: PlanningDependencies = {},
 ): PlannedScrapes => {
-  const browsers = createBrowsers(driver, overrides.retire);
+  const runtime = createSources(driver, overrides.retire);
   const sessions = overrides.sessions ?? anonymousSessions();
   const sessionOf = new WeakMap<HeldDeadline, Session>();
   const closedOf = new WeakMap<Session, Promise<Closed>>();
 
   const sources: Sources = {
-    close: browsers.close,
+    close: runtime.close,
     start: (plan, slot, deadline) => {
-      const visit = browsers.start(plan, slot, deadline);
+      const visit = runtime.start(plan, slot, deadline);
       const session = sessionOf.get(deadline);
 
       if (session !== undefined) {
@@ -69,6 +69,7 @@ export const plannedScrapes = (
 
   const scrapes = createScrapes({
     admission: createAdmission(capacity),
+    comparisonBinary: undefined,
     fonts: overrides.fonts ?? createFontEvidenceStore(),
     host:
       overrides.host === undefined

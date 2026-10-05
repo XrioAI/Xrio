@@ -5,16 +5,14 @@ import { createScrapes } from "./coordinator.ts";
 import type { Scrapes } from "./coordinator.ts";
 import { startDeadline } from "./deadline.ts";
 import type { Deadline } from "./deadline.ts";
-import { clientClosed } from "./errors.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { anonymousSessions } from "./sessions/session.ts";
-import { createBrowsers } from "./sources/browser/browsers.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
 import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import { hostFactsFor } from "./sources/browser/host-facts.ts";
 import type { ClientHostFacts } from "./sources/browser/host-facts.ts";
-import { loadHttpDocument } from "./sources/http.ts";
+import { createSources } from "./sources/source.ts";
 import type {
   ClientOptions,
   ScrapeFormat,
@@ -76,10 +74,8 @@ const formats = {
 
 export class XrioClient {
   readonly #defaults: ClientDefaults;
-  readonly #scrapes: Scrapes;
   readonly #hostFacts: ClientHostFacts;
-  readonly #inFlight = new Set<Promise<unknown>>();
-  #closed = false;
+  readonly #scrapes: Scrapes;
 
   constructor(options: ClientOptions) {
     this.#defaults = resolveClientOptions(options);
@@ -87,10 +83,11 @@ export class XrioClient {
 
     this.#scrapes = createScrapes({
       admission: createAdmission(this.#defaults.maxBrowsers),
+      comparisonBinary: this.#defaults.browser.browserPath,
       fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
       host: this.#hostFacts,
       sessions: anonymousSessions(),
-      sources: createBrowsers(cdpDriver),
+      sources: createSources(cdpDriver),
     });
   }
 
@@ -98,13 +95,10 @@ export class XrioClient {
     options: ScrapeOptions<Format>,
   ): Promise<ScrapeResult<Format>>;
   async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
-    if (this.#closed) {
-      throw clientClosed();
-    }
-
+    this.#scrapes.assertOpen();
     const intent = resolveScrapeIntent(options, this.#defaults);
     using deadline = startDeadline(intent.timeoutMs, intent.signal);
-    const document = await this.#loadDocument(intent, deadline);
+    const document = await this.#answer(intent, deadline);
 
     deadline.throwIfExpired();
     const content = formats[intent.format](document);
@@ -122,8 +116,7 @@ export class XrioClient {
   }
 
   async close(): Promise<void> {
-    this.#closed = true;
-    await Promise.allSettled([this.#scrapes.close(), ...this.#inFlight]);
+    await this.#scrapes.close();
     await this.#hostFacts.settle();
   }
 
@@ -131,27 +124,12 @@ export class XrioClient {
     await this.close();
   }
 
-  async #loadDocument(intent: ScrapeIntent, deadline: Deadline): Promise<SourceDocument> {
-    const { identity, route, source, url } = intent;
-
-    const loading =
-      source.mode === "http"
-        ? loadHttpDocument(
-            { ...source, deadline, pins: identity, proxy: route, url },
-            this.#hostFacts,
-            this.#defaults.browser.browserPath,
-          )
-        : this.#scrapes.start({ ...intent, source }, deadline).answer;
-
-    this.#inFlight.add(loading);
-
+  async #answer(intent: ScrapeIntent, deadline: Deadline): Promise<SourceDocument> {
     try {
-      return await loading;
+      return await this.#scrapes.start(intent, deadline).answer;
     } catch (error) {
       deadline.throwIfExpired();
       throw error;
-    } finally {
-      this.#inFlight.delete(loading);
     }
   }
 }

@@ -4,16 +4,14 @@ import type { CreateSessionOptions, Response as ClientResponse, Session } from "
 import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
-import type { HostCapabilities } from "../humanizer/contracts.ts";
-import { httpIdentity } from "../humanizer/humanizer.ts";
 import type { HttpInputs } from "../humanizer/humanizer.ts";
 import type { HttpIdentityReport } from "../humanizer/report.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
-import type { DocumentRequest, SourceDocument } from "../types.ts";
-import type { HostFacts } from "./browser/host-facts.ts";
+import type { SourceDocument } from "../types.ts";
 import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";
+import type { VisitPlan } from "./visit.ts";
 
 const chromeProfile = ({ browser, headerOrder, headers, os }: HttpInputs) =>
   ({
@@ -277,27 +275,11 @@ const fetchFollowingRedirects = async (
   );
 };
 
-const comparisonFacts = async (
-  hostFacts: HostFacts,
-  comparisonBinary: string | undefined,
-  deadline: Deadline,
-): Promise<HostCapabilities | null> => {
-  try {
-    return await hostFacts.snapshotFor(comparisonBinary, deadline);
-  } catch {
-    deadline.throwIfExpired();
-
-    return null;
-  }
-};
-
 export const loadHttpDocument = async (
-  { url, pins, proxy, deadline }: DocumentRequest,
-  hostFacts: HostFacts,
-  comparisonBinary: string | undefined,
+  { capabilities, identity, proxy, url }: Extract<VisitPlan, { kind: "http" }>,
+  deadline: Deadline,
 ): Promise<SourceDocument> => {
-  const client = await comparisonFacts(hostFacts, comparisonBinary, deadline);
-  const { inputs, report } = httpIdentity(pins);
+  const { inputs, report } = identity;
 
   await using relay = await startRelay(proxy, deadline);
 
@@ -310,6 +292,6 @@ export const loadHttpDocument = async (
   return await readDocument(
     await fetchFollowingRedirects(session, url, deadline, relay),
     deadline,
-    () => report(client),
+    () => report(capabilities),
   );
 };
