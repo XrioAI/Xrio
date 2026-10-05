@@ -4,8 +4,7 @@ import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
 import { createScrapes } from "./coordinator.ts";
 import type { Scrapes } from "./coordinator.ts";
 import { startDeadline } from "./deadline.ts";
-import type { Deadline } from "./deadline.ts";
-import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
+import type { ClientDefaults } from "./intent.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { anonymousSessions } from "./sessions/session.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
@@ -98,7 +97,7 @@ export class XrioClient {
     this.#scrapes.assertOpen();
     const intent = resolveScrapeIntent(options, this.#defaults);
     using deadline = startDeadline(intent.timeoutMs, intent.signal);
-    const document = await this.#answer(intent, deadline);
+    const document = await this.#scrapes.start(intent, deadline).answer;
 
     deadline.throwIfExpired();
     const content = formats[intent.format](document);
@@ -122,14 +121,5 @@ export class XrioClient {
 
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close();
-  }
-
-  async #answer(intent: ScrapeIntent, deadline: Deadline): Promise<SourceDocument> {
-    try {
-      return await this.#scrapes.start(intent, deadline).answer;
-    } catch (error) {
-      deadline.throwIfExpired();
-      throw error;
-    }
   }
 }

@@ -202,6 +202,7 @@ try {
 | `BROWSER_LAUNCH_FAILED`    | `XrioError` | Chrome did not start, is older than 150, or failed its pre-navigation identity check. `details.stderr` holds its output tail, `details.mismatches` each fatal mismatch.           |
 | `BROWSER_CRASHED`          | `XrioError` | The browser or the page's renderer died mid-scrape.                                                                                                                               |
 | `CLIENT_CLOSED`            | `XrioError` | `scrape()` was called after `close()`.                                                                                                                                            |
+| `SESSION_UNAVAILABLE`      | `XrioError` | The scrape lost its session's ownership before it finished. `details.reason` is `ownership-lost`.                                                                                 |
 
 The client's own error is kept as `cause`. There are no retries. Messages never include URL or proxy credentials.
 

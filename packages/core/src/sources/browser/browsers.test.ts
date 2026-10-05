@@ -663,7 +663,7 @@ describe("planning between admission and start", () => {
     await expect(
       loadTwice({ sessions: { hold: loseFirstOwnership } }, "slow-start"),
     ).resolves.toMatchObject({
-      first: { error: { name: "TimeoutError" } },
+      first: { error: { code: "SESSION_UNAVAILABLE", details: { reason: "ownership-lost" } } },
       left: nothingLeft,
       second: { value: { status: 200 } },
     });

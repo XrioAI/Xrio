@@ -1,4 +1,4 @@
-import { XrioError } from "./errors.ts";
+import { isXrioError, XrioError } from "./errors.ts";
 
 export interface Clock {
   readonly now: () => number;
@@ -184,6 +184,10 @@ export const untilDeadline = async <Result>(
   try {
     return await Promise.race([operation, expired.promise]);
   } catch (error) {
+    if (isXrioError(error)) {
+      throw error;
+    }
+
     deadline.throwIfExpired();
     throw error;
   } finally {

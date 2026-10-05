@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
-import { clientClosed, XrioError } from "../../errors.ts";
+import { clientClosed, isXrioError, XrioError } from "../../errors.ts";
 import type { AfterCapture, HostCapabilities, Observation } from "../../humanizer/contracts.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
 import {
@@ -114,9 +114,7 @@ const startBrowser = async (
   try {
     return await timeStage("launch", async () => await scope.launch(driver, plan, deadline));
   } catch (error) {
-    deadline.throwIfExpired();
-
-    if (error instanceof XrioError) {
+    if (isXrioError(error) || deadline.signal.aborted) {
       throw error;
     }
 
@@ -152,7 +150,10 @@ const observeLaunch = async (
 
     return await readOnce();
   } catch (error) {
-    deadline.throwIfExpired();
+    if (isXrioError(error) || deadline.signal.aborted) {
+      throw error;
+    }
+
     throw launchFailed(
       `Xrio could not read Chrome's launch identity: ${messageOf(error)}`,
       "",

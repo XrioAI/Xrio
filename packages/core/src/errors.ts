@@ -11,6 +11,7 @@ interface XrioErrorDetails {
   PROXY_CONNECT_FAILED: { status: number };
   PROXY_UNREACHABLE: undefined;
   RESPONSE_TOO_LARGE: undefined;
+  SESSION_UNAVAILABLE: { reason: "ownership-lost" };
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
   TOO_MANY_REDIRECTS: undefined;
@@ -58,6 +59,7 @@ const errorClasses = {
   PROXY_CONNECT_FAILED: XrioError,
   PROXY_UNREACHABLE: XrioError,
   RESPONSE_TOO_LARGE: XrioError,
+  SESSION_UNAVAILABLE: XrioError,
   TIMEOUT: XrioError,
   TLS_CERTIFICATE_INVALID: XrioError,
   TOO_MANY_REDIRECTS: XrioError,

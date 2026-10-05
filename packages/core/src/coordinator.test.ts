@@ -335,6 +335,43 @@ describe(createScrapes, () => {
   });
 });
 
+describe("errors at the answer boundary", () => {
+  it("answers SESSION_UNAVAILABLE when the hold's ownership ends a running visit", async () => {
+    const stopped = Promise.withResolvers<SourceDocument>();
+
+    void Promise.allSettled([stopped.promise]);
+
+    const { owner, scrapes } = harness({
+      visits: [{ closed: Promise.resolve({ exited: true }), document: stopped.promise }],
+    });
+
+    using deadline = startDeadline(1000);
+    const run = scrapes.start(intent, deadline);
+    const reason = new Error("Ownership lost.");
+
+    owner.signal.addEventListener("abort", () => {
+      stopped.reject(owner.signal.reason);
+    });
+    owner.abort(reason);
+
+    await expect(run.answer).rejects.toMatchObject({
+      cause: reason,
+      code: "SESSION_UNAVAILABLE",
+      details: { reason: "ownership-lost" },
+    });
+    await run.settled;
+  });
+
+  it("keeps a classified error raised before the hold is released", async () => {
+    const { failure, scrapes } = harness({ throwOnStart: true });
+    using deadline = startDeadline(1000);
+    const run = scrapes.start(intent, deadline);
+
+    await expect(run.answer).rejects.toBe(failure);
+    await run.settled;
+  });
+});
+
 describe(createAnswer, () => {
   it("settles once and retains its first terminal document", async () => {
     const answer = createAnswer();

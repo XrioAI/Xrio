@@ -139,7 +139,7 @@ const visitOnce = async (context: VisitContext, terminal: boolean): Promise<Visi
 
     transferred = true;
 
-    const outcome = await outcomeOf(visit.document);
+    const outcome = await outcomeOf(visit.document, held);
     const revisit = !terminal && outcome.kind === "document" && hold.revisitWanted(outcome);
 
     answer.offer(outcome, !revisit);
@@ -169,16 +169,22 @@ const coordinate = async (
       deadline,
     );
 
-    const context = { answer, dependencies, held: hold.bind(deadline), hold, intent };
-    const first = await visitOnce(context, false);
+    const held = hold.bind(deadline);
 
-    await hold.finish(first);
+    try {
+      const context = { answer, dependencies, held, hold, intent };
+      const first = await visitOnce(context, false);
 
-    if (first.revisit) {
-      await hold.finish(await visitOnce(context, true));
+      await hold.finish(first);
+
+      if (first.revisit) {
+        await hold.finish(await visitOnce(context, true));
+      }
+    } catch (error) {
+      answer.fail(scrapeError(error, held));
     }
   } catch (error) {
-    answer.fail(scrapeError(error));
+    answer.fail(scrapeError(error, deadline));
   } finally {
     answer.settleWithFallback();
   }
