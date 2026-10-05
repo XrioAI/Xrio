@@ -191,7 +191,7 @@ class Tab {
     const { exceptionDetails, result } = await this.#evaluate(document, expression, deadline);
 
     if (exceptionDetails !== undefined) {
-      throw new Error("The isolated evaluate threw.");
+      throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
     }
 
     const value: unknown = result.value;

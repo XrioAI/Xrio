@@ -107,6 +107,40 @@ describe("the CDP driver's launch", () => {
 });
 
 describe("the CDP driver's documents", () => {
+  it("rejects an isolated read with the error the page threw", async () => {
+    const scratch = await createScratchDir(Date.now());
+
+    const plan = planLaunch({
+      browserPath: await fakeChromePath("evaluate-throws"),
+      display: undefined,
+      headless: true,
+      platform: process.platform,
+      scratchDir: scratch.path,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    using deadline = startDeadline(10_000);
+
+    const browser = await cdpDriver.launch(
+      plan,
+      deadline,
+      () => {},
+      () => {},
+    );
+
+    try {
+      await expect(browser.evaluateIsolated("location.href", isText, deadline)).rejects.toThrow(
+        "Error: fake page failure",
+      );
+    } finally {
+      await browser.close(CLOSE_BUDGET_MS);
+      await removeScratchDir(scratch);
+    }
+
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
   it("resolves a navigation only once its own document has committed", async () => {
     const scratch = await createScratchDir(Date.now());
 

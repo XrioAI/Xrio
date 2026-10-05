@@ -17,6 +17,7 @@ const SCENARIOS = [
   "exit-after-capture-error",
   "pipe-closes-on-navigate",
   "startup-blank-commit",
+  "evaluate-throws",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -212,6 +213,17 @@ const commitEvents = (url: string, loaderId = "L1"): Json[] => [
 ];
 
 const CAPTURED_PAGE: Json = { result: { type: "string", value: PAGE_HTML } };
+
+const THROWN: Json = {
+  exceptionDetails: {
+    columnNumber: 0,
+    exception: { description: "Error: fake page failure", type: "object" },
+    exceptionId: 1,
+    lineNumber: 0,
+    text: "Uncaught",
+  },
+  result: { type: "object" },
+};
 
 const UTILITY_SCRIPT: Json = {
   result: {
@@ -420,7 +432,7 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     case "Runtime.evaluate": {
       await (readsByValue(params)
         ? evaluateByValue(
-            reply(CAPTURED_PAGE),
+            reply(scenario === "evaluate-throws" ? THROWN : CAPTURED_PAGE),
             onSession(sessionId, { error: TARGET_NAVIGATED, id }),
           )
         : write([reply(UTILITY_SCRIPT)]));
