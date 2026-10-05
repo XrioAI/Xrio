@@ -1,34 +1,23 @@
-/* The launch differentiator, given the whole band and almost no furniture: a numeral, a
-   sentence, and the list it is counting. No card, no ticks, no canvas — everything else on
-   the page frames its content, so the one section whose content IS a number gets to stand
-   on the page unframed. */
-
+/* What the patches keep consistent, in plain words: settings a browser is configured with,
+   matched to each other and to the locale. Deliberately not the engine-level names — those are
+   the names of detection checks, and a list of them reads as a list of things being hidden. */
 const PATCHES = [
-  "navigator.webdriver",
-  "CDP Runtime.enable leak",
-  "WebGL vendor / renderer",
-  "AudioContext fingerprint",
-  "Canvas readback noise",
-  "Permissions.query state",
-  "chrome.runtime presence",
-  "Notification.permission",
-  "iframe.contentWindow proxy",
-  "Function.toString native",
-  "WebRTC local IP leak",
-  "ClientRects jitter",
-  "navigator.plugins table",
-  "Intl timezone / locale",
-  "screen metrics parity",
-  "Battery Status API",
-  "mediaDevices.enumerate",
-  "speechSynthesis voices",
-  "TLS ClientHello order",
-  "HTTP/2 SETTINGS frame",
-  "font enumeration set",
-  "hardwareConcurrency",
-  "deviceMemory rounding",
-  "userAgentData brands",
+  "Timezone and locale",
+  "Fonts for the locale",
+  "Speech voices for the locale",
+  "Screen size and scaling",
+  "Graphics renderer",
+  "Canvas rendering",
+  "Audio output",
+  "CPU cores and memory",
+  "Permission defaults",
 ];
+
+/* The column is ~610px tall on desktop and the list is far shorter, so each marquee copy runs
+   the list REPEAT times — enough rows to overfill the column, or the loop shows a gap. */
+const REPEAT = 3;
+
+const ROWS = Array.from({ length: REPEAT }, () => PATCHES).flat();
 
 const Row = ({
   name,
@@ -48,7 +37,7 @@ const Row = ({
   >
     <span
       style={{
-        /* ink-dim, not fg-lo: the ordinals are how you read "these are 24 of 45", so
+        /* ink-dim, not fg-lo: the ordinals are how you read the length of the list, so
              they have to survive as text on both schemes. */
         color: "var(--xrio-ink-dim)",
         fontFamily: "var(--xrio-mono)",
@@ -56,7 +45,7 @@ const Row = ({
         fontVariantNumeric: "tabular-nums",
       }}
     >
-      {String(i + 1).padStart(2, "0")}
+      {String((i % PATCHES.length) + 1).padStart(2, "0")}
     </span>
     <span
       style={{
@@ -100,14 +89,13 @@ export const PatchMarquee = ({
       {/* Rendered twice — see PATCH MARQUEE in globals.css. aria-hidden on the second
             copy only: the first is a real list a screen reader can walk. */}
       <ul className="patch-marquee-track">
-        {PATCHES.map((p, i) => (
-          <Row key={p} name={p} i={i} align={align} />
+        {ROWS.map((p, i) => (
+          <Row key={i} name={p} i={i} dup={i >= PATCHES.length} align={align} />
         ))}
-        {PATCHES.map((p, i) => (
-          <Row key={`${p}-2`} name={p} i={i} dup align={align} />
+        {ROWS.map((p, i) => (
+          <Row key={`dup-${i}`} name={p} i={i} dup align={align} />
         ))}
       </ul>
     </div>
-    <p className={`xrio-kicker mt-5 ${align === "right" ? "text-right" : ""}`}>24 of 45 shown</p>
   </div>
 );

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 /* Two ways in, side by side. The left one is the line a person pastes to hook their agent up.
    The right one is addressed to the agent itself — it fetches its own instructions and goes,
-   and because there is no key to hand out, that is the whole onboarding.
+   and because there is no account to set up, that is the whole onboarding.
 
    The commands are set in the recessed well the dashboard's url field uses, with the prompt in
    the theme's ink rule, so a command here reads the same as a command anywhere else on the page. */
@@ -248,7 +248,7 @@ export const AgentHookup = () => (
       className="mt-6 mx-auto text-center"
       style={{ color: "var(--xrio-fg2)", fontSize: 13.5, lineHeight: 1.72, maxWidth: 430 }}
     >
-      MCP or the CLI. No key to provision, no quota to negotiate, no dashboard in the way.
+      MCP or the CLI. No account needed, no dashboard in the way.
     </p>
 
     <div
@@ -265,7 +265,7 @@ export const AgentHookup = () => (
       <Half
         className="pt-12 md:pt-0 md:pl-14 border-t md:border-t-0 md:border-l"
         lead="Agent onboarding."
-        rest="Are you an agent? Fetch this and start scraping. There is no key to wait for."
+        rest="Set up Xrio for your agent with one skill file."
         cmds={ONBOARD}
         link="View the skill"
       />

@@ -30,7 +30,7 @@ const fraunces = Fraunces({
 
 export const metadata: Metadata = {
   description:
-    "curl for the modern web. JS rendering, proxy routing, TLS fingerprinting — one command.",
+    "curl for the modern web. JavaScript rendering, search and structured output for any public page — one command.",
   /* Every icon is generated from public/logo-macaw-mark.png — the same artwork the nav
      mark masks — flattened onto pure white rather than kept transparent, so it reads the same on
      a dark tab strip as on a light one. The white is a DISC, not a square, with transparent
@@ -52,7 +52,7 @@ export const metadata: Metadata = {
       { sizes: "512x512", type: "image/png", url: "/mark-icon-512.png" },
     ],
   },
-  title: "Xrio — Fetch Everything",
+  title: "Xrio — Public web data for agents",
 };
 
 const RootLayout = ({ children }: Readonly<{ children: React.ReactNode }>) => (
