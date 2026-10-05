@@ -6,12 +6,16 @@ import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
-import type { Observation } from "../../humanizer/contracts.ts";
+import type { AfterCapture, Observation } from "../../humanizer/contracts.ts";
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
-import type { BrowserIdentityReport } from "../../humanizer/report.ts";
-import { describeMismatch, evaluate, readObservation } from "../../humanizer/verify.ts";
+import {
+  describeMismatch,
+  evaluate,
+  readAfterCapture,
+  readObservation,
+} from "../../humanizer/verify.ts";
 import { exitFactsFor, routeFor } from "../../proxy/route.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
@@ -40,6 +44,10 @@ const MIN_CHROME_MAJOR = 150;
 const VERIFY_TIMEOUT_MS = 10_000;
 
 const UNSIZED_RETRY_MS = 250;
+
+const AFTER_CAPTURE_CAP_MS = 250;
+
+const AFTER_CAPTURE_FLOOR_MS = 50;
 
 type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
 
@@ -217,9 +225,9 @@ const verifyLaunch = async (
   identity: IdentityPlan,
   deadline: Deadline,
   steps: VisitSteps,
-): Promise<BrowserIdentityReport> => {
-  const observation = await observeLaunch(browser, identity.read, deadline);
-  const { mismatches, report } = steps.evaluate(identity, observation);
+): Promise<Observation> => {
+  const observation = await observeLaunch(browser, identity.read.beforeNavigation, deadline);
+  const { mismatches } = steps.evaluate(identity, observation);
 
   if (mismatches.length > 0) {
     const fields = mismatches.map((mismatch) => describeMismatch(mismatch, observation)).join(", ");
@@ -231,7 +239,29 @@ const verifyLaunch = async (
     );
   }
 
-  return report;
+  return observation;
+};
+
+const observeAfterCapture = async (
+  browser: DriverBrowser,
+  read: string,
+  deadline: Deadline,
+): Promise<AfterCapture> => {
+  const budgetMs = Math.min(AFTER_CAPTURE_CAP_MS, Math.floor(deadline.remainingMs() / 2));
+
+  if (budgetMs < AFTER_CAPTURE_FLOOR_MS) {
+    return { kind: "skipped" };
+  }
+
+  try {
+    using stage = deadline.startStage(budgetMs);
+
+    return readAfterCapture(
+      await browser.evaluateIsolated(read, isText, deadline.boundTo(stage.signal)),
+    );
+  } catch {
+    return { kind: "failed" };
+  }
 };
 
 const renderInScope = async (
@@ -250,14 +280,21 @@ const renderInScope = async (
     const browser = await startBrowser(driver, scope, launch, deadline);
     assertSupported(browser.product);
 
-    const report = await timeStage(
+    const observation = await timeStage(
       "verify",
       async () => await verifyLaunch(browser, identity, deadline, steps),
     );
 
+    const { afterCapture, source } = await renderDocument(
+      browser,
+      request.url,
+      deadline,
+      async () => await observeAfterCapture(browser, identity.read.afterCapture, deadline),
+    );
+
     document.resolve({
-      ...(await renderDocument(browser, request.url, deadline)),
-      identity: report,
+      ...source,
+      identity: steps.evaluate(identity, { ...observation, afterCapture }).report,
     });
   } catch (error) {
     document.reject(error);

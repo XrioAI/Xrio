@@ -58,8 +58,41 @@ export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
 }
 
+interface Brand {
+  readonly brand: string;
+  readonly version: string;
+}
+
+export interface ClientHints {
+  readonly architecture: string | null;
+  readonly bitness: string | null;
+  readonly brands: readonly Brand[] | null;
+  readonly fullVersionList: readonly Brand[] | null;
+  readonly mobile: boolean | null;
+  readonly model: string | null;
+  readonly platform: string | null;
+  readonly platformVersion: string | null;
+  readonly wow64: boolean | null;
+}
+
+export interface SecureContextReading {
+  readonly kind: "secure";
+  readonly deviceMemory: number | null;
+  readonly clientHints: ClientHints | null;
+  readonly battery: boolean;
+  readonly webgpu: boolean;
+}
+
+export type AfterCapture =
+  | SecureContextReading
+  | { readonly kind: "insecure" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "skipped" }
+  | { readonly kind: "not-navigated" };
+
 export interface Observation {
   readonly product: ChromeProduct;
+  readonly afterCapture: AfterCapture;
   readonly zone: string | null;
   readonly requestedZone: string | null;
   readonly zoneOffsets: readonly string[];

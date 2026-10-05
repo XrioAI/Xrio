@@ -11,7 +11,7 @@ import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
 import type { Observation } from "../../humanizer/contracts.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
-import { evaluate } from "../../humanizer/verify.ts";
+import { AFTER_CAPTURE_READ, evaluate } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
@@ -1187,11 +1187,16 @@ describe("the launch identity check", () => {
     await browsers.close();
     expect(document.identity).toMatchObject({
       binary: { version: "154.0.8037.57" },
-      coverage: { screen: { state: "observed" }, timezone: { state: "observed" } },
+      coverage: {
+        deviceMemory: { state: "observed" },
+        screen: { state: "observed" },
+        timezone: { state: "observed" },
+      },
       exit: { facts: { kind: "unknown" }, route: "direct" },
       mode: "headless",
       notes: [],
       observed: {
+        deviceMemory: 8,
         offsets: ["GMT+00:00", "GMT+00:00"],
         screen: { availHeight: 1040, height: 1080, width: 1920 },
         timeZone: "UTC",
@@ -1270,7 +1275,9 @@ describe("the launch identity check", () => {
     const observed: { outerWidth: number; outerHeight: number }[] = [];
 
     const recordingEvaluate: typeof evaluate = (expected, observation) => {
-      observed.push({ outerHeight: observation.outerHeight, outerWidth: observation.outerWidth });
+      if (observation.afterCapture.kind === "not-navigated") {
+        observed.push({ outerHeight: observation.outerHeight, outerWidth: observation.outerWidth });
+      }
 
       return evaluate(expected, observation);
     };
@@ -1444,6 +1451,202 @@ describe("the identity-chosen event", () => {
         document: outcome,
         order: ["identity-chosen", "browser-launched"],
       });
+    },
+  );
+});
+
+const readingAfterCaptureWith = (read: (deadline: Deadline) => Promise<string>): BrowserDriver => ({
+  launch: async (plan, deadline, owned, deferCleanup) => {
+    const browser = await cdpDriver.launch(plan, deadline, owned, deferCleanup);
+
+    return {
+      ...browser,
+      evaluateIsolated: async (expression, isResult, readDeadline) => {
+        if (expression !== AFTER_CAPTURE_READ) {
+          return await browser.evaluateIsolated(expression, isResult, readDeadline);
+        }
+
+        const value = await read(readDeadline);
+
+        if (!isResult(value)) {
+          throw new Error("The test read returned an unexpected value.");
+        }
+
+        return value;
+      },
+    };
+  },
+});
+
+const SECURE_READING = JSON.stringify({
+  battery: true,
+  clientHints: {
+    architecture: "x86",
+    bitness: "64",
+    brands: null,
+    fullVersionList: null,
+    mobile: false,
+    model: "",
+    platform: "Linux",
+    platformVersion: "6.8.0",
+    wow64: false,
+  },
+  deviceMemory: 8,
+  kind: "secure",
+  webgpu: false,
+});
+
+const secureContextUnchecked = (reason: string) => ({
+  battery: { reason, state: "unchecked" },
+  clientHints: { reason, state: "unchecked" },
+  deviceMemory: { reason, state: "unchecked" },
+  webgpu: { reason, state: "unchecked" },
+});
+
+describe("the after-capture read", () => {
+  it("runs inside the capture stage and fills the report's secure-context surfaces", async () => {
+    using stages = stageTimeline(new Set(["verify", "navigation", "capture", "teardown"]));
+
+    const browsers = createBrowsers(
+      readingAfterCaptureWith(async () => {
+        stages.mark("read");
+
+        return await Promise.resolve(SECURE_READING);
+      }),
+      1,
+    );
+
+    using deadline = startDeadline(10_000);
+
+    const document = await stages.recording(
+      async () => await browsers.load(await normalRequest(deadline)),
+    );
+
+    await browsers.close();
+    expect({ identity: document.identity, timeline: stages.timeline }).toMatchObject({
+      identity: {
+        coverage: { battery: { state: "observed" }, clientHints: { state: "observed" } },
+        observed: { clientHints: { architecture: "x86", bitness: "64" } },
+      },
+      timeline: ["verify", "navigation", "read", "capture", "teardown"],
+    });
+  });
+
+  it.each([
+    { coverage: { state: "observed" }, leftMs: 100, reads: 1 },
+    { coverage: { reason: "no-time", state: "unchecked" }, leftMs: 99, reads: 0 },
+    { coverage: { reason: "no-time", state: "unchecked" }, leftMs: 40, reads: 0 },
+  ])(
+    "leaves $reads reads with $leftMs ms of the deadline remaining, and keeps the document",
+    async ({ coverage, leftMs, reads }) => {
+      const { advance, clock } = manualClock();
+      let isolatedCalls = 0;
+      let afterCaptureReads = 0;
+
+      const nearlyExpired: BrowserDriver = {
+        launch: async (plan, launchDeadline, owned, deferCleanup) => {
+          const browser = await cdpDriver.launch(plan, launchDeadline, owned, deferCleanup);
+
+          return {
+            ...browser,
+            evaluateIsolated: async (expression, isResult, readDeadline) => {
+              afterCaptureReads += expression === AFTER_CAPTURE_READ ? 1 : 0;
+
+              const value = await browser.evaluateIsolated(expression, isResult, readDeadline);
+
+              isolatedCalls += 1;
+
+              if (isolatedCalls === 2) {
+                advance(10_000 - leftMs);
+              }
+
+              return value;
+            },
+          };
+        },
+      };
+
+      const browsers = createBrowsers(nearlyExpired, 1);
+      using deadline = startDeadline(10_000, undefined, clock);
+      const visit = browsers.start(await normalRequest(deadline));
+      const document = await settledValue(visit.document);
+      const closed = await visit.closed;
+
+      await browsers.close();
+      expect({ afterCaptureReads, closed, document }).toMatchObject({
+        afterCaptureReads: reads,
+        closed: { exited: true },
+        document: {
+          value: { identity: { coverage: { deviceMemory: coverage } }, status: 200 },
+        },
+      });
+    },
+  );
+
+  it.each([
+    { failure: "a malformed reading", read: async () => await Promise.resolve("{}") },
+    { failure: "a reading that is not JSON", read: async () => await Promise.resolve("<html>") },
+    {
+      failure: "a read that throws",
+      read: async () => await Promise.reject(new Error("Read failed.")),
+    },
+  ])("keeps the document and reports read-failed on $failure", async ({ read }) => {
+    const outcome = await visitOn(readingAfterCaptureWith(read), { scenario: "normal" });
+
+    expect(outcome).toMatchObject({
+      ...settledCleanly,
+      document: {
+        value: {
+          html: "<!DOCTYPE html><html><head></head><body><p>fake page</p></body></html>",
+          identity: { coverage: secureContextUnchecked("read-failed") },
+          status: 200,
+        },
+      },
+    });
+  });
+
+  it.each([
+    { deadlineMs: 60_000, waitMs: 250 },
+    { deadlineMs: 400, waitMs: 200 },
+  ])(
+    "gives up on a read still running after $waitMs ms of a $deadlineMs ms deadline and keeps the document",
+    async ({ deadlineMs, waitMs }) => {
+      const { advance, clock } = manualClock();
+      const readStarted = Promise.withResolvers<"started">();
+
+      const hangingRead = readingAfterCaptureWith(async (deadline) => {
+        readStarted.resolve("started");
+
+        return await untilDeadline(
+          async () => await Promise.withResolvers<string>().promise,
+          deadline,
+        );
+      });
+
+      const browsers = createBrowsers(hangingRead, 1);
+      using deadline = startDeadline(deadlineMs, undefined, clock);
+      const visit = browsers.start(await normalRequest(deadline));
+
+      await readStarted.promise;
+      advance(waitMs - 1);
+      await nextTurn();
+
+      const early = await Promise.race([visit.document.then(() => "settled"), nextTurn("pending")]);
+
+      advance(1);
+
+      const document = await settledValue(visit.document);
+      const closed = await visit.closed;
+
+      await browsers.close();
+      expect({ closed, document, early }).toMatchObject({
+        closed: { exited: true },
+        document: {
+          value: { identity: { coverage: secureContextUnchecked("read-failed") }, status: 200 },
+        },
+        early: "pending",
+      });
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
 });

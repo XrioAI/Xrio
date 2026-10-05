@@ -12,7 +12,26 @@ const linuxUserAgent =
 const macUserAgent =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 
+const linuxClientHints = {
+  architecture: "x86",
+  bitness: "64",
+  brands: [{ brand: "Chromium", version: "154" }],
+  fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+  mobile: false,
+  model: "",
+  platform: "Linux",
+  platformVersion: "6.8.0",
+  wow64: false,
+};
+
 const headlessLinux: Observation = {
+  afterCapture: {
+    battery: true,
+    clientHints: linuxClientHints,
+    deviceMemory: 8,
+    kind: "secure",
+    webgpu: false,
+  },
   anyPointer: "fine",
   availHeight: 1040,
   availWidth: 1920,
@@ -40,6 +59,7 @@ const headlessLinux: Observation = {
 
 const headedMac: Observation = {
   ...headlessLinux,
+  afterCapture: { kind: "insecure" },
   availHeight: 1079,
   availWidth: 1728,
   colorScheme: "dark",
@@ -56,14 +76,14 @@ const headedMac: Observation = {
   zoneOffsets: ["GMT-05:00", "GMT-04:00"],
 };
 
-const browserCoverage = {
+const secureCoverage = {
   automation: { state: "observed" },
-  battery: { reason: "not-observed", state: "unchecked" },
-  clientHints: { reason: "not-observed", state: "unchecked" },
+  battery: { state: "observed" },
+  clientHints: { state: "observed" },
   colorDepth: { state: "observed" },
   colorScheme: { state: "observed" },
   cores: { reason: "not-observed", state: "unchecked" },
-  deviceMemory: { reason: "not-observed", state: "unchecked" },
+  deviceMemory: { state: "observed" },
   devicePixelRatio: { state: "observed" },
   dns: { reason: "not-observed", state: "unchecked" },
   fonts: { reason: "not-observed", state: "unchecked" },
@@ -81,10 +101,19 @@ const browserCoverage = {
   voices: { reason: "not-observed", state: "unchecked" },
   webglPixels: { reason: "lanes-only", state: "unchecked" },
   webglStrings: { reason: "not-observed", state: "unchecked" },
-  webgpu: { reason: "not-observed", state: "unchecked" },
+  webgpu: { state: "observed" },
   webrtc: { reason: "not-observed", state: "unchecked" },
   window: { state: "observed" },
   workArea: { state: "observed" },
+};
+
+const insecureCoverage = {
+  ...secureCoverage,
+  battery: { reason: "insecure-origin", state: "unchecked" },
+  clientHints: { reason: "insecure-origin", state: "unchecked" },
+  deviceMemory: { reason: "insecure-origin", state: "unchecked" },
+  timezone: { reason: "not-observed", state: "unchecked" },
+  webgpu: { reason: "insecure-origin", state: "unchecked" },
 };
 
 describe("the identity report", () => {
@@ -110,13 +139,16 @@ describe("the identity report", () => {
       mismatches: [],
       report: {
         binary: { version: "154.0.8037.57" },
-        coverage: browserCoverage,
+        coverage: secureCoverage,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         mode: "headless",
         notes: [],
         observed: {
           anyPointer: "fine",
+          battery: true,
+          clientHints: linuxClientHints,
           colorScheme: "light",
+          deviceMemory: 8,
           hover: "hover",
           intlLocale: "en-US",
           languages: ["en-US", "en"],
@@ -135,6 +167,7 @@ describe("the identity report", () => {
           timeZone: "UTC",
           userAgent: linuxUserAgent,
           webdriver: false,
+          webgpu: false,
           window: { outerHeight: 900, outerWidth: 1600 },
         },
         surfaces: {
@@ -155,7 +188,7 @@ describe("the identity report", () => {
     });
   });
 
-  it("reports a headed stock scrape on macOS, with WebGL unchecked and no zone pinned", () => {
+  it("reports a headed stock scrape of a non-secure page on macOS, with no secure-context surface read", () => {
     const plan = planIdentity({
       capabilities: { platform: "darwin" },
       exit: { facts: { kind: "unknown" }, route: "direct" },
@@ -167,13 +200,16 @@ describe("the identity report", () => {
       mismatches: [],
       report: {
         binary: { version: "154.0.8037.57" },
-        coverage: { ...browserCoverage, timezone: { reason: "not-observed", state: "unchecked" } },
+        coverage: insecureCoverage,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         mode: "headed",
         notes: [],
         observed: {
           anyPointer: "fine",
+          battery: null,
+          clientHints: null,
           colorScheme: "dark",
+          deviceMemory: null,
           hover: "hover",
           intlLocale: "en-US",
           languages: ["en-US", "en"],
@@ -192,6 +228,7 @@ describe("the identity report", () => {
           timeZone: "America/Toronto",
           userAgent: macUserAgent,
           webdriver: false,
+          webgpu: null,
           window: { outerHeight: 900, outerWidth: 1600 },
         },
         surfaces: {
@@ -206,6 +243,70 @@ describe("the identity report", () => {
         tells: [],
       },
     });
+  });
+});
+
+describe("the secure-context surfaces' coverage", () => {
+  const plan = planIdentity({
+    capabilities: { platform: "linux" },
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: "UTC",
+    mode: "headless",
+  });
+
+  it.each([
+    { afterCapture: { kind: "failed" } as const, reason: "read-failed" },
+    { afterCapture: { kind: "skipped" } as const, reason: "no-time" },
+    { afterCapture: { kind: "not-navigated" } as const, reason: "not-observed" },
+  ])(
+    "is unchecked with $reason when the read gives $afterCapture.kind",
+    ({ afterCapture, reason }) => {
+      const { coverage, observed } = evaluate(plan, { ...headlessLinux, afterCapture }).report;
+
+      expect({
+        coverage: [coverage.battery, coverage.clientHints, coverage.deviceMemory, coverage.webgpu],
+        observed: [observed.battery, observed.clientHints, observed.deviceMemory, observed.webgpu],
+        platform: coverage.platform,
+      }).toStrictEqual({
+        coverage: Array.from({ length: 4 }, () => ({ reason, state: "unchecked" })),
+        observed: [null, null, null, null],
+        platform: { reason: "not-observed", state: "unchecked" },
+      });
+    },
+  );
+});
+
+describe("a secure origin whose individual reads gave nothing", () => {
+  it("marks only those surfaces unchecked with read-failed", () => {
+    const plan = planIdentity({
+      capabilities: { platform: "linux" },
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: "UTC",
+      mode: "headless",
+    });
+
+    const { coverage } = evaluate(plan, {
+      ...headlessLinux,
+      afterCapture: {
+        battery: true,
+        clientHints: null,
+        deviceMemory: null,
+        kind: "secure",
+        webgpu: false,
+      },
+    }).report;
+
+    expect([
+      coverage.battery,
+      coverage.clientHints,
+      coverage.deviceMemory,
+      coverage.webgpu,
+    ]).toStrictEqual([
+      { state: "observed" },
+      { reason: "read-failed", state: "unchecked" },
+      { reason: "read-failed", state: "unchecked" },
+      { state: "observed" },
+    ]);
   });
 });
 
@@ -228,10 +329,12 @@ describe("report independence", () => {
     expect({
       requestHeaders: second.coverage.requestHeaders,
       shared: first.coverage.screen === second.coverage.screen,
+      sharedWithinReport: first.coverage.battery === first.coverage.webgpu,
       timezone: second.coverage.timezone,
     }).toStrictEqual({
       requestHeaders: { reason: "no-request-log", state: "unchecked" },
       shared: false,
+      sharedWithinReport: false,
       timezone: { state: "observed" },
     });
   });
@@ -316,7 +419,7 @@ describe("coverage backed by timezone reads", () => {
     mode: "headless",
   });
 
-  it("leaves platform unchecked, since no read covers it", () => {
+  it("leaves platform unchecked even when secure client hints name the platform", () => {
     expect(evaluate(plan, headlessLinux).report.coverage.platform).toStrictEqual({
       reason: "not-observed",
       state: "unchecked",
@@ -339,9 +442,9 @@ describe("coverage backed by timezone reads", () => {
   it.each([
     { name: "Chrome did not name the expected timezone", read: { zone: null } },
     { name: "the expected zone's offsets could not be read", read: { requestedOffsets: null } },
-  ])("leaves timezone unchecked when $name", ({ read }) => {
+  ])("reports a failed read when $name", ({ read }) => {
     expect(evaluate(plan, { ...headlessLinux, ...read }).report.coverage.timezone).toStrictEqual({
-      reason: "not-observed",
+      reason: "read-failed",
       state: "unchecked",
     });
   });

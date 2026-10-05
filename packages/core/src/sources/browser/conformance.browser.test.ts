@@ -295,6 +295,8 @@ const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<st
 
 const isText = (value: unknown): value is string => typeof value === "string";
 
+const NO_AFTER_CAPTURE_READ = async (): Promise<null> => await Promise.resolve(null);
+
 const isNumber = (value: unknown): value is number => typeof value === "number";
 
 const PLATFORM_READ =
@@ -382,7 +384,12 @@ describe.each(MODES)("documents captured, %s", (mode) => {
         "about:blank",
       );
 
-      const document = await renderDocument(browser, new URL("/static", server.origin), deadline);
+      const { source: document } = await renderDocument(
+        browser,
+        new URL("/static", server.origin),
+        deadline,
+        NO_AFTER_CAPTURE_READ,
+      );
 
       expect(document).toMatchObject({ headers: { "x-page": "static" }, status: 200 });
       expect(markerOf(document.html)).toBe("static");
@@ -393,7 +400,12 @@ describe.each(MODES)("documents captured, %s", (mode) => {
 
   it("awaits promises in isolated reads after a capture", async () => {
     await withBrowser(mode, async (browser, deadline) => {
-      await renderDocument(browser, new URL("/static", server.origin), deadline);
+      await renderDocument(
+        browser,
+        new URL("/static", server.origin),
+        deadline,
+        NO_AFTER_CAPTURE_READ,
+      );
 
       await expect(
         browser.evaluateIsolated("Promise.resolve(42)", isNumber, deadline),
@@ -535,6 +547,24 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     expect(xml.html).toContain("xml-viewer-style");
     expect(pdf.html).toContain("pdf_embedder.css");
     expect([json.status, xml.status, pdf.status]).toStrictEqual([200, 200, 200]);
+  });
+});
+
+describe.each(MODES)("the launch identity, %s", (mode) => {
+  serveFixturePages();
+
+  it("reads the secure-context surfaces after capture on a loopback page", async () => {
+    const { identity } = await load(mode, "/identity");
+
+    expect(identity).toMatchObject({
+      coverage: {
+        battery: { state: "observed" },
+        clientHints: { state: "observed" },
+        deviceMemory: { state: "observed" },
+        webgpu: { state: "observed" },
+      },
+    });
+    expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
   });
 });
 

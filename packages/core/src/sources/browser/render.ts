@@ -384,11 +384,12 @@ const captureCurrentDocument = async (
   return rebound;
 };
 
-export const renderDocument = async (
+export const renderDocument = async <Reading>(
   browser: DriverBrowser,
   url: URL,
   deadline: Deadline,
-): Promise<Omit<SourceDocument, "identity">> => {
+  readAfterCapture: () => Promise<Reading>,
+): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
   const tracker = new PageTracker(browser);
 
   try {
@@ -397,24 +398,32 @@ export const renderDocument = async (
       await tracker.documentLoaded(deadline);
     });
 
-    const { document, html } = await timeStage(
-      "capture",
-      async () => await captureCurrentDocument(browser, tracker, deadline),
-    );
+    const { afterCapture, captured } = await timeStage("capture", async () => {
+      const current = await captureCurrentDocument(browser, tracker, deadline);
+
+      tracker.stop();
+
+      return { afterCapture: await readAfterCapture(), captured: current };
+    });
+
+    const { document, html } = captured;
 
     const details = tracker.responseOf(document);
 
     reportDropped(tracker);
 
     return {
-      ...details,
-      block: classifyResponse({
+      afterCapture,
+      source: {
+        ...details,
+        block: classifyResponse({
+          html,
+          requestUrls: tracker.requestUrls,
+          response: details,
+        }),
         html,
         requestUrls: tracker.requestUrls,
-        response: details,
-      }),
-      html,
-      requestUrls: tracker.requestUrls,
+      },
     };
   } finally {
     tracker.stop();

@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
-import type { Observation } from "./contracts.ts";
+import type { AfterCapture, ClientHints, Observation, SecureContextReading } from "./contracts.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import { coverageOf, observedOf } from "./report.ts";
 import type { BrowserIdentityReport } from "./report.ts";
@@ -15,7 +15,7 @@ const PLAUSIBLE_COLOR_DEPTH = 24;
 
 const UNRESOLVED_ZONE = "Etc/Unknown";
 
-export type ObservedField = Exclude<keyof Observation, "product">;
+export type ObservedField = Exclude<keyof Observation, "product" | "afterCapture">;
 
 export type Observed = Observation[ObservedField];
 
@@ -56,7 +56,7 @@ export interface Evaluation {
   readonly mismatches: readonly IdentityMismatch[];
 }
 
-type Reading = Omit<Observation, "product">;
+type Reading = Omit<Observation, "product" | "afterCapture">;
 
 const isText = (value: unknown): value is string => typeof value === "string";
 
@@ -112,12 +112,79 @@ export const readObservation = (product: ChromeProduct, text: string): Observati
   const reading: unknown = JSON.parse(text);
 
   if (isReading(reading)) {
-    return { ...reading, product };
+    return { ...reading, afterCapture: { kind: "not-navigated" }, product };
   }
 
   const malformed = malformedFieldsOf(new Map(isObject(reading) ? Object.entries(reading) : []));
 
   throw new Error(`The identity read returned a malformed ${malformed.join(", ")}.`);
+};
+
+const isFlagOrNull = (value: unknown): value is boolean | null => value === null || isFlag(value);
+
+const isNumberOrNull = (value: unknown): value is number | null =>
+  value === null || isNumber(value);
+
+type Guards<Parsed> = {
+  readonly [Key in keyof Parsed]-?: (value: unknown) => value is Parsed[Key];
+};
+
+type Brands = readonly { brand: string; version: string }[];
+
+const fieldsHold = (
+  guards: Readonly<Record<string, (value: unknown) => value is unknown>>,
+  fields: ReadonlyMap<string, unknown>,
+): boolean => Object.entries(guards).every(([key, isValid]) => isValid(fields.get(key)));
+
+const BRAND = { brand: isText, version: isText } satisfies Guards<Brands[number]>;
+
+const isBrand = (value: unknown): value is Brands[number] =>
+  isObject(value) && fieldsHold(BRAND, new Map(Object.entries(value)));
+
+const isBrandsOrNull = (value: unknown): value is Brands | null =>
+  value === null || (Array.isArray(value) && value.every(isBrand));
+
+const CLIENT_HINTS = {
+  architecture: isTextOrNull,
+  bitness: isTextOrNull,
+  brands: isBrandsOrNull,
+  fullVersionList: isBrandsOrNull,
+  mobile: isFlagOrNull,
+  model: isTextOrNull,
+  platform: isTextOrNull,
+  platformVersion: isTextOrNull,
+  wow64: isFlagOrNull,
+} satisfies Guards<ClientHints>;
+
+const isClientHintsOrNull = (value: unknown): value is ClientHints | null =>
+  value === null || (isObject(value) && fieldsHold(CLIENT_HINTS, new Map(Object.entries(value))));
+
+const SECURE_CONTEXT_READING = {
+  battery: isFlag,
+  clientHints: isClientHintsOrNull,
+  deviceMemory: isNumberOrNull,
+  kind: (value: unknown): value is "secure" => value === "secure",
+  webgpu: isFlag,
+} satisfies Guards<SecureContextReading>;
+
+const isSecureContextReading = (value: unknown): value is SecureContextReading =>
+  isObject(value) && fieldsHold(SECURE_CONTEXT_READING, new Map(Object.entries(value)));
+
+const isInsecureReading = (value: unknown): value is { kind: "insecure" } =>
+  isObject(value) && "kind" in value && value.kind === "insecure";
+
+export const readAfterCapture = (text: string): AfterCapture => {
+  const reading: unknown = JSON.parse(text);
+
+  if (isSecureContextReading(reading)) {
+    return reading;
+  }
+
+  if (isInsecureReading(reading)) {
+    return { kind: "insecure" };
+  }
+
+  throw new Error("The after-capture read returned a malformed reading.");
 };
 
 const languageOf = (locale: string): string => locale.split("-")[0] ?? locale;
@@ -316,6 +383,58 @@ const READ_SOURCE = `(requested) => {
     userAgent: navigator.userAgent,
   });
 }`;
+
+const AFTER_CAPTURE_SOURCE = `async () => {
+  if (!isSecureContext) {
+    return JSON.stringify({ kind: "insecure" });
+  }
+
+  const settled = async (read) => {
+    try {
+      return await read();
+    } catch {
+      return null;
+    }
+  };
+  const text = (value) => (typeof value === "string" ? value : null);
+  const flag = (value) => (typeof value === "boolean" ? value : null);
+  const brands = (value) =>
+    Array.isArray(value)
+      ? value.map(({ brand, version }) => ({ brand: String(brand), version: String(version) }))
+      : null;
+  const clientHints = await settled(async () => {
+    const hints = await navigator.userAgentData.getHighEntropyValues([
+      "architecture",
+      "bitness",
+      "fullVersionList",
+      "model",
+      "platformVersion",
+      "wow64",
+    ]);
+
+    return {
+      architecture: text(hints.architecture),
+      bitness: text(hints.bitness),
+      brands: brands(hints.brands),
+      fullVersionList: brands(hints.fullVersionList),
+      mobile: flag(hints.mobile),
+      model: text(hints.model),
+      platform: text(hints.platform),
+      platformVersion: text(hints.platformVersion),
+      wow64: flag(hints.wow64),
+    };
+  });
+
+  return JSON.stringify({
+    kind: "secure",
+    deviceMemory: typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null,
+    clientHints,
+    battery: typeof navigator.getBattery === "function",
+    webgpu: "gpu" in navigator,
+  });
+}`;
+
+export const AFTER_CAPTURE_READ = `(${AFTER_CAPTURE_SOURCE})()`;
 
 export const identityRead = (requestedZone: string | undefined): string =>
   `(${READ_SOURCE})(${JSON.stringify(requestedZone === "" ? null : (requestedZone ?? null))})`;

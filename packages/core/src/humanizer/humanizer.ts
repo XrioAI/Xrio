@@ -2,7 +2,7 @@ import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
 import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
 import type { ExitChoice, IdentityContext, Resolutions, SurfaceChoices } from "./surfaces.ts";
-import { identityRead } from "./verify.ts";
+import { AFTER_CAPTURE_READ, identityRead } from "./verify.ts";
 import type { SurfaceExpectation } from "./verify.ts";
 
 interface ChosenIdentity {
@@ -14,7 +14,7 @@ interface ChosenIdentity {
 export interface IdentityPlan {
   readonly inputs: BrowserInputs;
   readonly expected: readonly SurfaceExpectation[];
-  readonly read: string;
+  readonly read: { readonly beforeNavigation: string; readonly afterCapture: string };
   readonly chosen: ChosenIdentity;
 }
 
@@ -37,6 +37,6 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
       resolutions[surface].expected.map((expectation) => ({ ...expectation, surface })),
     ),
     inputs: mergeBrowserInputs(resolutions),
-    read: identityRead(context.hostZone),
+    read: { afterCapture: AFTER_CAPTURE_READ, beforeNavigation: identityRead(context.hostZone) },
   };
 };

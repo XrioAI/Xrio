@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityContext } from "./surfaces.ts";
-import { describeMismatch, evaluate, identityRead, readObservation } from "./verify.ts";
+import {
+  AFTER_CAPTURE_READ,
+  describeMismatch,
+  evaluate,
+  identityRead,
+  readAfterCapture,
+  readObservation,
+} from "./verify.ts";
 import type { SurfaceExpectation } from "./verify.ts";
 
 const MEASURED = { headless: false, major: 154, version: "154.0.8037.57" };
@@ -13,6 +20,7 @@ const MEASURED = { headless: false, major: 154, version: "154.0.8037.57" };
 const UNMEASURED = { headless: false, major: 152, version: "152.0.7977.75" };
 
 const linuxHeadless: Observation = {
+  afterCapture: { kind: "not-navigated" },
   anyPointer: "fine",
   availHeight: 1040,
   availWidth: 1920,
@@ -274,9 +282,9 @@ describe("tells", () => {
 });
 
 describe(readObservation, () => {
-  const { product: _product, ...reading } = linuxHeadless;
+  const { afterCapture: _afterCapture, product: _product, ...reading } = linuxHeadless;
 
-  it("adds the browser's product to a well-formed read", () => {
+  it("adds the browser's product to a well-formed read, with nothing read after capture yet", () => {
     expect(readObservation(MEASURED, JSON.stringify(reading))).toStrictEqual(linuxHeadless);
   });
 
@@ -315,7 +323,7 @@ const pageGlobals = (matching: ReadonlySet<string>) => ({
 
 const readInPage = (hostZone: string | undefined, matching: ReadonlySet<string>): string => {
   const read: unknown = runInNewContext(
-    planIdentity(contextOf({ hostZone })).read,
+    planIdentity(contextOf({ hostZone })).read.beforeNavigation,
     pageGlobals(matching),
   );
 
@@ -425,5 +433,92 @@ describe("the zone check run against the host's Intl", () => {
         surface: "timezone",
       },
     ]);
+  });
+});
+
+const securePage = {
+  getBattery: async () => await Promise.resolve({}),
+  gpu: {},
+  userAgentData: {
+    getHighEntropyValues: async () =>
+      await Promise.resolve({
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        wow64: false,
+      }),
+  },
+};
+
+const readAfterCaptureIn = async (
+  isSecureContext: boolean,
+  navigator: Partial<typeof securePage> & { readonly deviceMemory?: number },
+): Promise<string> => {
+  const read: unknown = await runInNewContext(AFTER_CAPTURE_READ, { isSecureContext, navigator });
+
+  return String(read);
+};
+
+describe("the after-capture read", () => {
+  it("reads the secure-context surfaces on a secure origin", async () => {
+    expect(
+      readAfterCapture(await readAfterCaptureIn(true, { ...securePage, deviceMemory: 8 })),
+    ).toStrictEqual({
+      battery: true,
+      clientHints: {
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        wow64: false,
+      },
+      deviceMemory: 8,
+      kind: "secure",
+      webgpu: true,
+    });
+  });
+
+  it("reports what a page without the APIs exposes as null or false", async () => {
+    expect(readAfterCapture(await readAfterCaptureIn(true, {}))).toStrictEqual({
+      battery: false,
+      clientHints: null,
+      deviceMemory: null,
+      kind: "secure",
+      webgpu: false,
+    });
+  });
+
+  it("reads nothing on a non-secure origin", async () => {
+    expect(readAfterCapture(await readAfterCaptureIn(false, securePage))).toStrictEqual({
+      kind: "insecure",
+    });
+  });
+
+  it.each([
+    { reading: "{}", why: "no kind" },
+    { reading: JSON.stringify({ kind: "secure" }), why: "missing fields" },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: { architecture: 64 },
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+      }),
+      why: "a malformed client hint",
+    },
+  ])("refuses a reading with $why", ({ reading }) => {
+    expect(() => readAfterCapture(reading)).toThrow(
+      "The after-capture read returned a malformed reading.",
+    );
   });
 });

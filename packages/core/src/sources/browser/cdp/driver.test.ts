@@ -239,7 +239,12 @@ describe("the CDP driver's documents", () => {
         "fake page",
       );
 
-      const document = await renderDocument(browser, new URL("https://fake.test/page"), deadline);
+      const { source: document } = await renderDocument(
+        browser,
+        new URL("https://fake.test/page"),
+        deadline,
+        async () => await Promise.resolve(null),
+      );
 
       expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
       expect(sent).toStrictEqual([

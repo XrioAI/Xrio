@@ -154,7 +154,12 @@ describe("XrioClient types", () => {
     expectTypeOf<ScrapeResult<"json">["identity"]>().toEqualTypeOf<IdentityReport>();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
-      "no-request-log" | "lanes-only" | "not-observed"
+      | "insecure-origin"
+      | "lanes-only"
+      | "no-request-log"
+      | "no-time"
+      | "not-observed"
+      | "read-failed"
     >();
     expectTypeOf<Extract<Coverage, { state: "cached" }>>().toEqualTypeOf<{
       readonly state: "cached";

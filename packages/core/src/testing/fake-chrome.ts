@@ -81,12 +81,14 @@ const readsByValue = (params: unknown): params is { awaitPromise: true; returnBy
 
 const IDENTITY_READ_MARKER = "requestedOffsets";
 
-const readsIdentity = (params: unknown): params is { expression: string } =>
+const AFTER_CAPTURE_MARKER = "isSecureContext";
+
+const expressionCarries = (params: unknown, marker: string): params is { expression: string } =>
   typeof params === "object" &&
   params !== null &&
   "expression" in params &&
   typeof params.expression === "string" &&
-  params.expression.includes(IDENTITY_READ_MARKER);
+  params.expression.includes(marker);
 
 const hasUrl = (params: unknown): params is { url: string } =>
   typeof params === "object" &&
@@ -279,6 +281,34 @@ const identityReply = (observation: typeof OBSERVATION): Json => ({
   result: { type: "string", value: JSON.stringify(observation) },
 });
 
+const SECURE_CONTEXT_READING = {
+  battery: true,
+  clientHints: {
+    architecture: "x86",
+    bitness: "64",
+    brands: [{ brand: "Chromium", version: "154" }],
+    fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+    mobile: false,
+    model: "",
+    platform: "Linux",
+    platformVersion: "6.8.0",
+    wow64: false,
+  },
+  deviceMemory: 8,
+  kind: "secure",
+  webgpu: false,
+};
+
+const AFTER_CAPTURE_READ: Json = {
+  result: { type: "string", value: JSON.stringify(SECURE_CONTEXT_READING) },
+};
+
+const isAfterCaptureRead = (params: unknown): params is { arguments: readonly unknown[] } =>
+  typeof params === "object" &&
+  params !== null &&
+  "arguments" in params &&
+  JSON.stringify(params.arguments).includes(AFTER_CAPTURE_MARKER);
+
 let identityReads = 0;
 
 const observedIdentity = (): Json => {
@@ -446,7 +476,13 @@ const answerEvaluate = async (
   { id, params, sessionId }: Command,
   reply: (result: Json) => Json,
 ): Promise<void> => {
-  if (currentUrl === "about:blank" && readsIdentity(params)) {
+  if (expressionCarries(params, AFTER_CAPTURE_MARKER)) {
+    await write([reply(AFTER_CAPTURE_READ)]);
+
+    return;
+  }
+
+  if (currentUrl === "about:blank" && expressionCarries(params, IDENTITY_READ_MARKER)) {
     await write([reply(observedIdentity())]);
 
     return;
@@ -502,6 +538,11 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Runtime.callFunctionOn": {
+      if (isAfterCaptureRead(params)) {
+        await write([reply(AFTER_CAPTURE_READ)]);
+        break;
+      }
+
       await write([reply(currentUrl === "about:blank" ? observedIdentity() : CAPTURED_PAGE)]);
       break;
     }
