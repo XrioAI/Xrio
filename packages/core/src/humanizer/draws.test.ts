@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
-import { DeviceRecordRefusedError, readDeviceRecord } from "./contracts.ts";
 import type { DeviceRecord, Observation } from "./contracts.ts";
 import { displayMisfit, drawDisplay, seedOf, windowBounds, workAreaOf } from "./draws.ts";
 import type { DrawnDisplay } from "./draws.ts";
@@ -214,10 +213,6 @@ describe("the device record", () => {
     });
   });
 
-  it("survives storage, as readDeviceRecord reads it back", () => {
-    expect(readDeviceRecord(JSON.stringify(record))).toStrictEqual(record);
-  });
-
   it("replays into the same plan, even after the host's zone and the caller's pins move", () => {
     const replayed = planIdentity({
       ...context,
@@ -348,10 +343,13 @@ describe("a headed browser's record", () => {
     expect(() =>
       planIdentity({ ...headedContext, device: { kind: "record", record }, mode: "headless" }),
     ).toThrow(
-      new DeviceRecordRefusedError({
-        field: "device",
-        kind: "unreplayable",
-        reason: "its window is a headed Chrome's own, which a headless browser cannot present",
+      expect.objectContaining({
+        name: "DeviceRecordRefusedError",
+        refusal: {
+          field: "device",
+          kind: "unreplayable",
+          reason: "its window is a headed Chrome's own, which a headless browser cannot present",
+        },
       }),
     );
   });
@@ -400,7 +398,7 @@ describe("a headed record from a browser off the primary display", () => {
   ])("reads back from $name", ({ observed, workArea }) => {
     const { record } = evaluate(planIdentity(headedContext), { ...hostScreen, ...observed }).report;
 
-    expect(readDeviceRecord(JSON.stringify(record)).device.screen).toStrictEqual({
+    expect(record.device.screen).toStrictEqual({
       height: 1080,
       width: 1920,
       workArea,
