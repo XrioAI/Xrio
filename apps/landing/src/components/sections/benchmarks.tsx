@@ -58,11 +58,11 @@ const N = 250;
    five a buyer would actually be choosing between. */
 const RUNS: Run[] = [
   { blocked: 4, cost: 0, name: "Xrio", p50: 1.2, p95: 2.8, retries: 1.04 },
-  { blocked: 15, cost: 2.9, name: "Bright Data", p50: 3.4, p95: 9.1, retries: 1.31 },
-  { blocked: 21, cost: 2.6, name: "Oxylabs", p50: 3.1, p95: 8.8, retries: 1.38 },
-  { blocked: 28, cost: 1.9, name: "ZenRows", p50: 2.9, p95: 8.4, retries: 1.49 },
-  { blocked: 52, cost: 0.98, name: "ScraperAPI", p50: 2.2, p95: 10.6, retries: 1.72 },
-  { blocked: 69, cost: 1.25, name: "ScrapingBee", p50: 2.6, p95: 11.4, retries: 1.88 },
+  { blocked: 15, cost: 2.9, name: "Provider A", p50: 3.4, p95: 9.1, retries: 1.31 },
+  { blocked: 21, cost: 2.6, name: "Provider B", p50: 3.1, p95: 8.8, retries: 1.38 },
+  { blocked: 28, cost: 1.9, name: "Provider C", p50: 2.9, p95: 8.4, retries: 1.49 },
+  { blocked: 52, cost: 0.98, name: "Provider D", p50: 2.2, p95: 10.6, retries: 1.72 },
+  { blocked: 69, cost: 1.25, name: "Provider E", p50: 2.6, p95: 11.4, retries: 1.88 },
 ];
 
 const got = (r: Run) => ((N - r.blocked) / N) * 100;
@@ -432,7 +432,7 @@ export const Benchmarks = () => {
             lineHeight: 1.1,
           }}
         >
-          The top 250 sites.
+          The top 250 public sites.
         </h2>
         <p style={{ color: "var(--xrio-fg2)", fontSize: 13, lineHeight: 1.65, maxWidth: 330 }}>
           One pass at each, six scrapers. A site counts only if the page came back — not a block,
@@ -778,7 +778,7 @@ export const Benchmarks = () => {
         className="mt-3"
         style={{ ...MONO, color: "var(--xrio-ink-dim)", fontSize: 10.5, letterSpacing: ".08em" }}
       >
-        v0.9.1 · Tranco top 250 · 10 passes per site · residential exits, rotated per request
+        v0.9.1 · Tranco top 250 · 10 passes per site
       </p>
     </section>
   );
