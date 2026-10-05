@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { availableParallelism, totalmem } from "node:os";
-import { constrainedMemory } from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { createAdmission } from "../../admission.ts";
 import { defaultCacheDir } from "../../cache-dir.ts";
 import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
@@ -45,8 +44,6 @@ import type { LaunchPlan } from "./launch-plan.ts";
 import { DriverError } from "./port.ts";
 import type { BrowserDriver, ChromeProduct, DriverBrowser } from "./port.ts";
 import { renderDocument } from "./render.ts";
-
-const BYTES_PER_BROWSER = 512 * 1024 * 1024;
 
 const STDERR_TAIL_CHARS = 8192;
 
@@ -97,15 +94,6 @@ export interface Browsers {
   readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
   readonly close: () => Promise<void>;
 }
-
-const availableMemory = (): number => {
-  const limit = constrainedMemory();
-
-  return limit > 0 ? Math.min(limit, totalmem()) : totalmem();
-};
-
-const defaultMaxBrowsers = (): number =>
-  Math.max(1, Math.min(availableParallelism(), Math.floor(availableMemory() / BYTES_PER_BROWSER)));
 
 let swept: Promise<void> | undefined;
 
@@ -382,59 +370,9 @@ const renderInScope = async (
   return await scope.retire();
 };
 
-const createAdmission = (maxBrowsers: number) => {
-  const queue = new Set<() => void>();
-  let active = 0;
-
-  const acquire = async (deadline: Deadline): Promise<void> => {
-    deadline.throwIfExpired();
-
-    if (active < maxBrowsers && queue.size === 0) {
-      active += 1;
-
-      return;
-    }
-
-    const { promise, resolve, reject } = Promise.withResolvers<"started">();
-
-    const start = () => {
-      resolve("started");
-    };
-
-    const abort = () => {
-      queue.delete(start);
-      reject(deadline.signal.reason);
-    };
-
-    queue.add(start);
-    deadline.signal.addEventListener("abort", abort, { once: true });
-
-    try {
-      await promise;
-    } finally {
-      deadline.signal.removeEventListener("abort", abort);
-    }
-  };
-
-  const release = () => {
-    const [next] = queue;
-
-    if (next !== undefined) {
-      queue.delete(next);
-      next();
-
-      return;
-    }
-
-    active -= 1;
-  };
-
-  return { acquire, release };
-};
-
 export const createBrowsers = (
   driver: BrowserDriver,
-  maxBrowsers = defaultMaxBrowsers(),
+  maxBrowsers?: number,
   overrides: Partial<VisitSteps> = {},
 ): Browsers => {
   const stopProbes = new AbortController();
@@ -458,20 +396,17 @@ export const createBrowsers = (
       throw clientClosed();
     }
 
-    await timeStage("queue", async () => {
-      await admission.acquire(request.deadline);
-    });
+    await using _slot = await timeStage(
+      "queue",
+      async () => await admission.slotFor(request, request.deadline),
+    );
 
-    try {
-      const session = steps.sessionFor();
-      const deadline = request.deadline.boundTo(session.ownership.signal);
-      const target = { ...request, device: deviceFor(session, request, steps.random) };
-      const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
+    const session = steps.sessionFor();
+    const deadline = request.deadline.boundTo(session.ownership.signal);
+    const target = { ...request, device: deviceFor(session, request, steps.random) };
+    const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
 
-      return await renderInScope(driver, steps, target, deadline, scope, document);
-    } finally {
-      admission.release();
-    }
+    return await renderInScope(driver, steps, target, deadline, scope, document);
   };
 
   const visit = async (
