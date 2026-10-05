@@ -29,7 +29,7 @@ import {
   writeAtomically,
 } from "./browser-process.ts";
 import { createFontStackCheck, fontStackBeside } from "./font-stack.ts";
-import { killProcessGroup } from "./group-lifetime.ts";
+import { killProcessGroup, retireProcessGroup } from "./group-lifetime.ts";
 import { TEARDOWN_BUDGET_MS } from "./port.ts";
 
 const PERSONA_MARKER = "personas";
@@ -470,6 +470,7 @@ const readArtifacts = async (directory: string, knobs: KnobRegistry): Promise<Ar
 interface ForkStops {
   readonly budget: AbortSignal;
   readonly budgetMs: number;
+  readonly groups: Set<number>;
   readonly shutdown: AbortSignal;
 }
 
@@ -487,12 +488,17 @@ const runFork = async (
   binary: string,
   args: readonly string[],
   stop: AbortSignal,
+  groups: Set<number>,
 ): Promise<ForkRun | undefined> => {
   const child = spawn(binary, args, {
     detached: true,
     env: {},
     stdio: ["ignore", "pipe", "pipe"],
   });
+
+  if (child.pid !== undefined) {
+    groups.add(child.pid);
+  }
 
   const stopped = Promise.withResolvers<"stopped">();
 
@@ -531,9 +537,9 @@ const runFork = async (
 const runForkOutput = async (
   binary: string,
   args: readonly string[],
-  { budget, budgetMs, shutdown }: ForkStops,
+  { budget, budgetMs, groups, shutdown }: ForkStops,
 ): Promise<string> => {
-  const run = await runFork(binary, args, AbortSignal.any([budget, shutdown]));
+  const run = await runFork(binary, args, AbortSignal.any([budget, shutdown]), groups);
 
   if (shutdown.aborted) {
     throw new ForkProbeError(`${args[0]} was stopped because its client closed`, {
@@ -566,9 +572,19 @@ const settledOrThrow = <Value>(result: PromiseSettledResult<Value>): Value => {
   return result.value;
 };
 
-const removeProbeScratch = async (scratch: ScratchDir): Promise<void> => {
+const removeProbeScratch = async (scratch: ScratchDir, groups: Set<number>): Promise<void> => {
+  const signal = AbortSignal.timeout(TEARDOWN_BUDGET_MS);
+
   try {
-    await removeScratchDir(scratch);
+    const exited = await Promise.all(
+      [...groups].map(async (pid) => await retireProcessGroup(pid, signal)),
+    );
+
+    if (exited.includes(false)) {
+      throw new Error("Chrome outlived its fork probe, so its scratch was kept.");
+    }
+
+    await removeScratchDir(scratch, signal);
   } catch (error) {
     publishInternalEvent({
       detail: `Removing the fork probe's scratch failed: ${messageOf(error)}`,
@@ -588,7 +604,8 @@ const probeOutputs = async (
   }
 
   const scratch = await createScratchDir(now(), root, "probe");
-  const stops = { budget: AbortSignal.timeout(budgetMs), budgetMs, shutdown: signal };
+  const groups = new Set<number>();
+  const stops = { budget: AbortSignal.timeout(budgetMs), budgetMs, groups, shutdown: signal };
   const dumpArgs = [FORK_DUMP_SWITCH, `--user-data-dir=${scratch.path}`, "--headless"];
 
   try {
@@ -609,7 +626,7 @@ const probeOutputs = async (
 
     return { artifacts, dump, personaSignature, version };
   } finally {
-    await removeProbeScratch(scratch);
+    await removeProbeScratch(scratch, groups);
   }
 };
 
