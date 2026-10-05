@@ -11,6 +11,26 @@ const browser = resolveScrapeIntent(
 );
 
 describe(createAdmission, () => {
+  it("rejects every queued browser visit on close and refuses later browser admissions", async () => {
+    const admission = createAdmission(1);
+    using request = startDeadline(1000);
+    const occupied = await admission.slotFor(browser.source, request);
+    const first = admission.slotFor(browser.source, request);
+    const second = admission.slotFor(browser.source, request);
+
+    admission.close();
+    admission.close();
+    await expect(first).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+    await expect(second).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+    await occupied[Symbol.asyncDispose]();
+    await expect(admission.slotFor(browser.source, request)).rejects.toMatchObject({
+      code: "CLIENT_CLOSED",
+    });
+    await using httpSlot = await admission.slotFor({ mode: "http" }, request);
+
+    expect(httpSlot).toBeDefined();
+  });
+
   it("keeps capacity until disposal, removes an aborted waiter, and admits the next", async () => {
     const admission = createAdmission(1);
     const { clock } = manualClock();

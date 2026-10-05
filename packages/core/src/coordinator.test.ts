@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { createAdmission } from "./admission.ts";
+import type { Admission } from "./admission.ts";
 import { createAnswer } from "./answer.ts";
 import { classifyResponse } from "./blocks/classify.ts";
 import { createScrapes } from "./coordinator.ts";
-import { startDeadline } from "./deadline.ts";
+import { startDeadline, untilDeadline } from "./deadline.ts";
 import { XrioError } from "./errors.ts";
 import { httpIdentity } from "./humanizer/humanizer.ts";
 import { HeldDeadline } from "./lifetime.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
+import { outcomeOf } from "./outcome.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
 import type { Visit } from "./sources/visit.ts";
 import { fixedRandom } from "./testing/fixed-seed.ts";
+import { manualClock } from "./testing/manual-clock.ts";
 import { noPins } from "./testing/no-pins.ts";
 import type { SourceDocument } from "./types.ts";
 
@@ -42,6 +46,7 @@ const firstDocument = documentFor("<p>First</p>");
 const secondDocument = documentFor("<p>Second</p>");
 
 interface HarnessOptions {
+  readonly admission?: Admission;
   readonly visits?: readonly Visit[];
   readonly failureAt?: string;
   readonly revisit?: boolean;
@@ -65,7 +70,10 @@ const harness = (options: HarnessOptions = {}) => {
   };
 
   const scrapes = createScrapes({
-    admission: {
+    admission: options.admission ?? {
+      close: () => {
+        stage("admission-close");
+      },
       slotFor: async (_source, held) => {
         stage("queue");
         held.throwIfExpired();
@@ -159,6 +167,103 @@ const relevantEvents = (events: readonly string[]) =>
   events.filter((event) => !event.startsWith("binary:"));
 
 describe(createScrapes, () => {
+  it.each(["document", "timeout"] as const)(
+    "rejects queued browser work while the running visit finishes with its own %s outcome",
+    async (outcome) => {
+      const admission = createAdmission(1);
+      const queued = Promise.withResolvers<null>();
+      const captured = Promise.withResolvers<SourceDocument>();
+      const retired = Promise.withResolvers<Closed>();
+      const { advance, clock } = manualClock();
+      using deadline = startDeadline(1000, undefined, clock);
+      using waitingDeadline = startDeadline(2000, undefined, clock);
+      let admissions = 0;
+
+      const { events, scrapes } = harness({
+        admission: {
+          close: admission.close,
+          slotFor: async (source, held) => {
+            const offered = admission.slotFor(source, held);
+
+            admissions += 1;
+
+            if (admissions === 2) {
+              queued.resolve(null);
+            }
+
+            return await offered;
+          },
+        },
+        visits: [
+          {
+            closed: retired.promise,
+            document: untilDeadline(async () => await captured.promise, deadline),
+          },
+        ],
+      });
+
+      const running = scrapes.start(browserIntent, deadline);
+      const waiting = scrapes.start(browserIntent, waitingDeadline);
+      const runningOutcome = outcomeOf(running.answer, deadline);
+
+      const expectedOutcome =
+        outcome === "document"
+          ? { document: { html: "<p>First</p>" }, kind: "document" }
+          : { error: { code: "TIMEOUT" }, kind: "failed" };
+
+      await queued.promise;
+      const closing = scrapes.close();
+      const repeatedClosing = scrapes.close();
+
+      await expect(waiting.answer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+      await waiting.settled;
+      expect(deadline.signal.aborted).toBeFalsy();
+
+      if (outcome === "document") {
+        captured.resolve(firstDocument);
+      } else {
+        advance(1000);
+      }
+
+      await expect(runningOutcome).resolves.toMatchObject(expectedOutcome);
+      expect({
+        sourcesClosed: events.includes("sources-close"),
+        starts: events.filter((event) => event === "start"),
+      }).toStrictEqual({ sourcesClosed: false, starts: ["start"] });
+      retired.resolve({ exited: true });
+      await Promise.all([closing, repeatedClosing, running.settled]);
+      expect({
+        closes: events.filter((event) => event === "sources-close"),
+        finalEvents: events.slice(-2),
+      }).toStrictEqual({
+        closes: ["sources-close"],
+        finalEvents: ["hold-release", "sources-close"],
+      });
+    },
+  );
+
+  it("keeps the first document without launching a revisit after close", async () => {
+    const retired = Promise.withResolvers<Closed>();
+
+    const { events, scrapes } = harness({
+      admission: createAdmission(1),
+      revisit: true,
+      visits: [{ closed: retired.promise, document: Promise.resolve(firstDocument) }],
+    });
+
+    using deadline = startDeadline(1000);
+    const run = scrapes.start(browserIntent, deadline);
+
+    await expect.poll(() => events.includes("revisit-decision")).toBeTruthy();
+    const closing = scrapes.close();
+
+    retired.resolve({ exited: true });
+    await expect(run.answer).resolves.toBe(firstDocument);
+    await closing;
+    expect(events.filter((event) => event === "start")).toStrictEqual(["start"]);
+    expect(events.slice(-2)).toStrictEqual(["hold-release", "sources-close"]);
+  });
+
   it("answers while the runtime is open and releases the slot before finishing the hold", async () => {
     const closing = Promise.withResolvers<Closed>();
 

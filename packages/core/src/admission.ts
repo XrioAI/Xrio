@@ -2,6 +2,7 @@ import { availableParallelism, totalmem } from "node:os";
 import { constrainedMemory } from "node:process";
 
 import type { Deadline } from "./deadline.ts";
+import { clientClosed } from "./errors.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import { Slot } from "./slot.ts";
 
@@ -16,15 +17,18 @@ const defaultCapacity = (): number => {
 
 interface Waiting {
   readonly offer: () => void;
+  readonly reject: () => void;
 }
 
 export interface Admission {
+  readonly close: () => void;
   readonly slotFor: (source: ScrapeIntent["source"], deadline: Deadline) => Promise<Slot>;
 }
 
 export const createAdmission = (capacity = defaultCapacity()): Admission => {
   const queue = new Set<Waiting>();
   let active = 0;
+  let closed = false;
 
   const offerCapacity = () => {
     for (const waiting of queue) {
@@ -53,6 +57,10 @@ export const createAdmission = (capacity = defaultCapacity()): Admission => {
       return new Slot();
     }
 
+    if (closed) {
+      throw clientClosed();
+    }
+
     if (active < capacity && queue.size === 0) {
       return takeSlot();
     }
@@ -68,6 +76,9 @@ export const createAdmission = (capacity = defaultCapacity()): Admission => {
         }
 
         ready.resolve(takeSlot());
+      },
+      reject: () => {
+        ready.reject(clientClosed());
       },
     };
 
@@ -98,5 +109,15 @@ export const createAdmission = (capacity = defaultCapacity()): Admission => {
     }
   };
 
-  return { slotFor };
+  const close = () => {
+    closed = true;
+
+    for (const waiting of queue) {
+      waiting.reject();
+    }
+
+    queue.clear();
+  };
+
+  return { close, slotFor };
 };

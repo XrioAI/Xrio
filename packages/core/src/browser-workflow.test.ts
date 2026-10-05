@@ -386,34 +386,30 @@ describe("planned visits", () => {
     expect(launchStages.length - launchesBefore).toBe(1);
   });
 
-  it("lets accepted work finish when closed, and rejects new work afterwards", async () => {
+  it("rejects queued work on close while the running visit keeps its deadline", async () => {
     const browsers = plannedVisits(cdpDriver, 1);
     const request = await queuedRequest();
     const normal = { ...request, browserPath: await fakeChromePath("normal") };
-    using held = startDeadline(1000);
+    const running = { ...request, browserPath: await fakeChromePath("hang-on-navigate") };
+    const { advance, clock } = manualClock();
+    using held = startDeadline(1000, undefined, clock);
     using queued = startDeadline(10_000);
+    const launchesBefore = launchStages.length;
+    const first = browsers.capture({ ...running, deadline: held });
 
-    const settled: string[] = [];
+    void Promise.allSettled([first]);
+    await expect.poll(() => launchStages.length - launchesBefore).toBe(1);
+    const second = browsers.capture({ ...normal, deadline: queued });
+    const settled = Promise.allSettled([first, second]);
+    const closing = browsers.close();
 
-    const first = browsers.visit({ ...request, deadline: held }).document;
-
-    const second = (async () => {
-      const document = await browsers.visit({ ...normal, deadline: queued }).document;
-
-      settled.push("queued scrape");
-
-      return document;
-    })();
-
-    const closing = (async () => {
-      await browsers.close();
-      settled.push("close");
-    })();
-
-    await expect(first).rejects.toMatchObject({ code: "TIMEOUT" });
-    await expect(second).resolves.toMatchObject({ status: 200 });
+    advance(1000);
+    await expect(settled).resolves.toMatchObject([
+      { reason: { code: "TIMEOUT" }, status: "rejected" },
+      { reason: { code: "CLIENT_CLOSED" }, status: "rejected" },
+    ]);
     await closing;
-    expect(settled).toStrictEqual(["queued scrape", "close"]);
+    expect(launchStages.length - launchesBefore).toBe(1);
     await expect(browsers.capture({ ...normal, deadline: queued })).rejects.toMatchObject({
       code: "CLIENT_CLOSED",
     });

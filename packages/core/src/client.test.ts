@@ -584,6 +584,33 @@ describe("XrioClient browser lifecycle", () => {
 });
 
 describe("XrioClient browser admission", () => {
+  it("rejects queued work on close without another Chrome launch and waits for running cleanup", async () => {
+    using stages = stageTimeline(new Set(["launch", "teardown"]));
+
+    await stages.recording(async () => {
+      const client = new XrioClient({
+        browserPath: await fakeChromePath("ignore-close"),
+        maxBrowsers: 1,
+        mode: "headless",
+      });
+
+      try {
+        await expect(
+          client.scrape({ format: "html", url: "https://fake.test/page" }),
+        ).resolves.toMatchObject({ status: 200 });
+        const queued = client.scrape({ format: "html", url: "https://fake.test/queued" });
+        const closed = client.close();
+
+        await expect(queued).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+        expect(stages.timeline).toStrictEqual(["launch"]);
+        await closed;
+        expect(stages.timeline).toStrictEqual(["launch", "teardown"]);
+      } finally {
+        await client.close();
+      }
+    });
+  });
+
   it("starts a queued scrape only after the previous visit has closed", async () => {
     using stages = stageTimeline(new Set(["launch", "teardown"]));
 

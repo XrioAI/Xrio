@@ -233,6 +233,7 @@ export const createScrapes = (
 
   const close = async () => {
     closed = true;
+    managers.admission.close();
     closing ??= drain();
 
     await closing;
