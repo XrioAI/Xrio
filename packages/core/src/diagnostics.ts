@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 
 export type Stage =
   | "queue"
+  | "identity"
   | "launch"
   | "verify"
   | "navigation"
@@ -17,6 +18,7 @@ interface StageTiming {
 export interface InternalEvent {
   event:
     | "identity-chosen"
+    | "fork-probed"
     | "browser-launched"
     | "cdp-message-dropped"
     | "document-rebind"

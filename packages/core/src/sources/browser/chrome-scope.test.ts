@@ -11,7 +11,6 @@ import { planIdentity } from "../../humanizer/humanizer.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
 import { createScratchDir, spawnChrome } from "./browser-process.ts";
-import { hostCapabilities } from "./capabilities.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -72,7 +71,7 @@ const setup = async () => {
     display: undefined,
     headless: true,
     identity: planIdentity({
-      capabilities: hostCapabilities(),
+      capabilities: { platform: process.platform },
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: "UTC",
       mode: "headless",

@@ -1,10 +1,11 @@
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline, untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
@@ -14,12 +15,15 @@ import { planIdentity } from "../../humanizer/humanizer.ts";
 import { AFTER_CAPTURE_READ, evaluate } from "../../humanizer/verify.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
+import { fakeForkPath } from "../../testing/fake-fork.ts";
+import type { FakeForkScenario } from "../../testing/fake-fork.ts";
 import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import { stageTimeline } from "../../testing/stage-timeline.ts";
 import { scratchRoot } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
+import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import type { RetireSteps } from "./chrome-scope.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
@@ -114,6 +118,55 @@ const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) 
     await browsers.close();
   }
 };
+
+const loadWithFork = async (scenario: FakeForkScenario, root: string) => {
+  const browsers = createBrowsers(cdpDriver, 1, {
+    hostCapabilities: createCapabilityProbe({ root: path.join(root, "scratch") }),
+  });
+
+  using deadline = startDeadline(10_000);
+
+  try {
+    return await browsers.load({
+      browserArgs: [],
+      browserPath: await fakeForkPath(scenario, { root }),
+      deadline,
+      mode: "headless",
+      pins: noPins,
+      proxy: undefined,
+      url: new URL("https://fake.test/page"),
+    });
+  } finally {
+    await browsers.close();
+  }
+};
+
+describe("browsers on the kit fork", () => {
+  let root = "";
+
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-fork-"));
+  });
+
+  afterAll(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("probes the package before launch and renders", async () => {
+    await expect(loadWithFork("kit", root)).resolves.toMatchObject({ status: 200 });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("rejects with BROWSER_LAUNCH_FAILED naming the package when its dump is broken", async () => {
+    await expect(loadWithFork("broken-dump", root)).rejects.toSatisfy(
+      (error) =>
+        isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
+        error.message.startsWith("The Xrio fork package at ") &&
+        error.message.endsWith("failed its probe: the dump has no xrio-knobs header."),
+    );
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+});
 
 describe("browser lifecycle on the fake browser", () => {
   it.each(["normal", "fragmented"])("renders over the pipe with %s framing", async (scenario) => {
@@ -1170,7 +1223,9 @@ describe("the identity a visit launches Chrome with", () => {
   ])(
     "selects the GL backend and the media devices from the host's $platform capabilities",
     async ({ platform, switches }) => {
-      const plan = await launchPlanOf({ hostCapabilities: () => ({ platform }) });
+      const plan = await launchPlanOf({
+        hostCapabilities: async () => await Promise.resolve({ platform }),
+      });
 
       expect(
         plan?.args.filter((value) => value.startsWith("--use-") && value !== BASELINE_USE_SWITCH),
@@ -1205,17 +1260,18 @@ describe("the launch identity check", () => {
     vi.unstubAllEnvs();
   });
 
-  it("runs as the verify stage after launch and before navigation", async () => {
+  it("plans the identity, then runs as the verify stage after launch and before navigation", async () => {
     const browsers = createBrowsers(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     using stages = stageTimeline(
-      new Set(["launch", "verify", "navigation", "capture", "teardown"]),
+      new Set(["identity", "launch", "verify", "navigation", "capture", "teardown"]),
     );
 
     await stages.recording(async () => await browsers.load(await normalRequest(deadline)));
     await browsers.close();
     expect(stages.timeline).toStrictEqual([
+      "identity",
       "launch",
       "verify",
       "navigation",
@@ -1228,7 +1284,7 @@ describe("the launch identity check", () => {
     vi.stubEnv("TZ", "UTC");
 
     const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: () => ({ platform: "linux" }),
+      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
@@ -1261,7 +1317,7 @@ describe("the launch identity check", () => {
     vi.stubEnv("TZ", "UTC");
 
     const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: () => ({ platform: "linux" }),
+      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
@@ -1344,7 +1400,7 @@ describe("the launch identity check", () => {
 
   it("rejects a Chrome that ignores the pinned locale before navigation", async () => {
     const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: () => ({ platform: "linux" }),
+      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
@@ -1518,7 +1574,7 @@ describe("the identity-chosen event", () => {
       };
 
       const browsers = createBrowsers(cdpDriver, 1, {
-        hostCapabilities: () => ({ platform: "linux" }),
+        hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
       });
 
       using deadline = startDeadline(10_000);

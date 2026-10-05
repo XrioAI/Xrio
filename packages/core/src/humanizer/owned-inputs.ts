@@ -102,6 +102,8 @@ export const chromeAcceptLanguages = (tag: string): readonly string[] | undefine
 
 export const FORK_SWITCH_PREFIXES = ["--pxr-", "--xrio-"] as const;
 
+export const FORK_DUMP_SWITCH = "--xrio-dump-config";
+
 const RESERVED_IDENTITY_SWITCHES = [
   "--force-device-scale-factor",
   "--device-scale-factor",

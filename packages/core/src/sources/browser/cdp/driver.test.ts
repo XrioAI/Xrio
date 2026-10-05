@@ -13,7 +13,7 @@ import { manualClock } from "../../../testing/manual-clock.ts";
 import { noPins } from "../../../testing/no-pins.ts";
 import { createScratchDir, removeScratchDir } from "../browser-process.ts";
 import { createBrowsers } from "../browsers.ts";
-import { hostCapabilities } from "../capabilities.ts";
+import { createCapabilityProbe } from "../capabilities.ts";
 import { planLaunch } from "../launch-plan.ts";
 import { CLOSE_BUDGET_MS } from "../port.ts";
 import { renderDocument } from "../render.ts";
@@ -123,7 +123,7 @@ describe("the CDP driver's documents", () => {
       display: undefined,
       headless: true,
       identity: planIdentity({
-        capabilities: hostCapabilities(),
+        capabilities: { platform: process.platform },
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
@@ -163,7 +163,7 @@ describe("the CDP driver's documents", () => {
       display: undefined,
       headless: true,
       identity: planIdentity({
-        capabilities: hostCapabilities(),
+        capabilities: { platform: process.platform },
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
@@ -213,13 +213,15 @@ describe("the CDP driver's documents", () => {
 
     const scratch = await createScratchDir(Date.now());
 
+    const browserPath = await fakeChromePath("normal");
+
     const plan = planLaunch({
       browserArgs: [],
-      browserPath: await fakeChromePath("normal"),
+      browserPath,
       display: undefined,
       headless: true,
       identity: planIdentity({
-        capabilities: hostCapabilities(),
+        capabilities: await createCapabilityProbe()(browserPath),
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",

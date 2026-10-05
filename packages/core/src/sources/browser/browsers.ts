@@ -2,6 +2,7 @@ import { availableParallelism, totalmem } from "node:os";
 import { constrainedMemory } from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { defaultCacheDir } from "../../cache-dir.ts";
 import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
@@ -26,9 +27,10 @@ import {
   scratchRoot,
   sweepAbandonedScratch,
 } from "./browser-process.ts";
-import { hostCapabilities } from "./capabilities.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import type { Closed, RetireSteps } from "./chrome-scope.ts";
+import { hostFactsFor } from "./host-facts.ts";
+import type { HostFacts } from "./host-facts.ts";
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import { DriverError } from "./port.ts";
@@ -60,7 +62,7 @@ interface BrowserVisit {
 
 interface VisitSteps extends Partial<RetireSteps> {
   readonly sessionFor: typeof sessionFor;
-  readonly hostCapabilities: typeof hostCapabilities;
+  readonly hostCapabilities: HostFacts["snapshotFor"];
   readonly planIdentity: typeof planIdentity;
   readonly evaluate: typeof evaluate;
 }
@@ -70,7 +72,7 @@ interface VisitPlan {
   readonly launch: LaunchPlan;
 }
 
-const defaultSteps: VisitSteps = { evaluate, hostCapabilities, planIdentity, sessionFor };
+const defaultSteps: Omit<VisitSteps, "hostCapabilities"> = { evaluate, planIdentity, sessionFor };
 
 export interface Browsers {
   readonly start: (request: BrowserRequest) => BrowserVisit;
@@ -127,14 +129,20 @@ const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   }
 };
 
-const planVisit = (request: VisitTarget, scratch: ScratchDir, steps: VisitSteps): VisitPlan => {
+const planVisit = async (
+  request: VisitTarget,
+  scratch: ScratchDir,
+  steps: VisitSteps,
+  deadline: Deadline,
+): Promise<VisitPlan> => {
+  const capabilities = await steps.hostCapabilities(request.browserPath, deadline);
   const hostZone = readHostZone();
   const display = process.env.DISPLAY;
   const xauthority = process.env.XAUTHORITY;
   const route = routeFor(request.proxy);
 
   const identity = steps.planIdentity({
-    capabilities: steps.hostCapabilities(),
+    capabilities,
     exit: { facts: exitFactsFor(route), route: route.kind },
     hostZone,
     mode: request.mode,
@@ -274,7 +282,10 @@ const renderInScope = async (
   document: PromiseWithResolvers<SourceDocument>,
 ): Promise<Closed> => {
   try {
-    const { identity, launch } = planVisit(request, scope.scratch, steps);
+    const { identity, launch } = await timeStage(
+      "identity",
+      async () => await planVisit(request, scope.scratch, steps, deadline),
+    );
 
     publishInternalEvent({ detail: JSON.stringify(identity.chosen), event: "identity-chosen" });
 
@@ -359,7 +370,12 @@ export const createBrowsers = (
   maxBrowsers = defaultMaxBrowsers(),
   overrides: Partial<VisitSteps> = {},
 ): Browsers => {
-  const steps = { ...defaultSteps, ...overrides };
+  const steps: VisitSteps = {
+    ...defaultSteps,
+    hostCapabilities: hostFactsFor(defaultCacheDir()).snapshotFor,
+    ...overrides,
+  };
+
   const admission = createAdmission(maxBrowsers);
   const visits = new Set<Promise<Closed>>();
   let closed = false;

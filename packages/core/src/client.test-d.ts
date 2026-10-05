@@ -228,6 +228,7 @@ describe("XrioClient types", () => {
 
   it("limits concurrent browsers and closes like a disposable resource", () => {
     expectTypeOf<ClientOptions["maxBrowsers"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<ClientOptions["cacheDir"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<XrioClient["close"]>().toEqualTypeOf<() => Promise<void>>();
     expectTypeOf<XrioClient>().toExtend<AsyncDisposable>();
     expectTypeOf<XrioError<"CLIENT_CLOSED">["details"]>().toEqualTypeOf<undefined>();

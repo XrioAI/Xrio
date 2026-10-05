@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import path from "node:path";
 import { inspect } from "node:util";
 
 import { describe, expect, it } from "vite-plus/test";
@@ -612,4 +614,33 @@ describe("locale option", () => {
       );
     },
   );
+});
+
+describe("the cache directory", () => {
+  it("defaults to the platform's per-user cache directory", () => {
+    const xdg = process.env.XDG_CACHE_HOME;
+    const cacheHome = xdg === undefined || xdg === "" ? path.join(homedir(), ".cache") : xdg;
+
+    const expected =
+      process.platform === "darwin"
+        ? path.join(homedir(), "Library", "Caches", "xrio")
+        : path.join(cacheHome, "xrio");
+
+    expect(resolveClientOptions({ mode: "http" }).cacheDir.path).toBe(expected);
+  });
+
+  it("resolves a given directory to an absolute path", () => {
+    expect(resolveClientOptions({ cacheDir: "relative/cache", mode: "http" }).cacheDir.path).toBe(
+      path.resolve("relative/cache"),
+    );
+  });
+
+  it("refuses an empty directory path", () => {
+    expect(() => resolveClientOptions({ cacheDir: " ", mode: "http" })).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "cacheDir must be a non-empty directory path.",
+      }),
+    );
+  });
 });

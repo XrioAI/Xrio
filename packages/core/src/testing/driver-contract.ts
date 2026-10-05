@@ -11,7 +11,6 @@ import {
   prepareProfile,
   removeScratchDir,
 } from "../sources/browser/browser-process.ts";
-import { hostCapabilities } from "../sources/browser/capabilities.ts";
 import { killProcessGroup, waitForGroupExit } from "../sources/browser/group-lifetime.ts";
 import { planLaunch } from "../sources/browser/launch-plan.ts";
 import { settleWithin } from "../sources/browser/lifetime.ts";
@@ -88,7 +87,7 @@ const withDriver = async (
     display: process.env.DISPLAY,
     headless: true,
     identity: planIdentity({
-      capabilities: hostCapabilities(),
+      capabilities: { platform: process.platform },
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode: "headless",

@@ -60,8 +60,34 @@ export interface MediaDeviceCounts {
   readonly videoinput: number;
 }
 
+export type KnobOrigin = "set" | "def" | "umb" | "der";
+
+export type KnobRegistry = Readonly<
+  Record<string, { readonly origin: KnobOrigin; readonly value: string | null }>
+>;
+
+interface PersonaArtifact {
+  readonly schema: string;
+  readonly name: string;
+  readonly digest: string;
+  readonly chromeVersion: string;
+}
+
+export type SpeechPersona = PersonaArtifact;
+
+export interface ForkFacts {
+  readonly dialect: "xrio";
+  readonly packageDir: string;
+  readonly version: string;
+  readonly knobs: KnobRegistry;
+  readonly personas: {
+    readonly speech: readonly SpeechPersona[];
+  };
+}
+
 export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
+  readonly fork?: ForkFacts;
 }
 
 interface Brand {

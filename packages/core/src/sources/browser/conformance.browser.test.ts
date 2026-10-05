@@ -34,7 +34,7 @@ import {
   sweepAbandonedScratch,
 } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
-import { hostCapabilities } from "./capabilities.ts";
+import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -330,7 +330,7 @@ const withBrowser = async <Result>(
     display: process.env.DISPLAY,
     headless: mode === "headless",
     identity: planIdentity({
-      capabilities: hostCapabilities(),
+      capabilities: await createCapabilityProbe()(chromePath()),
       exit: { facts: { kind: "unknown" }, route: "direct" },
       hostZone: readHostZone(),
       mode,
@@ -716,7 +716,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
       display: process.env.DISPLAY,
       headless: mode === "headless",
       identity: planIdentity({
-        capabilities: hostCapabilities(),
+        capabilities: await createCapabilityProbe()(chromePath()),
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: readHostZone(),
         mode,

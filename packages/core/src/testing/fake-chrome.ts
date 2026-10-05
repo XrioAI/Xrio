@@ -21,6 +21,7 @@ const SCENARIOS = [
   "navigate-error",
   "identity-drift",
   "unsized-window",
+  "fork",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -103,6 +104,8 @@ const scenario: Scenario = isScenario(requested) ? requested : "normal";
 const PRODUCT = scenario === "old" ? "HeadlessChrome/120.0.0.0" : "HeadlessChrome/154.0.8037.57";
 
 const TARGET_NAVIGATED = { code: -32_000, message: "Inspected target navigated or closed" };
+
+const USER_AGENT_PRODUCT = scenario === "fork" ? "Chrome/154.0.8037.57" : PRODUCT;
 
 const FRAME_NOT_IN_TARGET = {
   code: -32_000,
@@ -271,7 +274,7 @@ const OBSERVATION = {
   requestedZone: scenario === "identity-drift" ? "America/Chicago" : "UTC",
   screenHeight: 1080,
   screenWidth: 1920,
-  userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${PRODUCT} Safari/537.36`,
+  userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
   webdriver: false,
   zone: "UTC",
   zoneOffsets: UTC_OFFSETS,

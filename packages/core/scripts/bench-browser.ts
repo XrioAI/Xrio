@@ -8,7 +8,7 @@ import { startDeadline } from "../src/deadline.ts";
 import { readHostZone } from "../src/humanizer/host-zone.ts";
 import { planIdentity } from "../src/humanizer/humanizer.ts";
 import { createBrowsers } from "../src/sources/browser/browsers.ts";
-import { hostCapabilities } from "../src/sources/browser/capabilities.ts";
+import { createCapabilityProbe } from "../src/sources/browser/capabilities.ts";
 import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
@@ -21,6 +21,7 @@ const SCRAPE_TIMEOUT_MS = 30_000;
 const PERCENTILES = [50, 95] as const;
 
 const MEASURES = [
+  "identity",
   "launch",
   "verify",
   "navigation",
@@ -87,6 +88,7 @@ const scrapeOnce = async (): Promise<Sample> => {
     answer: 0,
     capture: 0,
     exit: 0,
+    identity: 0,
     launch: 0,
     navigation: 0,
     teardown: 0,
@@ -157,7 +159,7 @@ const { args } = planLaunch({
   display: process.env.DISPLAY,
   headless: mode === "headless",
   identity: planIdentity({
-    capabilities: hostCapabilities(),
+    capabilities: await createCapabilityProbe()(chromePath()),
     exit: { facts: { kind: "unknown" }, route: "direct" },
     hostZone: readHostZone(),
     mode,

@@ -1,3 +1,4 @@
+import { CacheDir, defaultCacheDir } from "./cache-dir.ts";
 import { invalidOptions, redactUrl } from "./errors.ts";
 import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
 import { canonicalZone } from "./humanizer/zone-name.ts";
@@ -223,8 +224,12 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   const locale = resolveLocale(options.locale);
   const timezone = resolveTimezone(options.timezone, mode);
 
+  const cacheDir =
+    options.cacheDir === undefined ? defaultCacheDir() : new CacheDir(options.cacheDir);
+
   return {
     browserArgs,
+    cacheDir,
     locale,
     maxBrowsers,
     mode,

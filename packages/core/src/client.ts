@@ -5,6 +5,8 @@ import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
 import { createBrowsers } from "./sources/browser/browsers.ts";
 import type { Browsers } from "./sources/browser/browsers.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
+import { hostFactsFor } from "./sources/browser/host-facts.ts";
+import type { ClientHostFacts } from "./sources/browser/host-facts.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type {
   ClientDefaults,
@@ -66,12 +68,16 @@ const formats = {
 export class XrioClient {
   readonly #defaults: ClientDefaults;
   readonly #browsers: Browsers;
+  readonly #hostFacts: ClientHostFacts;
   readonly #inFlight = new Set<Promise<unknown>>();
   #closed = false;
 
   constructor(options: ClientOptions) {
     this.#defaults = resolveClientOptions(options);
-    this.#browsers = createBrowsers(cdpDriver, this.#defaults.maxBrowsers);
+    this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
+    this.#browsers = createBrowsers(cdpDriver, this.#defaults.maxBrowsers, {
+      hostCapabilities: this.#hostFacts.snapshotFor,
+    });
   }
 
   scrape<Format extends ScrapeFormat>(
@@ -105,6 +111,7 @@ export class XrioClient {
   async close(): Promise<void> {
     this.#closed = true;
     await Promise.allSettled([this.#browsers.close(), ...this.#inFlight]);
+    await this.#hostFacts.settle();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

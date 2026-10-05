@@ -1,4 +1,7 @@
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { inspect } from "node:util";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -7,6 +10,7 @@ import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import type { IdentityReport } from "./client.ts";
 import { scratchRoot } from "./sources/browser/browser-process.ts";
 import { fakeChromePath } from "./testing/fake-chrome-path.ts";
+import { fakeForkPath, hangDumpFor } from "./testing/fake-fork.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
@@ -50,6 +54,18 @@ const CAPTURE_BEFORE_TEARDOWN_MS = 1500;
 const ABORT_DURING_LAUNCH_MS = 200;
 
 const LAUNCH_TIMEOUT_MS = 500;
+
+const HOST_FACTS_FILE = /^host-facts-[\da-f]+\.json$/u;
+
+const storedFactsIn = async (directory: string): Promise<string[]> => {
+  try {
+    const names = await readdir(directory);
+
+    return names.filter((name) => HOST_FACTS_FILE.test(name));
+  } catch {
+    return [];
+  }
+};
 
 let onRequest: (() => void) | undefined;
 
@@ -630,4 +646,30 @@ describe("XrioClient browser admission", () => {
       ).resolves.toMatchObject({ status: 200 });
     },
   );
+});
+
+describe("the client's host facts", () => {
+  it("answers at the deadline mid-probe, and closes only once the probe is gone", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      const browserPath = await fakeForkPath("kit", { root });
+      const cacheDir = nodePath.join(root, "cache");
+
+      await hangDumpFor(browserPath, 0.5);
+
+      const client = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+
+      await expect(
+        client.scrape({ format: "html", timeoutMs: 100, url: "http://127.0.0.1:9/" }),
+      ).rejects.toMatchObject({ code: "TIMEOUT" });
+      await expect(storedFactsIn(nodePath.join(cacheDir, "host"))).resolves.toStrictEqual([]);
+
+      await client.close();
+
+      await expect(storedFactsIn(nodePath.join(cacheDir, "host"))).resolves.toHaveLength(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 });

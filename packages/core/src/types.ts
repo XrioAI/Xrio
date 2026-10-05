@@ -1,4 +1,5 @@
 import type { BlockReport } from "./blocks/classify.ts";
+import type { CacheDir } from "./cache-dir.ts";
 import type { Deadline } from "./deadline.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
@@ -28,7 +29,7 @@ export type ClientOptions = (
       browserArgs?: readonly string[];
       timezone?: string;
     })
-) & { proxy?: string; maxBrowsers?: number; locale?: string };
+) & { proxy?: string; maxBrowsers?: number; locale?: string; cacheDir?: string };
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
@@ -90,6 +91,7 @@ export interface ProxyEndpoint {
 }
 
 export interface ClientDefaults {
+  cacheDir: CacheDir;
   browserArgs: readonly string[];
   mode: ResolvedMode;
   proxy: ProxyEndpoint | undefined;
