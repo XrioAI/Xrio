@@ -1,10 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import type { Admission } from "./admission.ts";
 import { createAnswer } from "./answer.ts";
 import type { Answer } from "./answer.ts";
 import type { Deadline } from "./deadline.ts";
-import { timeStage } from "./diagnostics.ts";
+import { inScrapeContext, timeStage } from "./diagnostics.ts";
 import { clientClosed } from "./errors.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
@@ -129,9 +129,10 @@ const visitOnce = async (context: VisitContext, terminal: boolean): Promise<Visi
   await using slot = await timeStage(
     "queue",
     async () => await dependencies.admission.slotFor(intent.source, held),
+    held,
   );
 
-  const plan = await timeStage("identity", async () => await plannedVisit(context));
+  const plan = await timeStage("identity", async () => await plannedVisit(context), held);
   let transferred = false;
 
   try {
@@ -208,7 +209,10 @@ export const createScrapes = (
     assertOpen();
 
     const answer = createAnswer();
-    const settled = coordinate(intent, deadline, managers, answer);
+
+    const settled = inScrapeContext(randomUUID(), async () => {
+      await coordinate(intent, deadline, managers, answer);
+    });
 
     runs.add(settled);
 

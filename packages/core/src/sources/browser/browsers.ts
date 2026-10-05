@@ -112,7 +112,11 @@ const startBrowser = async (
   slot.assertHeld();
 
   try {
-    return await timeStage("launch", async () => await scope.launch(driver, plan, deadline));
+    return await timeStage(
+      "launch",
+      async () => await scope.launch(driver, plan, deadline),
+      deadline,
+    );
   } catch (error) {
     if (isXrioError(error) || deadline.signal.aborted) {
       throw error;
@@ -250,6 +254,7 @@ const renderInScope = async (
     const { fontEvidence, observation } = await timeStage(
       "verify",
       async () => await verifyLaunch(browser, identity, deadline),
+      deadline,
     );
 
     await fonts.settle(fontEvidence);

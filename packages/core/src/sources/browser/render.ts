@@ -393,18 +393,26 @@ export const renderDocument = async <Reading>(
   const tracker = new PageTracker(browser);
 
   try {
-    await timeStage("navigation", async () => {
-      await navigateTo(browser, url, deadline);
-      await tracker.documentLoaded(deadline);
-    });
+    await timeStage(
+      "navigation",
+      async () => {
+        await navigateTo(browser, url, deadline);
+        await tracker.documentLoaded(deadline);
+      },
+      deadline,
+    );
 
-    const { afterCapture, captured } = await timeStage("capture", async () => {
-      const current = await captureCurrentDocument(browser, tracker, deadline);
+    const { afterCapture, captured } = await timeStage(
+      "capture",
+      async () => {
+        const current = await captureCurrentDocument(browser, tracker, deadline);
 
-      tracker.stop();
+        tracker.stop();
 
-      return { afterCapture: await readAfterCapture(), captured: current };
-    });
+        return { afterCapture: await readAfterCapture(), captured: current };
+      },
+      deadline,
+    );
 
     const { document, html } = captured;
 
