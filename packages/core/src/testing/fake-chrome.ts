@@ -349,7 +349,11 @@ const answerNavigate = async (url: string | undefined, committed: Json): Promise
 };
 
 const evaluateByValue = async (reply: Json, failed: Json): Promise<void> => {
-  if (!CAPTURE_ERROR_SCENARIOS.has(scenario) || navigatedDuringCapture) {
+  if (
+    !CAPTURE_ERROR_SCENARIOS.has(scenario) ||
+    navigatedDuringCapture ||
+    currentUrl === "about:blank"
+  ) {
     await write([reply]);
 
     return;

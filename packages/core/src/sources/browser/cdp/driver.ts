@@ -43,6 +43,12 @@ const NAVIGATION_DOWNLOAD = "navigation";
 
 const STARTUP_LOADER = "startup";
 
+const FOCUS_WAIT_MS = 1000;
+
+const HOLDS_FOCUS = `document.hasFocus() || new Promise((resolve) => {
+  addEventListener("focus", () => resolve(true), { once: true });
+})`;
+
 const DIALOG_DISMISS_MS = { longest: 1500, shortest: 600 } as const;
 
 const CONTEXT_GONE = /Cannot find context with specified id|Execution context was destroyed/u;
@@ -153,6 +159,7 @@ class Tab {
   readonly navigate = async (url: string, deadline: Deadline): Promise<void> => {
     deadline.throwIfExpired();
     await untilAborted(this.#ready, deadline.signal);
+    await this.#untilFocused(deadline);
     this.#navigated = true;
     this.#commits.clear();
 
@@ -328,6 +335,26 @@ class Tab {
 
       this.#emit(driverEvent);
     }
+  }
+
+  async #untilFocused(deadline: Deadline): Promise<void> {
+    const signal = AbortSignal.any([deadline.signal, AbortSignal.timeout(FOCUS_WAIT_MS)]);
+    const document = this.#document ?? this.#adopt(STARTUP_LOADER);
+
+    await settle(
+      (async () => {
+        const contextId = await untilAborted(document.world, signal);
+
+        const params = {
+          awaitPromise: true,
+          contextId,
+          expression: HOLDS_FOCUS,
+          returnByValue: true,
+        } as const;
+
+        await this.#send(this.#main, "Runtime.evaluate", params, signal);
+      })(),
+    );
   }
 
   async #committed(loaderId: string, deadline: Deadline): Promise<void> {

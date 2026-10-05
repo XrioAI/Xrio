@@ -226,6 +226,7 @@ describe("the CDP driver's documents", () => {
       expect(sent).toStrictEqual([
         "Page.createIsolatedWorld",
         "Runtime.evaluate",
+        "Runtime.evaluate",
         "Page.navigate",
         "Page.createIsolatedWorld",
         "Runtime.evaluate",
