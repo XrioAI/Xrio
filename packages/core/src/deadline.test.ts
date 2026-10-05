@@ -265,3 +265,52 @@ describe(untilDeadline, () => {
     );
   });
 });
+
+describe("the reason a deadline aborted", () => {
+  it("is undefined while the deadline runs, and expired once it ends", () => {
+    const { advance, clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+
+    expect(deadline.abortReason()).toBeUndefined();
+    advance(1000);
+    expect(() => {
+      deadline.throwIfExpired();
+    }).toThrow("The scrape did not finish within 1000 ms.");
+    expect(deadline.abortReason()).toBe("expired");
+  });
+
+  it("names the caller when the caller's signal ends the deadline", () => {
+    const { clock } = manualClock();
+    const controller = new AbortController();
+    const deadline = startDeadline(1000, controller.signal, clock);
+
+    controller.abort(new Error("Stopped by caller"));
+    expect(deadline.abortReason()).toBe("caller");
+  });
+
+  it("names the reason a bound signal was given, and leaves the original deadline running", () => {
+    const { clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+    const ownership = new AbortController();
+    const held = deadline.boundTo(ownership.signal, "ownership");
+
+    ownership.abort(new Error("Ownership lost"));
+    expect([held.abortReason(), deadline.abortReason()]).toStrictEqual(["ownership", undefined]);
+    expect(deadline.boundTo(new AbortController().signal).abortReason()).toBeUndefined();
+  });
+
+  it("keeps the first reason when the bound signal aborts after the deadline expired", () => {
+    const { advance, clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+    const ownership = new AbortController();
+    const held = deadline.boundTo(ownership.signal, "ownership");
+
+    advance(1000);
+    held.remainingMs();
+    expect(() => {
+      held.throwIfExpired();
+    }).toThrow("The scrape did not finish within 1000 ms.");
+    ownership.abort(new Error("Ownership lost"));
+    expect(held.abortReason()).toBe("expired");
+  });
+});
