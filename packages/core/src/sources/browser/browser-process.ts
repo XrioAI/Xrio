@@ -8,6 +8,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { text } from "node:stream/consumers";
 
+import { publishInternalEvent } from "../../diagnostics.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { directoriesIn } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
@@ -205,6 +206,8 @@ export const spawnChrome = (
   args: readonly string[],
   env: Readonly<Record<string, string>>,
 ): SpawnedChrome => {
+  publishInternalEvent({ detail: JSON.stringify(args), event: "browser-argv" });
+
   const child = spawn(executable, args, {
     detached: true,
     env,

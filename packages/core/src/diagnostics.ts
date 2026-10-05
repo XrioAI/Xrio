@@ -25,6 +25,7 @@ export interface InternalEvent {
     | "fork-probed"
     | "font-stack-checked"
     | "font-settlement-failed"
+    | "browser-argv"
     | "browser-launched"
     | "cdp-message-dropped"
     | "document-rebind"

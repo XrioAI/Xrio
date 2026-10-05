@@ -1,14 +1,22 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { ChannelListener } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { startDeadline } from "../../deadline.ts";
+import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
+import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
+import { noPins } from "../../testing/no-pins.ts";
+import { plannedScrapes } from "../../testing/planned-scrapes.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
-import { sweepAbandonedScratch } from "./browser-process.ts";
+import { spawnChrome, sweepAbandonedScratch } from "./browser-process.ts";
+import { cdpDriver } from "./cdp/driver.ts";
 import { waitForGroupExit } from "./group-lifetime.ts";
 
 const EXIT_WAIT_MS = 5000;
@@ -246,4 +254,129 @@ describe.runIf(process.platform === "linux")("sweeping after a non-reaping paren
     },
     SWEEP_TIMEOUT_MS,
   );
+});
+
+interface BrowserEvent {
+  readonly event: string;
+  readonly detail: string;
+}
+
+const isBrowserEvent = (message: unknown): message is BrowserEvent =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  typeof message.event === "string" &&
+  "detail" in message &&
+  typeof message.detail === "string";
+
+const recordLaunchEvents = (): {
+  readonly seen: string[];
+  readonly details: string[];
+} & Disposable => {
+  const seen: string[] = [];
+  const details: string[] = [];
+
+  const record: ChannelListener = (message) => {
+    if (isBrowserEvent(message) && message.event.startsWith("browser-")) {
+      seen.push(message.event);
+      details.push(message.detail);
+    }
+  };
+
+  subscribe("xrio:event", record);
+
+  return {
+    [Symbol.dispose]: () => {
+      unsubscribe("xrio:event", record);
+    },
+    details,
+    seen,
+  };
+};
+
+const scrapeWith = async (browserPath: string) => {
+  const browsers = plannedScrapes(cdpDriver, 1);
+  using deadline = startDeadline(10_000);
+
+  try {
+    return await browsers.capture({
+      browserArgs: [],
+      browserPath,
+      deadline,
+      mode: "headless",
+      pins: noPins,
+      proxy: undefined,
+      url: new URL("https://fake.test/page"),
+    });
+  } finally {
+    await browsers.close();
+  }
+};
+
+describe("the browser-argv event", () => {
+  it("publishes exactly the argv the browser process received", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-argv-"));
+    const received = path.join(root, "received");
+    const executable = path.join(root, "chrome");
+
+    await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(received)}\n`);
+    await chmod(executable, 0o755);
+
+    try {
+      using events = recordLaunchEvents();
+
+      const chrome = spawnChrome(
+        executable,
+        ["--user-data-dir=/tmp/xrio-1/b1/profile", "--window-size=1280,800", "about:blank"],
+        { PATH: process.env.PATH ?? "" },
+      );
+
+      await chrome.leaderExited;
+
+      expect(events.seen).toStrictEqual(["browser-argv"]);
+      await expect(readFile(received, "utf-8")).resolves.toBe(
+        "--user-data-dir=/tmp/xrio-1/b1/profile\n--window-size=1280,800\nabout:blank\n",
+      );
+      expect(events.details).toStrictEqual([
+        '["--user-data-dir=/tmp/xrio-1/b1/profile","--window-size=1280,800","about:blank"]',
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("publishes one event per launch, before browser-launched", async () => {
+    using events = recordLaunchEvents();
+
+    await scrapeWith(await fakeChromePath("normal"));
+
+    expect(events.seen).toStrictEqual(["browser-argv", "browser-launched"]);
+
+    const argv: unknown = JSON.parse(events.details[0] ?? "null");
+
+    expect(argv).toContain("--remote-debugging-pipe");
+    expect(argv).toContain("--headless");
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("publishes the argv of a launch that fails after the process starts", async () => {
+    using events = recordLaunchEvents();
+
+    await expect(scrapeWith(await fakeChromePath("no-start"))).rejects.toMatchObject({
+      code: "BROWSER_LAUNCH_FAILED",
+    });
+
+    expect(events.seen).toStrictEqual(["browser-argv", "browser-launched"]);
+    expect(JSON.parse(events.details[0] ?? "null")).toContain("--remote-debugging-pipe");
+  });
+
+  it("publishes the argv of a launch whose binary cannot be executed", () => {
+    using events = recordLaunchEvents();
+
+    expect(() => spawnChrome("/does-not-exist/xrio-chrome", ["--headless"], {})).toThrow(
+      "Chrome could not start at /does-not-exist/xrio-chrome.",
+    );
+    expect(events.seen).toStrictEqual(["browser-argv"]);
+    expect(events.details).toStrictEqual(['["--headless"]']);
+  });
 });
