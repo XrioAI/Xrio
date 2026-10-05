@@ -16,6 +16,10 @@ const MEDIA_REQUEST_WAIT_MS = 1500;
 
 const WINDOW_SIZE_GIVE_UP_MS = 5000;
 
+const CONFORMANCE_PAGE_GIVE_UP_MS = 5000;
+
+const REALM_COUNT = 8;
+
 const CYRILLIC_WINDOWS_1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
 
 const PROBE_SCRIPT = `<script>
@@ -45,7 +49,49 @@ const WINDOW_SIZE_WATCH = `<script>
 })();
 </script>`;
 
-const IDENTITY_REPORT_SCRIPT = `<script>
+const REALM_ROW_SOURCE = `const realmRow = () => ({
+  hardwareConcurrency: navigator.hardwareConcurrency,
+  deviceMemory: navigator.deviceMemory ?? null,
+  cpuPerformance: navigator.cpuPerformance ?? null,
+  jsHeapSizeLimit: performance.memory?.jsHeapSizeLimit ?? null,
+  userAgent: navigator.userAgent,
+  languages: [...navigator.languages],
+  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+});`;
+
+const START_REALMS_SOURCE = `${REALM_ROW_SOURCE}
+
+const startServiceWorker = (publish) => {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    publish("service", event.data);
+  });
+  navigator.serviceWorker
+    .register("/identity-realm.js")
+    .then(async () => {
+      (await navigator.serviceWorker.ready).active.postMessage("report");
+    })
+    .catch((error) => {
+      publish("service", { error: String(error) });
+    });
+};
+
+const startRealms = (publish, { withServiceWorker }) => {
+  publish("window", realmRow());
+  new Worker("/identity-realm.js").addEventListener("message", (event) => {
+    publish("dedicated", event.data);
+  });
+  const shared = new SharedWorker("/identity-realm.js");
+  shared.port.addEventListener("message", (event) => {
+    publish("shared", event.data);
+  });
+  shared.port.start();
+  if (withServiceWorker) {
+    startServiceWorker(publish);
+  }
+};`;
+
+const identityReportScript = (crossOrigin: string): string => `<script>
+${START_REALMS_SOURCE}
 (() => {
   const offsetIn = (month) => -new Date(new Date().getFullYear(), month, 15).getTimezoneOffset();
   const gl = document.createElement("canvas").getContext("webgl");
@@ -78,6 +124,8 @@ const IDENTITY_REPORT_SCRIPT = `<script>
     windowSizeWait: window.identitySizeWait,
     hardwareConcurrency: navigator.hardwareConcurrency,
     deviceMemory: navigator.deviceMemory ?? null,
+    cpuPerformance: navigator.cpuPerformance ?? null,
+    jsHeapSizeLimit: performance.memory?.jsHeapSizeLimit ?? null,
     userAgentData: { platform: navigator.userAgentData?.platform ?? null },
     userAgent: navigator.userAgent,
     webdriver: navigator.webdriver,
@@ -89,20 +137,50 @@ const IDENTITY_REPORT_SCRIPT = `<script>
   };
   document.getElementById("identity").textContent = JSON.stringify(report);
 
-  const realms = {};
-  const record = (realm) => (event) => {
-    realms[realm] = event.data;
+  const realms = { frame: {} };
+  const reported = () => Object.keys(realms).length - 1 + Object.keys(realms.frame).length;
+  const publish = (inFrame, name, row) => {
+    (inFrame ? realms.frame : realms)[name] = row;
     document.getElementById("identity-workers").textContent = JSON.stringify(realms);
+    if (reported() === ${REALM_COUNT}) {
+      fetch("/identity-realms-done");
+    }
   };
+  setTimeout(() => fetch("/identity-realms-done"), ${CONFORMANCE_PAGE_GIVE_UP_MS});
 
-  new Worker("/identity-realm.js").addEventListener("message", record("dedicated"));
-  const shared = new SharedWorker("/identity-realm.js");
-  shared.port.addEventListener("message", record("shared"));
-  shared.port.start();
-  navigator.serviceWorker.addEventListener("message", record("service"));
-  navigator.serviceWorker.register("/identity-realm.js").then(async () => {
-    (await navigator.serviceWorker.ready).active.postMessage("report");
+  const crossSiteFrame = document.createElement("iframe");
+  const serviceFrame = document.createElement("iframe");
+  addEventListener("message", (event) => {
+    if (event.source === crossSiteFrame.contentWindow) {
+      publish(true, event.data.name, event.data.row);
+    } else if (event.source === serviceFrame.contentWindow) {
+      publish(false, event.data.name, event.data.row);
+    }
   });
+  crossSiteFrame.src = ${JSON.stringify(`${crossOrigin}/identity-frame`)};
+  serviceFrame.src = "/identity-service-frame";
+  document.body.append(crossSiteFrame, serviceFrame);
+
+  startRealms((name, row) => publish(false, name, row), { withServiceWorker: false });
+})();
+</script>`;
+
+const IDENTITY_FRAME_SCRIPT = `<script>
+${START_REALMS_SOURCE}
+startRealms((name, row) => parent.postMessage({ name, row }, "*"), { withServiceWorker: true });
+</script>`;
+
+const IDENTITY_SERVICE_FRAME_SCRIPT = `<script>
+${START_REALMS_SOURCE}
+startServiceWorker((name, row) => parent.postMessage({ name, row }, "*"));
+</script>`;
+
+const CLIENT_HINTS_SCRIPT = `<script>
+setTimeout(() => fetch("/client-hints-done"), ${CONFORMANCE_PAGE_GIVE_UP_MS});
+(async () => {
+  const echoed = await fetch("/client-hints-echo");
+  document.getElementById("client-hints").textContent = await echoed.text();
+  fetch("/client-hints-done");
 })();
 </script>`;
 
@@ -164,13 +242,9 @@ const MEDIA_REPORT_SCRIPT = `<script>
 })();
 </script>`;
 
-const IDENTITY_REALM_SCRIPT = `const report = () => ({
-  hardwareConcurrency: navigator.hardwareConcurrency,
-  deviceMemory: navigator.deviceMemory ?? null,
-  userAgent: navigator.userAgent,
-  languages: [...navigator.languages],
-  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-});
+const IDENTITY_REALM_SCRIPT = `${REALM_ROW_SOURCE}
+
+const report = realmRow;
 
 switch (self.constructor.name) {
   case "ServiceWorkerGlobalScope":
@@ -556,12 +630,13 @@ const routes = new Map<
   ],
   [
     "/identity",
-    (response, _origins, request) => {
+    (response, { crossOrigin }, request) => {
       requestedPaths.delete("/identity-sized");
+      requestedPaths.delete("/identity-realms-done");
       sendPage(
         response,
         "identity",
-        `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${IDENTITY_REPORT_SCRIPT}`,
+        `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${identityReportScript(crossOrigin)}<script src="/identity-realms-settled.js"></script>`,
         `<meta name="request-accept-language" content="${request.headers["accept-language"] ?? ""}">`,
       );
     },
@@ -613,6 +688,53 @@ const routes = new Map<
   ],
   ["/media-settled.js", holdScriptUntilRequested("/media-done")],
   ["/identity-settled.js", holdScriptUntilRequested("/identity-sized")],
+  ["/identity-realms-settled.js", holdScriptUntilRequested("/identity-realms-done")],
+  [
+    "/identity-realms-done",
+    (response) => {
+      response.writeHead(204);
+      response.end();
+    },
+  ],
+  [
+    "/identity-frame",
+    (response) => {
+      sendPage(response, "identity-frame", IDENTITY_FRAME_SCRIPT);
+    },
+  ],
+  [
+    "/identity-service-frame",
+    (response) => {
+      sendPage(response, "identity-service-frame", IDENTITY_SERVICE_FRAME_SCRIPT);
+    },
+  ],
+  [
+    "/client-hints",
+    (response) => {
+      requestedPaths.delete("/client-hints-done");
+      response.setHeader("accept-ch", "Device-Memory, Sec-CH-Device-Memory");
+      sendPage(
+        response,
+        "client-hints",
+        `<pre id="client-hints"></pre>${CLIENT_HINTS_SCRIPT}<script src="/client-hints-settled.js"></script>`,
+      );
+    },
+  ],
+  [
+    "/client-hints-echo",
+    (response, _origins, request) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify(request.headers));
+    },
+  ],
+  [
+    "/client-hints-done",
+    (response) => {
+      response.writeHead(204);
+      response.end();
+    },
+  ],
+  ["/client-hints-settled.js", holdScriptUntilRequested("/client-hints-done")],
   [
     "/identity-realm.js",
     (response) => {

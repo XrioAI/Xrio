@@ -67,6 +67,20 @@ const PROBE =
 
 const IDENTITY_REPORT = /<pre id="identity">(?<report>[^<]*)<\/pre>/u;
 
+const IDENTITY_REALMS =
+  /<script type="application\/json" id="identity-workers">(?<realms>[^<]*)<\/script>/u;
+
+const CLIENT_HINTS_ECHO = /<pre id="client-hints">(?<headers>[^<]*)<\/pre>/u;
+
+const REALM_COUNT = 8;
+
+const REALM_HARDWARE_ROW =
+  /"hardwareConcurrency":\d+,"deviceMemory":\d+,"cpuPerformance":(?:null|\d+),"jsHeapSizeLimit":(?:null|\d+)/gu;
+
+const DEVICE_MEMORY_HEADER = /"device-memory":"\d+"/u;
+
+const SEC_CH_DEVICE_MEMORY_HEADER = /"sec-ch-device-memory":"\d+"/u;
+
 const MEDIA_REPORT = /<pre id="media">(?<report>[^<]*)<\/pre>/u;
 
 const RESPONSIVE = /<p id="layout">(?<layout>[a-z]+)<\/p>/u;
@@ -719,6 +733,25 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
     } finally {
       await browsers.close();
     }
+  });
+});
+
+describe.each(MODES)("the hardware reads on the conformance pages, %s", (mode) => {
+  serveFixturePages();
+
+  it("reports four realms in the window's origin and four in a cross-site frame on /identity", async () => {
+    const { html } = await load(mode, "/identity");
+    const realms = IDENTITY_REALMS.exec(html)?.groups?.realms ?? "";
+
+    expect(realms.match(REALM_HARDWARE_ROW)).toHaveLength(REALM_COUNT);
+  });
+
+  it("echoes the Device-Memory hints that /client-hints asked for", async () => {
+    const { html } = await load(mode, "/client-hints");
+    const echoed = CLIENT_HINTS_ECHO.exec(html)?.groups?.headers ?? "";
+
+    expect(echoed).toMatch(DEVICE_MEMORY_HEADER);
+    expect(echoed).toMatch(SEC_CH_DEVICE_MEMORY_HEADER);
   });
 });
 
