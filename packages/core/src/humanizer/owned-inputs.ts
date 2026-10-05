@@ -233,6 +233,8 @@ const RESERVED_IDENTITY_SWITCHES = [
   "--disable-3d-apis",
   "--hide-scrollbars",
   "--enable-automation",
+  "--test-type",
+  "--disable-component-extensions-with-background-pages",
   "--enable-blink-features",
   "--force-dark-mode",
   "--force-prefers-reduced-motion",
