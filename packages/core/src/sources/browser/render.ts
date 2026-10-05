@@ -137,25 +137,6 @@ class PageTracker {
     this.#stop();
   }
 
-  async unlessBrowserDies<Result>(operation: Promise<Result>): Promise<Result> {
-    const { promise, reject } = Promise.withResolvers<never>();
-
-    const check = () => {
-      if (this.#failure !== undefined) {
-        reject(this.#failure);
-      }
-    };
-
-    this.#waiters.add(check);
-    check();
-
-    try {
-      return await Promise.race([operation, promise]);
-    } finally {
-      this.#waiters.delete(check);
-    }
-  }
-
   async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
     deadline.throwIfExpired();
     const { promise, resolve, reject } = Promise.withResolvers<DocumentHop>();
@@ -364,7 +345,7 @@ const captureIfCurrent = async (
   const document = await tracker.documentLoaded(deadline);
 
   try {
-    const html = await tracker.unlessBrowserDies(captureHtml(browser, deadline));
+    const html = await captureHtml(browser, deadline);
 
     return html !== undefined && tracker.isCurrent(document) ? { document, html } : undefined;
   } catch (error) {
