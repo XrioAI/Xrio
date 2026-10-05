@@ -107,6 +107,48 @@ describe("the CDP driver's launch", () => {
 });
 
 describe("the CDP driver's documents", () => {
+  it("resolves a navigation only once its own document has committed", async () => {
+    const scratch = await createScratchDir(Date.now());
+
+    const plan = planLaunch({
+      browserPath: await fakeChromePath("startup-blank-commit"),
+      display: undefined,
+      headless: true,
+      platform: process.platform,
+      scratchDir: scratch.path,
+      timezone: undefined,
+      xauthority: undefined,
+    });
+
+    using deadline = startDeadline(10_000);
+
+    const browser = await cdpDriver.launch(
+      plan,
+      deadline,
+      () => {},
+      () => {},
+    );
+
+    const commits: string[] = [];
+
+    const stop = browser.onEvent((event) => {
+      if (event.type === "commit") {
+        commits.push(event.loaderId);
+      }
+    });
+
+    try {
+      await browser.navigate("https://fake.test/page", deadline);
+      expect(commits).toStrictEqual(["L1"]);
+    } finally {
+      stop();
+      await browser.close(CLOSE_BUDGET_MS);
+      await removeScratchDir(scratch);
+    }
+
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
   it("reads the startup page in its own world, then captures the navigated page in a new one", async () => {
     const sent: string[] = [];
 

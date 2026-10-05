@@ -125,6 +125,8 @@ class Tab {
   #downloadsIdle = Promise.withResolvers<"idle">();
   #navigated = false;
   #document: CommittedDocument | undefined;
+  readonly #commits = new Set<string>();
+  #nextCommit = Promise.withResolvers<"committed">();
 
   constructor(send: Send, main: TargetSession<"main">, lifetime: AbortSignal) {
     this.#send = send;
@@ -152,13 +154,13 @@ class Tab {
     deadline.throwIfExpired();
     await untilAborted(this.#ready, deadline.signal);
     this.#navigated = true;
+    this.#commits.clear();
 
-    const { errorText = "", isDownload = false } = await this.#send(
-      this.#main,
-      "Page.navigate",
-      { url },
-      deadline.signal,
-    );
+    const {
+      errorText = "",
+      isDownload = false,
+      loaderId,
+    } = await this.#send(this.#main, "Page.navigate", { url }, deadline.signal);
 
     if (isDownload) {
       this.#downloadStarted(NAVIGATION_DOWNLOAD);
@@ -166,6 +168,10 @@ class Tab {
 
     if (errorText !== "") {
       throw new DriverError({ kind: "navigation-failed", netError: errorText });
+    }
+
+    if (!isDownload && loaderId !== undefined) {
+      await this.#committed(loaderId, deadline);
     }
   };
 
@@ -315,9 +321,21 @@ class Tab {
     for (const driverEvent of this.#frame.translate(session, event)) {
       if (driverEvent.type === "commit") {
         this.#adopt(driverEvent.loaderId);
+        this.#commits.add(driverEvent.loaderId);
+        this.#nextCommit.resolve("committed");
+        this.#nextCommit = Promise.withResolvers<"committed">();
       }
 
       this.#emit(driverEvent);
+    }
+  }
+
+  async #committed(loaderId: string, deadline: Deadline): Promise<void> {
+    const signal = AbortSignal.any([deadline.signal, this.#ended.signal]);
+
+    while (!this.#commits.has(loaderId)) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- another document's commit must not complete this navigation.
+      await untilAborted(this.#nextCommit.promise, signal);
     }
   }
 
