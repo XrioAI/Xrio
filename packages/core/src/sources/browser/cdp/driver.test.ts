@@ -131,7 +131,13 @@ describe("the CDP driver's documents", () => {
     using deadline = startDeadline(10_000);
 
     subscribe("xrio:cdp-command", record);
-    const browser = await cdpDriver.launch(plan, deadline, () => {});
+
+    const browser = await cdpDriver.launch(
+      plan,
+      deadline,
+      () => {},
+      () => {},
+    );
 
     try {
       await expect(browser.evaluateIsolated("location.href", isText, deadline)).resolves.toContain(

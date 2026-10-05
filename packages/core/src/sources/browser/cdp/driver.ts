@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Deadline } from "../../../deadline.ts";
 import { spawnBrowser } from "../browser-process.ts";
 import type { SpawnedBrowser } from "../browser-process.ts";
-import { CLOSE_BUDGET_MS, DriverError } from "../port.ts";
+import { CLOSE_BUDGET_MS, DriverError, parseChromeProduct } from "../port.ts";
 import type {
   BrowserDriver,
   DriverBrowser,
@@ -423,8 +423,7 @@ const connect = (chrome: SpawnedBrowser, lifetime: AbortSignal): Connected => {
       evaluateIsolated: opener.evaluateIsolated,
       navigate: opener.navigate,
       onEvent: opener.onEvent,
-      pid: chrome.pid,
-      product,
+      product: parseChromeProduct(product),
     };
   })();
 
@@ -437,9 +436,11 @@ const withStderr = async (chrome: SpawnedBrowser, problem: string, cause: unknow
   new Error(`${problem}\n${await chrome.stderrTail()}`, { cause });
 
 export const cdpDriver: BrowserDriver = {
-  launch: async (plan, deadline, deferCleanup) => {
+  launch: async (plan, deadline, owned, deferCleanup) => {
     using stage = deadline.startStage(LAUNCH_TIMEOUT_MS);
     const chrome = await spawnBrowser(plan);
+
+    owned(chrome.pid);
     const { opened, ...connection } = connect(chrome, deadline.signal);
 
     try {

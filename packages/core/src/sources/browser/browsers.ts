@@ -22,7 +22,7 @@ import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import { settleWithin, withinSignal } from "./lifetime.ts";
 import { CLEANUP_BUDGET_MS, CLOSE_BUDGET_MS, DriverError, TEARDOWN_BUDGET_MS } from "./port.ts";
-import type { BrowserDriver, CleanupSink, DriverBrowser } from "./port.ts";
+import type { BrowserDriver, ChromeProduct, DriverBrowser } from "./port.ts";
 import { renderDocument } from "./render.ts";
 
 const BYTES_PER_BROWSER = 512 * 1024 * 1024;
@@ -31,9 +31,13 @@ const STDERR_TAIL_CHARS = 8192;
 
 const MIN_CHROME_MAJOR = 150;
 
-const CHROME_MAJOR = /(?<major>\d+)\./u;
-
 type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
+
+interface Launch {
+  readonly cleanups: Promise<void>[];
+  owned: { readonly pid: number } | undefined;
+  browser: DriverBrowser | undefined;
+}
 
 interface TeardownSteps {
   readonly findBrowserPid: typeof findBrowserPid;
@@ -81,14 +85,9 @@ const sweepOnce = async (): Promise<void> => {
 const launchFailed = (message: string, stderr: string, cause?: unknown): XrioError =>
   new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { stderr } });
 
-const assertSupported = (product: string): void => {
-  const major = Number(CHROME_MAJOR.exec(product)?.groups?.major);
-
-  if (!(major >= MIN_CHROME_MAJOR)) {
-    throw launchFailed(
-      `Chrome ${product || "of unknown version"} is older than ${MIN_CHROME_MAJOR}.`,
-      "",
-    );
+const assertSupported = ({ major, version }: ChromeProduct): void => {
+  if (major < MIN_CHROME_MAJOR) {
+    throw launchFailed(`Chrome ${version} is older than ${MIN_CHROME_MAJOR}.`, "");
   }
 };
 
@@ -121,16 +120,46 @@ const writeProfile = async (plan: LaunchPlan): Promise<void> => {
   }
 };
 
+const launchOwned = async (
+  driver: BrowserDriver,
+  plan: LaunchPlan,
+  deadline: Deadline,
+  launch: Launch,
+): Promise<DriverBrowser> => {
+  const browser = await driver.launch(
+    plan,
+    deadline,
+    (pid) => {
+      launch.owned = { pid };
+      publishInternalEvent({ detail: String(pid), event: "browser-launched" });
+    },
+    (cleanup) => {
+      launch.cleanups.push(cleanup);
+    },
+  );
+
+  launch.browser = browser;
+
+  if (launch.owned === undefined) {
+    throw new DriverError({
+      kind: "launch-failed",
+      problem: "The driver resolved without reporting process ownership.",
+    });
+  }
+
+  return browser;
+};
+
 const startBrowser = async (
   driver: BrowserDriver,
   plan: LaunchPlan,
   deadline: Deadline,
-  deferCleanup: CleanupSink,
+  launch: Launch,
 ): Promise<DriverBrowser> => {
   await writeProfile(plan);
 
   try {
-    return await timeStage("launch", async () => await driver.launch(plan, deadline, deferCleanup));
+    return await timeStage("launch", async () => await launchOwned(driver, plan, deadline, launch));
   } catch (error) {
     deadline.throwIfExpired();
 
@@ -148,12 +177,14 @@ const startBrowser = async (
 
 const browserGroup = async (
   plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
+  launch: Launch,
   steps: TeardownSteps,
   signal: AbortSignal,
 ): Promise<{ group: number | undefined; complete: boolean }> => {
-  if (browser !== undefined) {
-    return { complete: true, group: browser.pid };
+  const owned = launch.owned?.pid;
+
+  if (owned !== undefined) {
+    return { complete: true, group: owned };
   }
 
   const scanSignal = AbortSignal.any([signal, AbortSignal.timeout(PROCESS_SCAN_BUDGET_MS)]);
@@ -175,14 +206,15 @@ const browserGroup = async (
 
 const stopBrowser = async (
   plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
-  cleanups: readonly Promise<void>[],
+  launch: Launch,
   steps: TeardownSteps,
   signal: AbortSignal,
 ): Promise<boolean> => {
   await withinSignal(async () => {
-    await settleWithin(Promise.allSettled(cleanups), CLEANUP_BUDGET_MS);
+    await settleWithin(Promise.allSettled(launch.cleanups), CLEANUP_BUDGET_MS);
   }, signal);
+
+  const { browser } = launch;
 
   if (browser !== undefined) {
     await withinSignal(async () => {
@@ -190,7 +222,7 @@ const stopBrowser = async (
     }, signal);
   }
 
-  const { group, complete } = await browserGroup(plan, browser, steps, signal);
+  const { group, complete } = await browserGroup(plan, launch, steps, signal);
 
   if (group === undefined) {
     return complete;
@@ -204,8 +236,7 @@ const stopBrowser = async (
 const tearDown = async (
   scratch: ScratchDir,
   plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
-  cleanups: readonly Promise<void>[],
+  launch: Launch,
   steps: TeardownSteps,
 ): Promise<void> => {
   const signal = AbortSignal.timeout(TEARDOWN_BUDGET_MS);
@@ -215,10 +246,7 @@ const tearDown = async (
     exited = await timeStage(
       "teardown",
       async () =>
-        await withinSignal(
-          async () => await stopBrowser(plan, browser, cleanups, steps, signal),
-          signal,
-        ),
+        await withinSignal(async () => await stopBrowser(plan, launch, steps, signal), signal),
     );
 
     if (exited) {
@@ -234,8 +262,10 @@ const tearDown = async (
       event: "teardown-incomplete",
     });
   } catch (error) {
-    if (!exited && browser !== undefined) {
-      killProcessGroup(browser.pid);
+    const owned = launch.owned?.pid;
+
+    if (!exited && owned !== undefined) {
+      killProcessGroup(owned);
     }
 
     publishInternalEvent({
@@ -253,20 +283,16 @@ const renderInScratch = async (
   steps: TeardownSteps,
 ): Promise<void> => {
   const plan = planFor(request, scratch);
-  const cleanups: Promise<void>[] = [];
-  let browser: DriverBrowser | undefined;
+  const launch: Launch = { browser: undefined, cleanups: [], owned: undefined };
 
   try {
-    browser = await startBrowser(driver, plan, request.deadline, (cleanup) => {
-      cleanups.push(cleanup);
-    });
-    publishInternalEvent({ detail: String(browser.pid), event: "browser-launched" });
+    const browser = await startBrowser(driver, plan, request.deadline, launch);
     assertSupported(browser.product);
     result.resolve(await renderDocument(browser, request.url, request.deadline));
   } catch (error) {
     result.reject(error);
   } finally {
-    await tearDown(scratch, plan, browser, cleanups, steps);
+    await tearDown(scratch, plan, launch, steps);
   }
 };
 

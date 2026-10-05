@@ -172,8 +172,8 @@ describe("browser lifecycle on the fake browser", () => {
     const cleanups: { settled: boolean }[] = [];
 
     const observedDriver: BrowserDriver = {
-      launch: async (plan, deadline, deferCleanup) =>
-        await cdpDriver.launch(plan, deadline, (cleanup) => {
+      launch: async (plan, deadline, owned, deferCleanup) =>
+        await cdpDriver.launch(plan, deadline, owned, (cleanup) => {
           const observed = { settled: false };
 
           cleanups.push(observed);
@@ -279,10 +279,19 @@ describe("bounded teardown on the fake browser", () => {
     let scans = 0;
 
     const failedCloseDriver: BrowserDriver = {
-      launch: async (plan, deadline, deferCleanup) => {
-        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
+      launch: async (plan, deadline, owned, deferCleanup) => {
+        const browser = await cdpDriver.launch(
+          plan,
+          deadline,
+          (pid) => {
+            if (pid !== undefined) {
+              pids.push(pid);
+            }
 
-        pids.push(browser.pid);
+            owned(pid);
+          },
+          deferCleanup,
+        );
 
         return {
           ...browser,
@@ -323,14 +332,14 @@ describe("bounded teardown on the fake browser", () => {
     }
   });
 
-  it("continues to process discovery after a deferred launch cleanup hangs and admits queued work", async () => {
+  it("kills the owned browser after a deferred launch cleanup hangs and admits queued work", async () => {
     const hangingCleanup = Promise.withResolvers<"released">();
     const scannedProfiles: string[] = [];
     let launches = 0;
 
     const failedLaunchDriver: BrowserDriver = {
-      launch: async (plan, deadline, deferCleanup) => {
-        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
+      launch: async (plan, deadline, owned, deferCleanup) => {
+        const browser = await cdpDriver.launch(plan, deadline, owned, deferCleanup);
 
         launches += 1;
 
@@ -369,7 +378,7 @@ describe("bounded teardown on the fake browser", () => {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
       await expect(second).resolves.toMatchObject({ status: 200 });
       await browsers.close();
-      expect(scannedProfiles).toHaveLength(1);
+      expect(scannedProfiles).toStrictEqual([]);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     } finally {
       hangingCleanup.resolve("released");
@@ -385,10 +394,27 @@ describe("bounded teardown on the fake browser", () => {
     let scans = 0;
 
     const failedLaunchDriver: BrowserDriver = {
-      launch: async (plan, deadline, deferCleanup) => {
-        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
+      launch: async (plan, deadline, owned, deferCleanup) => {
+        let pid: number | undefined;
 
-        launched.push({ pid: browser.pid, scratch: path.dirname(plan.directories.profile) });
+        const browser = await cdpDriver.launch(
+          plan,
+          deadline,
+          (started) => {
+            pid = started;
+
+            if (launched.length > 0) {
+              owned(started);
+            }
+          },
+          deferCleanup,
+        );
+
+        if (pid === undefined) {
+          throw new Error("The driver did not report Chrome's process");
+        }
+
+        launched.push({ pid, scratch: path.dirname(plan.directories.profile) });
 
         if (launched.length === 1) {
           deferCleanup(
@@ -396,7 +422,6 @@ describe("bounded teardown on the fake browser", () => {
               await hangingCleanup.promise;
             })(),
           );
-          throw new Error("The launch failed after Chrome started");
         }
 
         return browser;
@@ -436,9 +461,8 @@ describe("bounded teardown on the fake browser", () => {
       expect(incompleteTeardowns.slice(reported)).toStrictEqual([
         `Chrome outlived its teardown; ${unconfirmed.scratch} is left for the sweep.`,
       ]);
-      await expect(leftovers()).resolves.toStrictEqual({
+      await expect(leftovers()).resolves.toMatchObject({
         directories: [path.basename(unconfirmed.scratch)],
-        processes: [unconfirmed.pid],
       });
       expect(scans).toBe(1);
     } finally {
@@ -466,8 +490,8 @@ describe("bounded teardown on the fake browser", () => {
     let launches = 0;
 
     const hungCloseDriver: BrowserDriver = {
-      launch: async (plan, deadline, deferCleanup) => {
-        const browser = await cdpDriver.launch(plan, deadline, deferCleanup);
+      launch: async (plan, deadline, owned, deferCleanup) => {
+        const browser = await cdpDriver.launch(plan, deadline, owned, deferCleanup);
 
         launches += 1;
 
@@ -577,4 +601,48 @@ describe("bounded teardown on the fake browser", () => {
 
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   }, 15_000);
+});
+
+describe("process ownership reported by the driver", () => {
+  it("refuses a driver that resolves without reporting Chrome's process", async () => {
+    let closes = 0;
+
+    const silentDriver: BrowserDriver = {
+      launch: async () => {
+        await nextTurn();
+
+        return {
+          close: async () => {
+            closes += 1;
+            await nextTurn();
+          },
+          evaluateIsolated: async () => {
+            await nextTurn();
+            throw new Error("unused");
+          },
+          navigate: async () => {
+            await nextTurn();
+          },
+          onEvent: () => () => {},
+          product: { headless: true, major: 154, version: "154.0.8037.57" },
+        };
+      },
+    };
+
+    const browsers = createBrowsers(silentDriver, 1);
+    using deadline = startDeadline(10_000);
+
+    try {
+      await expect(browsers.load(await normalRequest(deadline))).rejects.toSatisfy(
+        (error) =>
+          isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
+          error.message.includes("without reporting process ownership"),
+      );
+      await browsers.close();
+      expect(closes).toBe(1);
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    } finally {
+      await browsers.close();
+    }
+  });
 });

@@ -310,14 +310,27 @@ const withBrowser = async <Result>(
   using deadline = startDeadline(20_000);
 
   await prepareProfile(plan);
-  const browser = await cdpDriver.launch(plan, deadline, () => {});
+  let pid: number | undefined;
+
+  const browser = await cdpDriver.launch(
+    plan,
+    deadline,
+    (reported) => {
+      pid = reported;
+    },
+    () => {},
+  );
 
   try {
     return await run(browser, deadline);
   } finally {
     await browser.close(CLOSE_BUDGET_MS);
-    killProcessGroup(browser.pid);
-    await waitForExit(browser.pid);
+
+    if (pid !== undefined) {
+      killProcessGroup(pid);
+      await waitForExit(pid);
+    }
+
     await removeScratchDir(scratch);
   }
 };
