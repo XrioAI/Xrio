@@ -64,6 +64,7 @@ export type FactTell =
   | "exit-unknown"
   | "speech-persona-skew"
   | "http-profile-skew"
+  | "fork-commit-unreadable"
   | "host-fonts"
   | "replay-host-skew"
   | "display-pin-unhonored";
@@ -409,7 +410,7 @@ export const evaluate = (
     fontEvidence: fontEvidenceOutcome(fontEvidence, observation, { drifted, unresolved }),
     mismatches,
     report: {
-      binary: { fork: chosen.fork, version: observation.product.version },
+      binary: { ...chosen.binary, version: observation.product.version },
       coverage: coverageOf({ fonts: fontEvidence, fontsDrifted: drifted }, observation),
       digests: { device: deviceDigest(record), host: chosen.digests.host },
       exit: chosen.exit,

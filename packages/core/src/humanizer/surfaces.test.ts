@@ -822,8 +822,8 @@ describe("the fork in the plan", () => {
   it("names the fork and carries the surfaces' tells", () => {
     const plan = planIdentity(contextOf({ capabilities: forkWith(LINUX_SPEECH) }));
 
-    expect({ fork: plan.chosen.fork, tells: plan.tells }).toStrictEqual({
-      fork: "xrio",
+    expect({ binary: plan.chosen.binary, tells: plan.tells }).toStrictEqual({
+      binary: { commit: null, dirty: null, fork: "xrio" },
       tells: ["host-fonts", "speech-persona-skew"],
     });
   });
@@ -869,12 +869,12 @@ describe("the chosen identity", () => {
         }),
       ).chosen,
     ).toStrictEqual({
+      binary: { commit: null, dirty: null, fork: null },
       digests: {
         device: null,
         host: "b764e55bf78b66aa3ae5a19887dc836c3f68fc089dd58a8247efa2e3e83d6867",
       },
       exit: { facts: { kind: "unknown" }, route: "proxy" },
-      fork: null,
       mode: "headed",
       record: null,
       seed: fixedSeed,

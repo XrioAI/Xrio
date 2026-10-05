@@ -96,7 +96,12 @@ export interface BrowserIdentityReport {
   readonly seed: string;
   readonly record: DeviceRecord;
   readonly digests: { readonly device: string; readonly host: string };
-  readonly binary: { readonly version: string; readonly fork: "xrio" | null };
+  readonly binary: {
+    readonly version: string;
+    readonly fork: "xrio" | null;
+    readonly commit: string | null;
+    readonly dirty: number | null;
+  };
   readonly exit: ExitChoice;
   readonly surfaces: SurfaceChoices;
   readonly observed: ObservedIdentity;

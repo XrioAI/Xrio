@@ -18,6 +18,7 @@ import type {
   HttpIdentityReport,
   IdentityMismatch,
   IdentityReport,
+  IdentityTell,
   InvalidOptionsError,
   ScrapeFormat,
   ScrapeResult,
@@ -256,6 +257,13 @@ describe("XrioClient types", () => {
 
     expectTypeOf(identityOf).returns.toEqualTypeOf<Promise<IdentityReport>>();
     expectTypeOf<ScrapeResult<"json">["identity"]>().toEqualTypeOf<IdentityReport>();
+    expectTypeOf<BrowserIdentityReport["binary"]>().toEqualTypeOf<{
+      readonly version: string;
+      readonly fork: "xrio" | null;
+      readonly commit: string | null;
+      readonly dirty: number | null;
+    }>();
+    expectTypeOf<"fork-commit-unreadable">().toExtend<IdentityTell>();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
       | "fonts-drift"

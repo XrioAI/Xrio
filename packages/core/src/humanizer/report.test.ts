@@ -130,12 +130,18 @@ const insecureCoverage = {
   webgpu: { reason: "insecure-origin", state: "unchecked" },
 };
 
-const forkAt = (version: string): HostCapabilities => ({
+interface RecordedBuild {
+  readonly commit: string | null;
+  readonly dirty: number | null;
+  readonly buildUnreadable: boolean;
+}
+
+const NO_BUILD: RecordedBuild = { buildUnreadable: false, commit: null, dirty: null };
+
+const forkAt = (version: string, build: RecordedBuild = NO_BUILD): HostCapabilities => ({
   fork: {
-    buildUnreadable: false,
-    commit: null,
+    ...build,
     dialect: "xrio",
-    dirty: null,
     knobs: {},
     packageDir: "/opt/xrio-chrome",
     personas: { speech: [] },
@@ -143,6 +149,19 @@ const forkAt = (version: string): HostCapabilities => ({
   },
   platform: "linux",
 });
+
+const reportForBuild = (build: RecordedBuild) =>
+  evaluate(
+    planIdentity({
+      capabilities: forkAt("154.0.8037.57", build),
+      device: fixedDevice,
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: "UTC",
+      mode: "headless",
+      pins: noPins,
+    }),
+    headlessLinux,
+  ).report;
 
 describe("the identity report", () => {
   it("reports an http scrape's wreq profile, with request headers unchecked", () => {
@@ -197,7 +216,7 @@ describe("the identity report", () => {
       fontEvidence: { digest: "c41f09a2", kind: "gathered", sentinel: "5e17a1b2" },
       mismatches: [],
       report: {
-        binary: { fork: null, version: "154.0.8037.57" },
+        binary: { commit: null, dirty: null, fork: null, version: "154.0.8037.57" },
         coverage: secureCoverage,
         digests: plan.chosen.digests,
         exit: { facts: { kind: "unknown" }, route: "direct" },
@@ -288,10 +307,70 @@ describe("the identity report", () => {
       tells: report.tells,
       voices: report.record.device.voices,
     }).toStrictEqual({
-      binary: { fork: "xrio", version: "154.0.8037.57" },
+      binary: { commit: null, dirty: null, fork: "xrio", version: "154.0.8037.57" },
       speech: { persona: "basharsx4-google-linux-154" },
       tells: ["headless-token", "host-zone-utc", "host-fonts", "speech-persona-skew"],
       voices: { kind: "persona", name: "basharsx4-google-linux-154" },
+    });
+  });
+
+  describe("the fork's recorded build", () => {
+    const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
+    const DEVICE_DIGEST = "86b5a7953a4dbd0eb5cd26213f154086232b261e0cb35988f33c308e3668c366";
+
+    it("reports binary.commit and binary.dirty from VERSIONS", () => {
+      const { binary, tells } = reportForBuild({
+        buildUnreadable: false,
+        commit: COMMIT,
+        dirty: 3,
+      });
+
+      expect({ binary, tells }).toStrictEqual({
+        binary: { commit: COMMIT, dirty: 3, fork: "xrio", version: "154.0.8037.57" },
+        tells: ["headless-token", "host-zone-utc", "host-fonts"],
+      });
+    });
+
+    it("reports null for both and no tell when VERSIONS records no build", () => {
+      const { binary, tells } = reportForBuild({
+        buildUnreadable: false,
+        commit: null,
+        dirty: null,
+      });
+
+      expect({ binary, tells }).toStrictEqual({
+        binary: { commit: null, dirty: null, fork: "xrio", version: "154.0.8037.57" },
+        tells: ["headless-token", "host-zone-utc", "host-fonts"],
+      });
+    });
+
+    it("tells fork-commit-unreadable when a recorded line was malformed", () => {
+      const { binary, tells } = reportForBuild({ buildUnreadable: true, commit: null, dirty: 0 });
+
+      expect({ binary, tells }).toStrictEqual({
+        binary: { commit: null, dirty: 0, fork: "xrio", version: "154.0.8037.57" },
+        tells: ["headless-token", "host-zone-utc", "host-fonts", "fork-commit-unreadable"],
+      });
+    });
+
+    it("gives two builds of one package different host digests and the same device digest", () => {
+      const digests = [
+        reportForBuild({ buildUnreadable: false, commit: null, dirty: null }),
+        reportForBuild({ buildUnreadable: false, commit: COMMIT, dirty: 0 }),
+        reportForBuild({ buildUnreadable: false, commit: COMMIT, dirty: 1 }),
+      ].map((report) => report.digests);
+
+      expect(digests.map(({ host }) => host)).toStrictEqual([
+        "8db4de099293e4d6b78a986dde3e75f783b9bb760d6589f99e41ca857e49b804",
+        "3c73050c049807ba2368456ef1825e4e2ae6ec4db3196d40a9d62e9623615e44",
+        "bc241838a7791d63c0e94b0cb2b7f663e2bbf2ae9d3690cf6a42fac686b9a463",
+      ]);
+      expect(digests.map(({ device }) => device)).toStrictEqual([
+        DEVICE_DIGEST,
+        DEVICE_DIGEST,
+        DEVICE_DIGEST,
+      ]);
     });
   });
 
@@ -309,7 +388,7 @@ describe("the identity report", () => {
       fontEvidence: { digest: "0aa1b2c3", kind: "gathered", sentinel: "9c0ffee1" },
       mismatches: [],
       report: {
-        binary: { fork: null, version: "154.0.8037.57" },
+        binary: { commit: null, dirty: null, fork: null, version: "154.0.8037.57" },
         coverage: insecureCoverage,
         digests: {
           device: "2d8b0e9006044e784b1c8773658016085faf838b559749604031e64bc30fdd08",

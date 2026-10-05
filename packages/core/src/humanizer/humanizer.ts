@@ -23,7 +23,11 @@ import type { FactTell, SurfaceExpectation } from "./verify.ts";
 
 interface ChosenIdentity {
   readonly mode: IdentityContext["mode"];
-  readonly fork: ForkFacts["dialect"] | null;
+  readonly binary: {
+    readonly fork: ForkFacts["dialect"] | null;
+    readonly commit: string | null;
+    readonly dirty: number | null;
+  };
   readonly seed: Device["seed"];
   readonly record: DeviceRecord | null;
   readonly digests: { readonly device: string | null; readonly host: string };
@@ -80,12 +84,16 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
 
   return {
     chosen: {
+      binary: {
+        commit: context.capabilities.fork?.commit ?? null,
+        dirty: context.capabilities.fork?.dirty ?? null,
+        fork: context.capabilities.fork?.dialect ?? null,
+      },
       digests: {
         device: record === null ? null : deviceDigest(record),
         host: hostDigest(context.capabilities),
       },
       exit: context.exit,
-      fork: context.capabilities.fork?.dialect ?? null,
       mode: context.mode,
       record,
       seed: device.seed,
@@ -105,6 +113,9 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
     },
     tells: [
       ...EMISSION_ORDER.flatMap((surface) => resolutions[surface].tells ?? []),
+      ...(context.capabilities.fork?.buildUnreadable === true
+        ? ["fork-commit-unreadable" as const]
+        : []),
       ...(skewed ? ["replay-host-skew" as const] : []),
     ],
   };
