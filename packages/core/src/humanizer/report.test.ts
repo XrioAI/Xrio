@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { noPins } from "../testing/no-pins.ts";
-import type { Observation } from "./contracts.ts";
+import type { HostCapabilities, Observation } from "./contracts.ts";
 import { httpIdentity, planIdentity } from "./humanizer.ts";
 import type { IdentityReport } from "./report.ts";
 import { evaluate } from "./verify.ts";
@@ -115,10 +115,24 @@ const insecureCoverage = {
   webgpu: { reason: "insecure-origin", state: "unchecked" },
 };
 
+const forkAt = (version: string): HostCapabilities => ({
+  fork: {
+    dialect: "xrio",
+    knobs: {},
+    packageDir: "/opt/xrio-chrome",
+    personas: { speech: [] },
+    version,
+  },
+  platform: "linux",
+});
+
 describe("the identity report", () => {
   it("reports an http scrape's wreq profile, with request headers unchecked", () => {
-    expect(httpIdentity(noPins).report).toStrictEqual({
-      coverage: { requestHeaders: { reason: "no-request-log", state: "unchecked" } },
+    expect(httpIdentity(noPins).report(null)).toStrictEqual({
+      coverage: {
+        httpProfileSkew: { reason: "not-observed", state: "unchecked" },
+        requestHeaders: { reason: "no-request-log", state: "unchecked" },
+      },
       locale: "en-US",
       mode: "http",
       profile: { chromeMajor: 149, platform: "linux" },
@@ -127,11 +141,27 @@ describe("the identity report", () => {
   });
 
   it.each(["fr-FR", "ja-JP"])("reports the locale %s an http scrape was pinned to", (locale) => {
-    expect(httpIdentity({ locale, timezone: undefined }).report).toMatchObject({
+    expect(httpIdentity({ locale, timezone: undefined }).report(null)).toMatchObject({
       locale,
       mode: "http",
     });
   });
+
+  it.each([
+    { client: null, tells: [], version: "no browser" },
+    { client: { platform: "linux" as const }, tells: [], version: "a stock binary" },
+    { client: forkAt("149.0.7800.10"), tells: [], version: "a fork on Chrome 149" },
+    {
+      client: forkAt("154.0.8037.57"),
+      tells: ["http-profile-skew"],
+      version: "a fork on Chrome 154",
+    },
+  ])(
+    "tells http-profile-skew only when the client's binary is $version of another major",
+    ({ client, tells }) => {
+      expect(httpIdentity(noPins).report(client).tells).toStrictEqual(tells);
+    },
+  );
 
   it("reports a headless stock scrape on Linux", () => {
     const plan = planIdentity({
@@ -386,13 +416,16 @@ describe("report independence", () => {
   });
 
   it("keeps a caller's change to an http report's profile out of the next report", () => {
-    const first = httpIdentity(noPins).report;
+    const first = httpIdentity(noPins).report(null);
 
     Object.assign(first.profile, { chromeMajor: 1 });
     Object.assign(first.coverage.requestHeaders, { state: "observed" });
 
-    expect(httpIdentity(noPins).report).toStrictEqual({
-      coverage: { requestHeaders: { reason: "no-request-log", state: "unchecked" } },
+    expect(httpIdentity(noPins).report(null)).toStrictEqual({
+      coverage: {
+        httpProfileSkew: { reason: "not-observed", state: "unchecked" },
+        requestHeaders: { reason: "no-request-log", state: "unchecked" },
+      },
       locale: "en-US",
       mode: "http",
       profile: { chromeMajor: 149, platform: "linux" },
@@ -453,7 +486,7 @@ describe("no shared object inside one report", () => {
   });
 
   it("holds for an http report", () => {
-    expect(aliasedPaths(httpIdentity(noPins).report)).toStrictEqual([]);
+    expect(aliasedPaths(httpIdentity(noPins).report(null))).toStrictEqual([]);
   });
 });
 

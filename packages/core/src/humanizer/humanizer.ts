@@ -1,6 +1,6 @@
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 
-import type { ForkFacts } from "./contracts.ts";
+import type { ForkFacts, HostCapabilities } from "./contracts.ts";
 import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
 import type { IdentityIntent } from "./intent.ts";
@@ -90,7 +90,7 @@ export interface HttpInputs {
 
 export interface HttpPlan {
   readonly inputs: HttpInputs;
-  readonly report: HttpIdentityReport;
+  readonly report: (client: HostCapabilities | null) => HttpIdentityReport;
 }
 
 export const httpIdentity = (pins: IdentityIntent): HttpPlan => {
@@ -103,6 +103,6 @@ export const httpIdentity = (pins: IdentityIntent): HttpPlan => {
       headers: { "accept-language": header },
       os: HTTP_PROFILE.platform,
     },
-    report: httpReport(tag, HTTP_PROFILE),
+    report: (client) => httpReport(tag, HTTP_PROFILE, client),
   };
 };

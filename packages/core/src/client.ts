@@ -120,7 +120,9 @@ export class XrioClient {
 
   async #loadDocument(request: DocumentRequest): Promise<SourceDocument> {
     const loading =
-      request.mode === "http" ? loadHttpDocument(request) : this.#browsers.load(request);
+      request.mode === "http"
+        ? loadHttpDocument(request, this.#hostFacts, this.#defaults.mode.browserPath)
+        : this.#browsers.load(request);
 
     this.#inFlight.add(loading);
 

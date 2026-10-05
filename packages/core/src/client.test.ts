@@ -10,7 +10,7 @@ import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import type { IdentityReport } from "./client.ts";
 import { scratchRoot } from "./sources/browser/browser-process.ts";
 import { fakeChromePath } from "./testing/fake-chrome-path.ts";
-import { fakeForkPath, hangDumpFor } from "./testing/fake-fork.ts";
+import { dumpsRun, fakeForkPath, hangDumpFor } from "./testing/fake-fork.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
 import type { FixtureServer } from "./testing/fixture-server.ts";
@@ -649,6 +649,115 @@ describe("XrioClient browser admission", () => {
 });
 
 describe("the client's host facts", () => {
+  it("starts no probe when constructed or closed without scraping", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      const browserPath = await fakeForkPath("kit", { root });
+
+      const client = new XrioClient({
+        browserPath,
+        cacheDir: nodePath.join(root, "cache"),
+        mode: "headless",
+      });
+
+      await client.close();
+      await expect(dumpsRun(browserPath)).resolves.toBe(0);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("shares one probe across clients, and each http scrape compares its client's binary", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      await using fixture = await startFixtureServer(routes);
+      const browserPath = await fakeForkPath("kit", { root });
+
+      const comparisonPath = await fakeForkPath("kit", {
+        root: nodePath.join(root, "comparison"),
+        version: "149.0.7800.10",
+      });
+
+      const cacheDir = nodePath.join(root, "cache");
+      await using first = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+      await using second = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+
+      await using older = new XrioClient({
+        browserPath: comparisonPath,
+        cacheDir,
+        mode: "headless",
+      });
+
+      const request = {
+        format: "html",
+        mode: "http",
+        url: `${fixture.origin}/pages/document`,
+      } as const;
+
+      const pages = await Promise.all([
+        first.scrape(request),
+        second.scrape(request),
+        older.scrape(request),
+      ]);
+
+      expect(pages.map((page) => page.identity.tells)).toStrictEqual([
+        ["http-profile-skew"],
+        ["http-profile-skew"],
+        [],
+      ]);
+      await expect(dumpsRun(browserPath)).resolves.toBe(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("awaits a slow comparison probe under the http deadline, so timing cannot hide skew", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      await using fixture = await startFixtureServer(routes);
+      const browserPath = await fakeForkPath("kit", { root });
+
+      await hangDumpFor(browserPath, 0.5);
+
+      await using client = new XrioClient({
+        browserPath,
+        cacheDir: nodePath.join(root, "cache"),
+        mode: "headless",
+      });
+
+      const page = await client.scrape({
+        format: "html",
+        mode: "http",
+        timeoutMs: 5000,
+        url: `${fixture.origin}/pages/document`,
+      });
+
+      expect(page.identity).toMatchObject({
+        coverage: { httpProfileSkew: { state: "observed" } },
+        mode: "http",
+        tells: ["http-profile-skew"],
+      });
+      await expect(dumpsRun(browserPath)).resolves.toBe(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("reports the comparison unchecked for an http client without a binary", async () => {
+    await using fixture = await startFixtureServer(routes);
+    await using client = new XrioClient({ mode: "http" });
+    const page = await client.scrape({ format: "html", url: `${fixture.origin}/pages/document` });
+
+    expect(page.identity).toMatchObject({
+      coverage: { httpProfileSkew: { reason: "not-observed", state: "unchecked" } },
+      mode: "http",
+      tells: [],
+    });
+  });
+
   it("answers at the deadline mid-probe, and closes only once the probe is gone", async () => {
     const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
 

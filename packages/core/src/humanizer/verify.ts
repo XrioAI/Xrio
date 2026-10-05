@@ -47,7 +47,11 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
-export type FactTell = "host-zone-utc" | "exit-unknown" | "speech-persona-skew";
+export type FactTell =
+  | "host-zone-utc"
+  | "exit-unknown"
+  | "speech-persona-skew"
+  | "http-profile-skew";
 
 export type IdentityTell =
   | "no-taskbar"

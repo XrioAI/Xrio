@@ -4,12 +4,14 @@ import type { CreateSessionOptions, Response as ClientResponse, Session } from "
 import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
+import type { HostCapabilities } from "../humanizer/contracts.ts";
 import { httpIdentity } from "../humanizer/humanizer.ts";
 import type { HttpInputs } from "../humanizer/humanizer.ts";
 import type { HttpIdentityReport } from "../humanizer/report.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
+import type { HostFacts } from "./browser/host-facts.ts";
 import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";
 
@@ -114,7 +116,7 @@ interface FollowedResponse {
 const readDocument = async (
   { requestUrls, response }: FollowedResponse,
   deadline: Deadline,
-  identity: HttpIdentityReport,
+  identityNow: () => HttpIdentityReport,
 ): Promise<SourceDocument> => {
   const details = responseDetailsFrom(response.url, response.status, response.headers);
   const contentType = details.headers["content-type"] ?? "";
@@ -149,7 +151,7 @@ const readDocument = async (
     ...details,
     block: classifyResponse({ html, requestUrls, response: details }),
     html,
-    identity,
+    identity: identityNow(),
     requestUrls,
   };
 };
@@ -275,12 +277,26 @@ const fetchFollowingRedirects = async (
   );
 };
 
-export const loadHttpDocument = async ({
-  url,
-  pins,
-  proxy,
-  deadline,
-}: DocumentRequest): Promise<SourceDocument> => {
+const comparisonFacts = async (
+  hostFacts: HostFacts,
+  comparisonBinary: string | undefined,
+  deadline: Deadline,
+): Promise<HostCapabilities | null> => {
+  try {
+    return await hostFacts.snapshotFor(comparisonBinary, deadline);
+  } catch {
+    deadline.throwIfExpired();
+
+    return null;
+  }
+};
+
+export const loadHttpDocument = async (
+  { url, pins, proxy, deadline }: DocumentRequest,
+  hostFacts: HostFacts,
+  comparisonBinary: string | undefined,
+): Promise<SourceDocument> => {
+  const client = await comparisonFacts(hostFacts, comparisonBinary, deadline);
   const { inputs, report } = httpIdentity(pins);
 
   await using relay = await startRelay(proxy, deadline);
@@ -294,6 +310,6 @@ export const loadHttpDocument = async ({
   return await readDocument(
     await fetchFollowingRedirects(session, url, deadline, relay),
     deadline,
-    report,
+    () => report(client),
   );
 };

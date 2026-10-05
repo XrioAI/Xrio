@@ -222,6 +222,7 @@ describe("XrioClient types", () => {
       readonly ageMs: number;
     }>();
     expectTypeOf<HttpIdentityReport["coverage"]>().toEqualTypeOf<{
+      readonly httpProfileSkew: Coverage;
       readonly requestHeaders: Coverage;
     }>();
   });

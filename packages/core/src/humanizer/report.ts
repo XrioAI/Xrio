@@ -1,4 +1,4 @@
-import type { AfterCapture, ClientHints, Observation } from "./contracts.ts";
+import type { AfterCapture, ClientHints, HostCapabilities, Observation } from "./contracts.ts";
 import type { ExitChoice, IdentityContext, SurfaceChoices } from "./surfaces.ts";
 import type { IdentityMismatch, IdentityTell } from "./verify.ts";
 
@@ -95,7 +95,7 @@ export interface HttpIdentityReport {
   readonly mode: "http";
   readonly locale: string;
   readonly profile: HttpProfile;
-  readonly coverage: { readonly requestHeaders: Coverage };
+  readonly coverage: { readonly requestHeaders: Coverage; readonly httpProfileSkew: Coverage };
   readonly tells: readonly IdentityTell[];
 }
 
@@ -200,10 +200,23 @@ export const observedOf = (observation: Observation): ObservedIdentity => {
   };
 };
 
-export const httpReport = (locale: string, profile: HttpProfile): HttpIdentityReport => ({
-  coverage: { requestHeaders: unchecked("no-request-log") },
+const profileSkewed = (profile: HttpProfile, client: HostCapabilities | null): boolean => {
+  const version = client?.fork?.version;
+
+  return version !== undefined && Number(version.split(".", 1)[0]) !== profile.chromeMajor;
+};
+
+export const httpReport = (
+  locale: string,
+  profile: HttpProfile,
+  client: HostCapabilities | null,
+): HttpIdentityReport => ({
+  coverage: {
+    httpProfileSkew: client?.fork === undefined ? unchecked("not-observed") : observedCoverage(),
+    requestHeaders: unchecked("no-request-log"),
+  },
   locale,
   mode: "http",
   profile: { ...profile },
-  tells: [],
+  tells: profileSkewed(profile, client) ? ["http-profile-skew"] : [],
 });
