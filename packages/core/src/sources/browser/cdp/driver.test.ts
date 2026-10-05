@@ -12,8 +12,8 @@ import { fixedDevice } from "../../../testing/fixed-seed.ts";
 import { leftovers, nothingLeft } from "../../../testing/leftovers.ts";
 import { manualClock } from "../../../testing/manual-clock.ts";
 import { noPins } from "../../../testing/no-pins.ts";
+import { plannedScrapes } from "../../../testing/planned-scrapes.ts";
 import { createScratchDir, removeScratchDir } from "../browser-process.ts";
-import { createBrowsers } from "../browsers.ts";
 import { createCapabilityProbe } from "../capabilities.ts";
 import { planLaunch } from "../launch-plan.ts";
 import { CLOSE_BUDGET_MS } from "../port.ts";
@@ -64,10 +64,10 @@ describe("the CDP driver's launch", () => {
       },
     };
 
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(SCRAPE_DEADLINE_MS, undefined, watched);
 
-    const loading = browsers.load({
+    const loading = browsers.visit({
       browserArgs: [],
       browserPath: await fakeChromePath("slow-start"),
       deadline,
@@ -75,7 +75,7 @@ describe("the CDP driver's launch", () => {
       pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
-    });
+    }).document;
 
     await capStarted.promise;
     advance(LAUNCH_CAP_MS);
@@ -91,12 +91,12 @@ describe("the CDP driver's launch", () => {
   });
 
   it("reports a browser that dies after cutting off the capture as crashed, not as a timeout", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     try {
       await expect(
-        browsers.load({
+        browsers.visit({
           browserArgs: [],
           browserPath: await fakeChromePath("exit-after-capture-error"),
           deadline,
@@ -104,7 +104,7 @@ describe("the CDP driver's launch", () => {
           pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
-        }),
+        }).document,
       ).rejects.toMatchObject({ code: "BROWSER_CRASHED" });
     } finally {
       await browsers.close();
@@ -277,11 +277,11 @@ describe("the CDP driver's documents", () => {
   });
 
   it("ignores the startup about:blank commit and returns the navigated page", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     try {
-      const document = await browsers.load({
+      const document = await browsers.visit({
         browserArgs: [],
         browserPath: await fakeChromePath("startup-blank-commit"),
         deadline,
@@ -289,7 +289,7 @@ describe("the CDP driver's documents", () => {
         pins: noPins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
-      });
+      }).document;
 
       expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
       expect(document.html).toContain("<p>fake page</p>");
@@ -317,11 +317,11 @@ describe("the CDP driver's capture", () => {
       };
 
       subscribe("xrio:event", record);
-      const browsers = createBrowsers(cdpDriver, 1);
+      const browsers = plannedScrapes(cdpDriver, 1);
       using deadline = startDeadline(10_000);
 
       try {
-        const document = await browsers.load({
+        const document = await browsers.visit({
           browserArgs: [],
           browserPath: await fakeChromePath(scenario),
           deadline,
@@ -329,7 +329,7 @@ describe("the CDP driver's capture", () => {
           pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
-        });
+        }).document;
 
         expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
         expect(document.html).toContain("<p>fake page</p>");

@@ -7,7 +7,6 @@ import { parseArgs } from "node:util";
 import { startDeadline } from "../src/deadline.ts";
 import { readHostZone } from "../src/humanizer/host-zone.ts";
 import { planIdentity } from "../src/humanizer/humanizer.ts";
-import { createBrowsers } from "../src/sources/browser/browsers.ts";
 import { createCapabilityProbe } from "../src/sources/browser/capabilities.ts";
 import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
@@ -16,6 +15,7 @@ import { conformancePages } from "../src/testing/conformance-pages.ts";
 import { fixedDevice, fixedRandom } from "../src/testing/fixed-seed.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
 import { noPins } from "../src/testing/no-pins.ts";
+import { plannedScrapes } from "../src/testing/planned-scrapes.ts";
 
 const SCRAPE_TIMEOUT_MS = 30_000;
 
@@ -103,13 +103,13 @@ const scrapeOnce = async (): Promise<Sample> => {
   };
 
   subscribe("xrio:stage", record);
-  const browsers = createBrowsers(cdpDriver, 1, { random: fixedRandom });
+  const browsers = plannedScrapes(cdpDriver, 1, { random: fixedRandom });
   const started = performance.now();
 
   try {
     using deadline = startDeadline(SCRAPE_TIMEOUT_MS);
 
-    await browsers.load({
+    await browsers.visit({
       browserArgs: [],
       browserPath: chromePath(),
       deadline,
@@ -117,7 +117,7 @@ const scrapeOnce = async (): Promise<Sample> => {
       pins: noPins,
       proxy: undefined,
       url: new URL(values.route, server.origin),
-    });
+    }).document;
     sample.answer = performance.now() - started;
   } finally {
     await browsers.close();

@@ -20,9 +20,8 @@ import {
 import { startDeadline, untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { isXrioError } from "../../errors.ts";
-import type { HostCapabilities, Observation } from "../../humanizer/contracts.ts";
-import { planIdentity } from "../../humanizer/humanizer.ts";
-import { AFTER_CAPTURE_READ, evaluate } from "../../humanizer/verify.ts";
+import type { HostCapabilities } from "../../humanizer/contracts.ts";
+import { AFTER_CAPTURE_READ } from "../../humanizer/verify.ts";
 import { HeldDeadline } from "../../lifetime.ts";
 import { anonymousSessions } from "../../sessions/session.ts";
 import type { SessionManager } from "../../sessions/session.ts";
@@ -31,30 +30,35 @@ import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
 import { fakeForkPath } from "../../testing/fake-fork.ts";
 import type { FakeForkScenario } from "../../testing/fake-fork.ts";
 import { fixedRandom, fixedSeed } from "../../testing/fixed-seed.ts";
-import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
+import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
 import { noPins } from "../../testing/no-pins.ts";
+import { plannedScrapes } from "../../testing/planned-scrapes.ts";
+import type { PlannedScrapes, PlanningDependencies } from "../../testing/planned-scrapes.ts";
 import { stageTimeline } from "../../testing/stage-timeline.ts";
 import { scratchRoot } from "./browser-process.ts";
-import { createBrowsers as createBrowsersWithDefaults } from "./browsers.ts";
-import type { Browsers } from "./browsers.ts";
 import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import type { RetireSteps } from "./chrome-scope.ts";
 import { createFontEvidenceStore } from "./font-evidence.ts";
+import type { FontEvidenceStore } from "./font-evidence.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import type { BrowserDriver } from "./port.ts";
 
-const createBrowsers: typeof createBrowsersWithDefaults = (driver, maxBrowsers, overrides) => {
+const plannedVisits = (
+  driver: BrowserDriver,
+  capacity = 1,
+  overrides: PlanningDependencies = {},
+): PlannedScrapes => {
   const evidence = path.join(tmpdir(), `xrio-evidence-${randomUUID()}`);
 
   onTestFinished(async () => {
     await rm(evidence, { force: true, recursive: true });
   });
 
-  return createBrowsersWithDefaults(driver, maxBrowsers, {
-    fontEvidence: createFontEvidenceStore({ root: evidence }),
+  return plannedScrapes(driver, capacity, {
+    fonts: createFontEvidenceStore({ root: evidence }),
     ...overrides,
   });
 };
@@ -130,11 +134,11 @@ const removeLeftoverScratch = async (): Promise<void> => {
 };
 
 const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) => {
-  const browsers = createBrowsers(cdpDriver, 2);
+  const browsers = plannedVisits(cdpDriver, 2);
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
-    return await browsers.load({
+    return await browsers.visit({
       browserArgs: [],
       browserPath: await fakeChromePath(scenario),
       deadline,
@@ -142,21 +146,21 @@ const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) 
       pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
-    });
+    }).document;
   } finally {
     await browsers.close();
   }
 };
 
 const loadWithFork = async (scenario: FakeForkScenario, root: string, version?: string) => {
-  const browsers = createBrowsers(cdpDriver, 1, {
-    hostCapabilities: createCapabilityProbe({ root: path.join(root, "scratch") }),
+  const browsers = plannedVisits(cdpDriver, 1, {
+    host: createCapabilityProbe({ root: path.join(root, "scratch") }),
   });
 
   using deadline = startDeadline(10_000);
 
   try {
-    return await browsers.load({
+    return await browsers.visit({
       browserArgs: [],
       browserPath: await fakeForkPath(scenario, { root, version }),
       deadline,
@@ -164,7 +168,7 @@ const loadWithFork = async (scenario: FakeForkScenario, root: string, version?: 
       pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
-    });
+    }).document;
   } finally {
     await browsers.close();
   }
@@ -301,11 +305,11 @@ describe("browser lifecycle on the fake browser", () => {
         }),
     };
 
-    const browsers = createBrowsers(observedDriver, 1);
+    const browsers = plannedVisits(observedDriver, 1);
     using deadline = startDeadline(LAUNCH_DEADLINE_MS);
 
     await expect(
-      browsers.load({
+      browsers.visit({
         browserArgs: [],
         browserPath: await fakeChromePath("slow-start"),
         deadline,
@@ -313,7 +317,7 @@ describe("browser lifecycle on the fake browser", () => {
         pins: noPins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
-      }),
+      }).document,
     ).rejects.toMatchObject({ code: "TIMEOUT" });
     expect(cleanups).toStrictEqual([{ settled: false }]);
     await browsers.close();
@@ -328,11 +332,11 @@ describe("browser lifecycle on the fake browser", () => {
     "rejects with TIMEOUT when the deadline ends a $stage that outlasts it",
     async ({ scenario }) => {
       const { advance, clock } = manualClock();
-      const browsers = createBrowsers(cdpDriver, 1);
+      const browsers = plannedVisits(cdpDriver, 1);
       using deadline = startDeadline(LAUNCH_DEADLINE_MS, undefined, clock);
 
       const settled = Promise.allSettled([
-        browsers.load({
+        browsers.visit({
           browserArgs: [],
           browserPath: await fakeChromePath(scenario),
           deadline,
@@ -340,7 +344,7 @@ describe("browser lifecycle on the fake browser", () => {
           pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
-        }),
+        }).document,
       ]);
 
       await delay(4 * LAUNCH_DEADLINE_MS);
@@ -364,17 +368,17 @@ const queuedRequest = async () => ({
   url: new URL("https://fake.test/"),
 });
 
-describe(createBrowsers, () => {
+describe("planned visits", () => {
   it("queues past maxBrowsers and counts the wait against the deadline", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     const request = await queuedRequest();
     using held = startDeadline(1500);
     using queued = startDeadline(200);
 
     const launchesBefore = launchStages.length;
 
-    const first = browsers.load({ ...request, deadline: held });
-    const second = browsers.load({ ...request, deadline: queued });
+    const first = browsers.visit({ ...request, deadline: held }).document;
+    const second = browsers.visit({ ...request, deadline: queued }).document;
 
     await expect(second).rejects.toMatchObject({ code: "TIMEOUT" });
     await expect(first).rejects.toMatchObject({ code: "TIMEOUT" });
@@ -383,7 +387,7 @@ describe(createBrowsers, () => {
   });
 
   it("lets accepted work finish when closed, and rejects new work afterwards", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     const request = await queuedRequest();
     const normal = { ...request, browserPath: await fakeChromePath("normal") };
     using held = startDeadline(1000);
@@ -391,10 +395,10 @@ describe(createBrowsers, () => {
 
     const settled: string[] = [];
 
-    const first = browsers.load({ ...request, deadline: held });
+    const first = browsers.visit({ ...request, deadline: held }).document;
 
     const second = (async () => {
-      const document = await browsers.load({ ...normal, deadline: queued });
+      const document = await browsers.visit({ ...normal, deadline: queued }).document;
 
       settled.push("queued scrape");
 
@@ -410,7 +414,7 @@ describe(createBrowsers, () => {
     await expect(second).resolves.toMatchObject({ status: 200 });
     await closing;
     expect(settled).toStrictEqual(["queued scrape", "close"]);
-    await expect(browsers.load({ ...normal, deadline: queued })).rejects.toMatchObject({
+    await expect(browsers.capture({ ...normal, deadline: queued })).rejects.toMatchObject({
       code: "CLIENT_CLOSED",
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -436,12 +440,12 @@ const visitOn = async (
   { abortAfterMs, scenario, timeoutMs = 10_000 }: VisitCase,
   steps: Partial<RetireSteps> = {},
 ) => {
-  const browsers = createBrowsers(driver, 1, steps);
+  const browsers = plannedVisits(driver, 1, { retire: steps });
   const owner = new AbortController();
   const browserPath = await fakeChromePath(scenario);
   using deadline: Deadline & Disposable = startDeadline(timeoutMs);
 
-  const visit = browsers.start({
+  const visit = browsers.visit({
     browserArgs: [],
     browserPath,
     deadline: deadline.boundTo(owner.signal),
@@ -499,19 +503,19 @@ describe("browser visits on the fake browser", () => {
     },
   );
 
-  it("removes the visit's scratch directory when planning throws", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+  it("leaves no scratch directory behind when planning throws", async () => {
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: async () => await Promise.reject(new Error("Planning failed.")),
+    });
+
     using deadline = startDeadline(10_000);
 
-    const visit = browsers.start({
+    const visit = browsers.visit({
       browserArgs: [],
-      get browserPath(): string {
-        throw new Error("Planning failed.");
-      },
+      browserPath: await fakeChromePath("normal"),
       deadline,
       mode: "headless",
       pins: noPins,
-      proxy: undefined,
       url: new URL("https://fake.test/page"),
     });
 
@@ -556,10 +560,10 @@ describe("browser visits on the fake browser", () => {
   });
 });
 
-type PlanningOverrides = NonNullable<Parameters<typeof createBrowsers>[2]>;
+type PlanningOverrides = NonNullable<Parameters<typeof plannedVisits>[2]>;
 
 const loadTwice = async (steps: PlanningOverrides, firstScenario: string) => {
-  const browsers = createBrowsers(cdpDriver, 1, steps);
+  const browsers = plannedVisits(cdpDriver, 1, steps);
   using deadline = startDeadline(10_000);
 
   const request = {
@@ -572,11 +576,11 @@ const loadTwice = async (steps: PlanningOverrides, firstScenario: string) => {
   };
 
   const first = await settledValue(
-    browsers.load({ ...request, browserPath: await fakeChromePath(firstScenario) }),
+    browsers.visit({ ...request, browserPath: await fakeChromePath(firstScenario) }).document,
   );
 
   const second = await settledValue(
-    browsers.load({ ...request, browserPath: await fakeChromePath("normal") }),
+    browsers.visit({ ...request, browserPath: await fakeChromePath("normal") }).document,
   );
 
   await browsers.close();
@@ -610,19 +614,28 @@ describe("planning between admission and start", () => {
   });
 
   it("releases admission when the identity step throws before start", async () => {
-    let plans = 0;
+    let claims = 0;
+    const root = path.join(tmpdir(), `xrio-evidence-${randomUUID()}`);
 
-    const failFirstIdentity: typeof planIdentity = (context) => {
-      plans += 1;
+    onTestFinished(async () => {
+      await rm(root, { force: true, recursive: true });
+    });
 
-      if (plans === 1) {
-        throw new Error("The identity step failed.");
-      }
+    const store = createFontEvidenceStore({ root });
 
-      return planIdentity(context);
+    const failFirstClaim: FontEvidenceStore = {
+      claim: async (...claim) => {
+        claims += 1;
+
+        if (claims === 1) {
+          throw new Error("The identity step failed.");
+        }
+
+        return await store.claim(...claim);
+      },
     };
 
-    await expect(loadTwice({ planIdentity: failFirstIdentity }, "normal")).resolves.toMatchObject({
+    await expect(loadTwice({ fonts: failFirstClaim }, "normal")).resolves.toMatchObject({
       first: { error: { message: "The identity step failed." } },
       left: nothingLeft,
       second: { value: { status: 200 } },
@@ -696,16 +709,16 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(failedCloseDriver, 1);
+    const browsers = plannedVisits(failedCloseDriver, 1);
 
     using deadline = startDeadline(10_000);
 
     try {
       await expect(
-        browsers.load({
+        browsers.visit({
           ...(await normalRequest(deadline)),
           browserPath: await fakeChromePath("ignore-close"),
-        }),
+        }).document,
       ).resolves.toMatchObject({ status: 200 });
       await browsers.close();
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -741,17 +754,17 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(failedLaunchDriver, 1);
+    const browsers = plannedVisits(failedLaunchDriver, 1);
 
     using deadline = startDeadline(10_000);
     const request = await normalRequest(deadline);
 
-    const first = browsers.load({
+    const first = browsers.visit({
       ...request,
       browserPath: await fakeChromePath("ignore-close"),
-    });
+    }).document;
 
-    const second = browsers.load(request);
+    const second = browsers.visit(request).document;
 
     try {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
@@ -804,16 +817,16 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(failedLaunchDriver, 1);
+    const browsers = plannedVisits(failedLaunchDriver, 1);
     using deadline = startDeadline(15_000);
     const request = await normalRequest(deadline);
 
-    const first = browsers.load({
+    const first = browsers.visit({
       ...request,
       browserPath: await fakeChromePath("ignore-close"),
-    });
+    }).document;
 
-    const second = browsers.load(request);
+    const second = browsers.visit(request).document;
 
     try {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
@@ -873,16 +886,16 @@ describe("bounded teardown on the fake browser", () => {
       },
     };
 
-    const browsers = createBrowsers(hungCloseDriver, 1);
+    const browsers = plannedVisits(hungCloseDriver, 1);
     using deadline = startDeadline(10_000);
     const request = await normalRequest(deadline);
 
-    const first = browsers.load({
+    const first = browsers.visit({
       ...request,
       browserPath: await fakeChromePath("ignore-close"),
-    });
+    }).document;
 
-    const second = browsers.load(request);
+    const second = browsers.visit(request).document;
 
     try {
       await expect(first).resolves.toMatchObject({ status: 200 });
@@ -899,14 +912,14 @@ describe("bounded teardown on the fake browser", () => {
     const hangingExit = Promise.withResolvers<boolean>();
     const reported = incompleteTeardowns.length;
 
-    const browsers = createBrowsers(cdpDriver, 1, {
-      retireProcessGroup: async () => await hangingExit.promise,
+    const browsers = plannedVisits(cdpDriver, 1, {
+      retire: { retireProcessGroup: async () => await hangingExit.promise },
     });
 
     using deadline = startDeadline(20_000);
 
     try {
-      await expect(browsers.load(await normalRequest(deadline))).resolves.toMatchObject({
+      await expect(browsers.visit(await normalRequest(deadline)).document).resolves.toMatchObject({
         status: 200,
       });
       await expect(settlesWithinTeardownBudget(browsers.close())).resolves.toBeTruthy();
@@ -931,17 +944,19 @@ describe("bounded teardown on the fake browser", () => {
     const removals: { directory: string; signal: AbortSignal | undefined }[] = [];
     const reported = incompleteTeardowns.length;
 
-    const browsers = createBrowsers(cdpDriver, 1, {
-      removeScratchDir: async (scratch, signal) => {
-        removals.push({ directory: scratch.path, signal });
-        await hangingRemoval.promise;
+    const browsers = plannedVisits(cdpDriver, 1, {
+      retire: {
+        removeScratchDir: async (scratch, signal) => {
+          removals.push({ directory: scratch.path, signal });
+          await hangingRemoval.promise;
+        },
       },
     });
 
     using deadline = startDeadline(20_000);
 
     try {
-      await expect(browsers.load(await normalRequest(deadline))).resolves.toMatchObject({
+      await expect(browsers.visit(await normalRequest(deadline)).document).resolves.toMatchObject({
         status: 200,
       });
       await expect(settlesWithinTeardownBudget(browsers.close())).resolves.toBeTruthy();
@@ -996,11 +1011,11 @@ describe("process ownership reported by the driver", () => {
       },
     };
 
-    const browsers = createBrowsers(silentDriver, 1);
+    const browsers = plannedVisits(silentDriver, 1);
     using deadline = startDeadline(10_000);
 
     try {
-      await expect(browsers.load(await normalRequest(deadline))).rejects.toSatisfy(
+      await expect(browsers.visit(await normalRequest(deadline)).document).rejects.toSatisfy(
         (error) =>
           isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
           error.message.includes("without reporting process ownership"),
@@ -1035,9 +1050,9 @@ describe("visits started directly with start", () => {
       },
     };
 
-    const browsers = createBrowsers(heldDriver, 1);
+    const browsers = plannedVisits(heldDriver, 1);
     using deadline = startDeadline(10_000);
-    const visit = browsers.start(await normalRequest(deadline));
+    const visit = browsers.visit(await normalRequest(deadline));
 
     await launchEntered.promise;
 
@@ -1064,10 +1079,10 @@ describe("visits started directly with start", () => {
     process.on("unhandledRejection", recordUnhandled);
 
     try {
-      const browsers = createBrowsers(cdpDriver, 1);
+      const browsers = plannedVisits(cdpDriver, 1);
       using deadline = startDeadline(10_000);
 
-      const visit = browsers.start({
+      const visit = browsers.visit({
         ...(await normalRequest(deadline)),
         browserPath: await fakeChromePath("no-start"),
       });
@@ -1084,9 +1099,9 @@ describe("visits started directly with start", () => {
   });
 
   it("makes close wait for the visit to close", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     using deadline = startDeadline(10_000);
-    const visit = browsers.start(await normalRequest(deadline));
+    const visit = browsers.visit(await normalRequest(deadline));
     const order: string[] = [];
 
     await Promise.all([
@@ -1106,30 +1121,28 @@ describe("visits started directly with start", () => {
   });
 
   it("refuses a visit after close with CLIENT_CLOSED and launches nothing", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     using deadline = startDeadline(10_000);
     using stages = stageTimeline(new Set(["queue", "launch"]));
 
     await browsers.close();
 
-    const visit = stages.recording(async () => browsers.start(await normalRequest(deadline)));
-    const { closed, document } = await visit;
-
-    await expect(document).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
-    await expect(closed).resolves.toStrictEqual({ exited: true });
+    await expect(
+      stages.recording(async () => browsers.visit(await normalRequest(deadline))),
+    ).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
     expect(stages.timeline).toStrictEqual([]);
   });
 
   it("queues a load behind a started visit on maxBrowsers 1", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     using deadline = startDeadline(20_000);
     using stages = stageTimeline(new Set(["launch", "teardown"]));
     const request = await normalRequest(deadline);
 
     await stages.recording(async () => {
-      const visit = browsers.start(request);
+      const visit = browsers.visit(request);
 
-      await Promise.all([visit.document, visit.closed, browsers.load(request)]);
+      await Promise.all([visit.document, visit.closed, browsers.visit(request).document]);
     });
     await browsers.close();
 
@@ -1154,31 +1167,18 @@ const launchPlanOf = async (
     },
   };
 
-  const browsers = createBrowsers(recordingDriver, 1, steps);
+  const browsers = plannedVisits(recordingDriver, 1, steps);
   using deadline = startDeadline(10_000);
 
-  await browsers.load({
+  await browsers.visit({
     ...(await normalRequest(deadline)),
     browserArgs,
     mode,
     pins: { ...noPins, timezone },
-  });
+  }).document;
   await browsers.close();
 
   return launched[0];
-};
-
-const changeHostAfterSession: SessionManager = {
-  hold: async (intent, checks, deadline) => {
-    void (async () => {
-      await nextTurn();
-      vi.stubEnv("TZ", "Europe/Berlin");
-      vi.stubEnv("DISPLAY", ":2");
-      vi.stubEnv("XAUTHORITY", "/tmp/second.Xauthority");
-    })();
-
-    return await anonymousSessions().hold(intent, checks, deadline);
-  },
 };
 
 describe("the identity a visit launches Chrome with", () => {
@@ -1232,33 +1232,6 @@ describe("the identity a visit launches Chrome with", () => {
     expect(plan?.env.TZ).toBe(new Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
-  it("reads the host's zone, display and Xauthority together, after the scratch is created and before planning", async () => {
-    vi.stubEnv("TZ", "Asia/Kolkata");
-    vi.stubEnv("DISPLAY", ":1");
-    vi.stubEnv("XAUTHORITY", "/tmp/first.Xauthority");
-
-    const scratchWhenPlanning: number[] = [];
-
-    const changeHostMidPlan: typeof planIdentity = (context) => {
-      scratchWhenPlanning.push(ownedScratchDirs().length);
-      vi.stubEnv("TZ", "UTC");
-      vi.stubEnv("DISPLAY", ":3");
-      vi.stubEnv("XAUTHORITY", "/tmp/third.Xauthority");
-
-      return planIdentity(context);
-    };
-
-    const plan = await launchPlanOf(
-      { planIdentity: changeHostMidPlan, sessions: changeHostAfterSession },
-      "headed",
-    );
-
-    expect({ env: plan?.env, scratchWhenPlanning }).toMatchObject({
-      env: { DISPLAY: ":2", TZ: "Europe/Berlin", XAUTHORITY: "/tmp/second.Xauthority" },
-      scratchWhenPlanning: [1],
-    });
-  });
-
   it("writes the checked font stack's fonts.conf into the scratch before Chrome starts", async () => {
     const seen: { file: string | undefined; config: string }[] = [];
 
@@ -1274,12 +1247,11 @@ describe("the identity a visit launches Chrome with", () => {
 
     using deadline = startDeadline(10_000);
 
-    const browsers = createBrowsers(readingDriver, 1, {
-      hostCapabilities: async () =>
-        await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" }),
+    const browsers = plannedVisits(readingDriver, 1, {
+      host: async () => await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" }),
     });
 
-    await browsers.load(await normalRequest(deadline));
+    await browsers.visit(await normalRequest(deadline)).document;
     await browsers.close();
 
     expect(seen).toHaveLength(1);
@@ -1314,7 +1286,7 @@ describe("the identity a visit launches Chrome with", () => {
     "selects the GL backend and the media devices from the capabilities of $host",
     async ({ capabilities, switches }) => {
       const plan = await launchPlanOf({
-        hostCapabilities: async () => await Promise.resolve(capabilities),
+        host: async () => await Promise.resolve(capabilities),
       });
 
       expect(
@@ -1347,22 +1319,22 @@ const readingWith = (read: (deadline: Deadline) => Promise<string>): BrowserDriv
   },
 });
 
-const FAKE_PRODUCT = { headless: true, major: 154, version: "154.0.8037.57" } as const;
-
 describe("the launch identity check", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
   it("plans the identity, then runs as the verify stage after launch and before navigation", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     using stages = stageTimeline(
       new Set(["identity", "launch", "verify", "navigation", "capture", "teardown"]),
     );
 
-    await stages.recording(async () => await browsers.load(await normalRequest(deadline)));
+    await stages.recording(
+      async () => await browsers.visit(await normalRequest(deadline)).document,
+    );
     await browsers.close();
     expect(stages.timeline).toStrictEqual([
       "identity",
@@ -1377,13 +1349,13 @@ describe("the launch identity check", () => {
   it("resolves the document with the report of what the launch read", async () => {
     vi.stubEnv("TZ", "UTC");
 
-    const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: async () => await Promise.resolve({ platform: "linux" }),
       random: fixedRandom,
     });
 
     using deadline = startDeadline(10_000);
-    const document = await browsers.load(await normalRequest(deadline));
+    const document = await browsers.visit(await normalRequest(deadline)).document;
 
     await browsers.close();
     expect(document.identity).toMatchObject({
@@ -1415,16 +1387,16 @@ describe("the launch identity check", () => {
   it("reports a pinned UTC as the caller's choice, not as the host's", async () => {
     vi.stubEnv("TZ", "UTC");
 
-    const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: async () => await Promise.resolve({ platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
 
-    const document = await browsers.load({
+    const document = await browsers.visit({
       ...(await normalRequest(deadline)),
       pins: { ...noPins, timezone: "UTC" },
-    });
+    }).document;
 
     await browsers.close();
     expect(document.identity).toMatchObject({
@@ -1436,15 +1408,7 @@ describe("the launch identity check", () => {
   it("rejects a drifted zone before navigation, names it, and still tears Chrome down", async () => {
     vi.stubEnv("TZ", "America/Chicago");
 
-    const observed: Observation[] = [];
-
-    const recordingEvaluate: typeof evaluate = (expected, observation) => {
-      observed.push(observation);
-
-      return evaluate(expected, observation);
-    };
-
-    const browsers = createBrowsers(cdpDriver, 1, { evaluate: recordingEvaluate });
+    const browsers = plannedVisits(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     using stages = stageTimeline(
@@ -1452,7 +1416,7 @@ describe("the launch identity check", () => {
     );
 
     const visit = stages.recording(async () =>
-      browsers.start({
+      browsers.visit({
         ...(await normalRequest(deadline)),
         browserPath: await fakeChromePath("identity-drift"),
       }),
@@ -1464,7 +1428,7 @@ describe("the launch identity check", () => {
     const leftAtClose = await leftovers();
 
     await browsers.close();
-    expect({ closed, document, leftAtClose, observed, timeline: stages.timeline }).toMatchObject({
+    expect({ closed, document, leftAtClose, timeline: stages.timeline }).toMatchObject({
       closed: { exited: true },
       document: {
         error: {
@@ -1485,20 +1449,12 @@ describe("the launch identity check", () => {
         },
       },
       leftAtClose: nothingLeft,
-      observed: [
-        {
-          product: FAKE_PRODUCT,
-          requestedOffsets: ["GMT-06:00", "GMT-05:00"],
-          zone: "UTC",
-          zoneOffsets: ["GMT+00:00", "GMT+00:00"],
-        },
-      ],
       timeline: ["launch", "verify", "teardown"],
     });
   });
 
   it("rejects a page with no WebGL context before navigation", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedVisits(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     using stages = stageTimeline(
@@ -1508,10 +1464,10 @@ describe("the launch identity check", () => {
     const document = await stages.recording(
       async () =>
         await settledValue(
-          browsers.load({
+          browsers.visit({
             ...(await normalRequest(deadline)),
             browserPath: await fakeChromePath("no-webgl"),
-          }),
+          }).document,
         ),
     );
 
@@ -1531,8 +1487,8 @@ describe("the launch identity check", () => {
   });
 
   it("rejects a Chrome that ignores the pinned locale before navigation", async () => {
-    const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: async () => await Promise.resolve({ platform: "linux" }),
     });
 
     using deadline = startDeadline(10_000);
@@ -1544,10 +1500,10 @@ describe("the launch identity check", () => {
     const document = await stages.recording(
       async () =>
         await settledValue(
-          browsers.load({
+          browsers.visit({
             ...(await normalRequest(deadline)),
             pins: { display: undefined, locale: "de-DE", timezone: undefined },
-          }),
+          }).document,
         ),
     );
 
@@ -1574,35 +1530,19 @@ describe("the launch identity check", () => {
   });
 
   it("reads again once when Chrome reports an unsized window, then evaluates the sized one", async () => {
-    const observed: { outerWidth: number; outerHeight: number }[] = [];
-
-    const recordingEvaluate: typeof evaluate = (expected, observation) => {
-      if (observation.afterCapture.kind === "not-navigated") {
-        observed.push({ outerHeight: observation.outerHeight, outerWidth: observation.outerWidth });
-      }
-
-      return evaluate(expected, observation);
-    };
-
-    const browsers = createBrowsers(cdpDriver, 1, {
-      evaluate: recordingEvaluate,
-      random: fixedRandom,
-    });
-
+    const browsers = plannedVisits(cdpDriver, 1, { random: fixedRandom });
     using deadline = startDeadline(10_000);
 
-    const document = await settledValue(
-      browsers.load({
-        ...(await normalRequest(deadline)),
-        browserPath: await fakeChromePath("unsized-window"),
-      }),
-    );
-
-    await browsers.close();
-    expect({ document, observed }).toMatchObject({
-      document: { value: { status: 200 } },
-      observed: [{ outerHeight: 1018, outerWidth: 1680 }],
+    const { document } = browsers.visit({
+      ...(await normalRequest(deadline)),
+      browserPath: await fakeChromePath("unsized-window"),
     });
+
+    await expect(document).resolves.toMatchObject({
+      identity: { observed: { window: { outerHeight: 1018, outerWidth: 1680 } } },
+      status: 200,
+    });
+    await browsers.close();
   });
 
   it.each([
@@ -1663,9 +1603,9 @@ describe("the launch identity check", () => {
         );
       });
 
-      const browsers = createBrowsers(hangingRead, 1);
+      const browsers = plannedVisits(hangingRead, 1);
       using deadline = startDeadline(deadlineMs, undefined, clock);
-      const visit = browsers.start(await normalRequest(deadline));
+      const visit = browsers.visit(await normalRequest(deadline));
 
       await readStarted.promise;
       advance(waitMs);
@@ -1719,8 +1659,8 @@ describe("a named session's device record", () => {
   };
 
   it("presents the stored device instead of drawing a seed", async () => {
-    const browsers = createBrowsers(cdpDriver, 1, {
-      hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: async () => await Promise.resolve({ platform: "linux" }),
       random: () => {
         throw new Error("A named session draws no seed.");
       },
@@ -1728,7 +1668,7 @@ describe("a named session's device record", () => {
     });
 
     using deadline = startDeadline(10_000);
-    const document = await browsers.load(await normalRequest(deadline));
+    const document = await browsers.visit(await normalRequest(deadline)).document;
 
     await browsers.close();
     expect(document.identity).toMatchObject({
@@ -1743,11 +1683,11 @@ describe("a named session's device record", () => {
   });
 
   it("refuses a headed scrape of a headless record before Chrome launches", async () => {
-    const browsers = createBrowsers(cdpDriver, 1, { sessions: namedSession });
+    const browsers = plannedVisits(cdpDriver, 1, { sessions: namedSession });
     using deadline = startDeadline(10_000);
 
     const document = await settledValue(
-      browsers.load({ ...(await normalRequest(deadline)), mode: "headed" }),
+      browsers.visit({ ...(await normalRequest(deadline)), mode: "headed" }).document,
     );
 
     await browsers.close();
@@ -1764,14 +1704,14 @@ describe("a named session's device record", () => {
   });
 
   it("refuses a scrape that pins another zone before Chrome launches", async () => {
-    const browsers = createBrowsers(cdpDriver, 1, { sessions: namedSession });
+    const browsers = plannedVisits(cdpDriver, 1, { sessions: namedSession });
     using deadline = startDeadline(10_000);
 
     const document = await settledValue(
-      browsers.load({
+      browsers.visit({
         ...(await normalRequest(deadline)),
         pins: { ...noPins, timezone: "America/New_York" },
-      }),
+      }).document,
     );
 
     await browsers.close();
@@ -1809,8 +1749,8 @@ describe("the identity-chosen event", () => {
         }
       };
 
-      const browsers = createBrowsers(cdpDriver, 1, {
-        hostCapabilities: async () => await Promise.resolve({ platform: "linux" }),
+      const browsers = plannedVisits(cdpDriver, 1, {
+        host: async () => await Promise.resolve({ platform: "linux" }),
         random: fixedRandom,
       });
 
@@ -1819,8 +1759,11 @@ describe("the identity-chosen event", () => {
 
       const document = await settledValue(
         browsers
-          .load({ ...(await normalRequest(deadline)), browserPath: await fakeChromePath(scenario) })
-          .finally(() => {
+          .visit({
+            ...(await normalRequest(deadline)),
+            browserPath: await fakeChromePath(scenario),
+          })
+          .document.finally(() => {
             unsubscribe("xrio:event", record);
           }),
       );
@@ -1924,7 +1867,7 @@ describe("the after-capture read", () => {
   it("runs inside the capture stage and fills the report's secure-context surfaces", async () => {
     using stages = stageTimeline(new Set(["verify", "navigation", "capture", "teardown"]));
 
-    const browsers = createBrowsers(
+    const browsers = plannedVisits(
       readingAfterCaptureWith(async () => {
         stages.mark("read");
 
@@ -1936,7 +1879,7 @@ describe("the after-capture read", () => {
     using deadline = startDeadline(10_000);
 
     const document = await stages.recording(
-      async () => await browsers.load(await normalRequest(deadline)),
+      async () => await browsers.visit(await normalRequest(deadline)).document,
     );
 
     await browsers.close();
@@ -1983,9 +1926,9 @@ describe("the after-capture read", () => {
         },
       };
 
-      const browsers = createBrowsers(nearlyExpired, 1);
+      const browsers = plannedVisits(nearlyExpired, 1);
       using deadline = startDeadline(10_000, undefined, clock);
-      const visit = browsers.start(await normalRequest(deadline));
+      const visit = browsers.visit(await normalRequest(deadline));
       const document = await settledValue(visit.document);
       const closed = await visit.closed;
 
@@ -2040,9 +1983,9 @@ describe("the after-capture read", () => {
         );
       });
 
-      const browsers = createBrowsers(hangingRead, 1);
+      const browsers = plannedVisits(hangingRead, 1);
       using deadline = startDeadline(deadlineMs, undefined, clock);
-      const visit = browsers.start(await normalRequest(deadline));
+      const visit = browsers.visit(await normalRequest(deadline));
 
       await readStarted.promise;
       advance(waitMs - 1);
@@ -2073,10 +2016,10 @@ const LINUX_HOST = async () => await Promise.resolve({ platform: "linux" as cons
 const PINNED_HOST = async () =>
   await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" as const });
 
-const fontsOf = async (browsers: Browsers, browserPath: string) => {
+const fontsOf = async (browsers: PlannedScrapes, browserPath: string) => {
   using deadline = startDeadline(10_000);
 
-  const { identity } = await browsers.load({
+  const { identity } = await browsers.visit({
     browserArgs: [],
     browserPath,
     deadline,
@@ -2084,7 +2027,7 @@ const fontsOf = async (browsers: Browsers, browserPath: string) => {
     pins: noPins,
     proxy: undefined,
     url: new URL("https://fake.test/page"),
-  });
+  }).document;
 
   if (identity === undefined || identity.mode === "http") {
     throw new Error("The visit reported no browser identity.");
@@ -2119,8 +2062,8 @@ describe("the fonts evidence across visits", () => {
   const storeAt = (storeRoot = path.join(root, "scratch")) =>
     createFontEvidenceStore({ now: () => 1_000_000 + clock.elapsedMs, root: storeRoot });
 
-  const browsersFor = (maxBrowsers = 1, store = storeAt(), hostCapabilities = LINUX_HOST) =>
-    createBrowsers(cdpDriver, maxBrowsers, { fontEvidence: store, hostCapabilities });
+  const browsersFor = (maxBrowsers = 1, store = storeAt(), host = LINUX_HOST) =>
+    plannedVisits(cdpDriver, maxBrowsers, { fonts: store, host });
 
   it("reads the full set on the first visit and only the sentinel on the next, from the stored evidence", async () => {
     const browsers = browsersFor();

@@ -9,7 +9,7 @@ import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { fakeFontStack, hangFcListFor } from "../../testing/fake-font-stack.ts";
 import type { FakeFontStack } from "../../testing/fake-font-stack.ts";
 import { noPins } from "../../testing/no-pins.ts";
-import { createBrowsers } from "./browsers.ts";
+import { plannedScrapes } from "../../testing/planned-scrapes.ts";
 import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { createFontEvidenceStore } from "./font-evidence.ts";
@@ -31,9 +31,9 @@ describe("scrapes that run beside each other while the font stack check fails", 
   });
 
   it("resolves both, each reporting the host's fonts and the reason the stack was refused", async () => {
-    const browsers = createBrowsers(cdpDriver, 2, {
-      fontEvidence: createFontEvidenceStore({ root: path.join(root, "scratch") }),
-      hostCapabilities: createCapabilityProbe({
+    const browsers = plannedScrapes(cdpDriver, 2, {
+      fonts: createFontEvidenceStore({ root: path.join(root, "scratch") }),
+      host: createCapabilityProbe({
         budgetMs: 300,
         fcList: stack.fcList,
         platform: "linux",
@@ -44,7 +44,7 @@ describe("scrapes that run beside each other while the font stack check fails", 
     const scrape = async () => {
       using deadline = startDeadline(10_000);
 
-      return await browsers.load({
+      return await browsers.visit({
         browserArgs: [],
         browserPath: stack.binary,
         deadline,
@@ -52,7 +52,7 @@ describe("scrapes that run beside each other while the font stack check fails", 
         pins: noPins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
-      });
+      }).document;
     };
 
     const results = await Promise.allSettled([scrape(), scrape()]);

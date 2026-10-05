@@ -26,8 +26,10 @@ import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { noPins } from "../../testing/no-pins.ts";
+import { plannedScrapes } from "../../testing/planned-scrapes.ts";
+import type { PlannedScrapes } from "../../testing/planned-scrapes.ts";
 import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../testing/processes.ts";
-import type { DocumentRequest, SourceDocument } from "../../types.ts";
+import type { SourceDocument } from "../../types.ts";
 import {
   createScratchDir,
   prepareProfile,
@@ -35,7 +37,6 @@ import {
   scratchRoot,
   sweepAbandonedScratch,
 } from "./browser-process.ts";
-import { createBrowsers } from "./browsers.ts";
 import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
@@ -281,11 +282,11 @@ const load = async (
   pins: IdentityIntent = noPins,
   random: () => Uint8Array = fixedRandom,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(cdpDriver, 1, { random });
+  const browsers = plannedScrapes(cdpDriver, 1, { random });
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
-    return await browsers.load({
+    return await browsers.visit({
       browserArgs,
       browserPath: chromePath(),
       deadline,
@@ -293,7 +294,7 @@ const load = async (
       pins,
       proxy: undefined,
       url: new URL(route, server.origin),
-    });
+    }).document;
   } finally {
     await browsers.close();
   }
@@ -688,11 +689,11 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
   });
 
   it("presents a pinned timezone on /identity, whatever the host's zone", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(20_000);
 
     try {
-      const { html } = await browsers.load({
+      const { html } = await browsers.visit({
         browserArgs: [],
         browserPath: chromePath(),
         deadline,
@@ -700,7 +701,7 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
         pins: { ...noPins, timezone: "Australia/Adelaide" },
         proxy: undefined,
         url: new URL("/identity", server.origin),
-      });
+      }).document;
 
       const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
 
@@ -959,9 +960,7 @@ interface VisitFailure {
   interrupt?: "abort" | "kill-renderer";
 }
 
-type BrowserLoad = (
-  request: DocumentRequest & { mode: (typeof MODES)[number]; browserPath: string },
-) => Promise<SourceDocument>;
+type BrowserLoad = (request: Parameters<PlannedScrapes["visit"]>[0]) => Promise<SourceDocument>;
 
 const visitFailures: VisitFailure[] = [
   {
@@ -1035,11 +1034,11 @@ describe.each(MODES)("browser visits, %s", (mode) => {
   it.each(visitFailures)(
     "visit: $name closes only after Chrome is gone, then admits the next scrape",
     async (failure) => {
-      const browsers = createBrowsers(cdpDriver, 1);
+      const browsers = plannedScrapes(cdpDriver, 1);
       const closings: Promise<unknown>[] = [];
 
       await failOnce(mode, failure, async (request) => {
-        const visit = browsers.start(request);
+        const visit = browsers.visit(request);
 
         closings.push(visit.closed);
 
@@ -1049,10 +1048,10 @@ describe.each(MODES)("browser visits, %s", (mode) => {
       await expect(Promise.all(closings)).resolves.toStrictEqual([{ exited: true }]);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
 
-      await failOnce(mode, failure, browsers.load);
+      await failOnce(mode, failure, async (request) => await browsers.visit(request).document);
       using deadline = startDeadline(20_000);
 
-      const next = await browsers.load({
+      const next = await browsers.visit({
         browserArgs: [],
         browserPath: chromePath(),
         deadline,
@@ -1060,7 +1059,7 @@ describe.each(MODES)("browser visits, %s", (mode) => {
         pins: noPins,
         proxy: undefined,
         url: new URL("/static", server.origin),
-      });
+      }).document;
 
       await browsers.close();
       expect(markerOf(next.html)).toBe("static");

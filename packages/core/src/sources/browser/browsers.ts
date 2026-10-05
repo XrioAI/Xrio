@@ -1,19 +1,11 @@
-import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { createAdmission } from "../../admission.ts";
-import { defaultCacheDir } from "../../cache-dir.ts";
 import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, XrioError } from "../../errors.ts";
 import type { AfterCapture, HostCapabilities, Observation } from "../../humanizer/contracts.ts";
-import { SEED_BYTES, seedOf } from "../../humanizer/draws.ts";
-import { readHostZone } from "../../humanizer/host-zone.ts";
-import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
-import { presentedLocale } from "../../humanizer/surfaces.ts";
-import type { IdentityContext } from "../../humanizer/surfaces.ts";
 import {
   describeMismatch,
   evaluate,
@@ -21,11 +13,10 @@ import {
   readObservation,
 } from "../../humanizer/verify.ts";
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
-import { refuseRecordOverrides } from "../../options.ts";
-import { exitFactsFor, routeFor } from "../../proxy/route.ts";
-import { anonymousSessions } from "../../sessions/session.ts";
-import type { SessionHold, SessionManager } from "../../sessions/session.ts";
-import type { DocumentRequest, SourceDocument } from "../../types.ts";
+import type { HeldDeadline } from "../../lifetime.ts";
+import type { Slot } from "../../slot.ts";
+import type { SourceDocument } from "../../types.ts";
+import type { Sources, VisitPlan } from "../visit.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
   createScratchDir,
@@ -35,10 +26,6 @@ import {
 } from "./browser-process.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import type { Closed, RetireSteps } from "./chrome-scope.ts";
-import { createFontEvidenceStore } from "./font-evidence.ts";
-import type { FontClaim, FontEvidenceStore } from "./font-evidence.ts";
-import { hostFactsFor } from "./host-facts.ts";
-import type { HostFacts } from "./host-facts.ts";
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import { DriverError } from "./port.ts";
@@ -56,44 +43,6 @@ const UNSIZED_RETRY_MS = 250;
 const AFTER_CAPTURE_CAP_MS = 250;
 
 const AFTER_CAPTURE_FLOOR_MS = 50;
-
-type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
-
-type VisitTarget = Omit<BrowserRequest, "deadline"> & { device: IdentityContext["device"] };
-
-interface BrowserVisit {
-  readonly document: Promise<SourceDocument>;
-  readonly closed: Promise<Closed>;
-}
-
-interface VisitSteps extends Partial<RetireSteps> {
-  readonly random: (size: number) => Uint8Array;
-  readonly sessions: SessionManager;
-  readonly hostCapabilities: HostFacts["snapshotFor"];
-  readonly fontEvidence: FontEvidenceStore;
-  readonly planIdentity: typeof planIdentity;
-  readonly evaluate: typeof evaluate;
-}
-
-interface VisitPlan {
-  readonly capabilities: HostCapabilities;
-  readonly fonts: FontClaim;
-  readonly identity: IdentityPlan;
-  readonly launch: LaunchPlan;
-}
-
-const defaultSteps: Omit<VisitSteps, "fontEvidence" | "hostCapabilities"> = {
-  evaluate,
-  planIdentity,
-  random: randomBytes,
-  sessions: anonymousSessions(),
-};
-
-export interface Browsers {
-  readonly start: (request: BrowserRequest) => BrowserVisit;
-  readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
-  readonly close: () => Promise<void>;
-}
 
 let swept: Promise<void> | undefined;
 
@@ -144,66 +93,6 @@ const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
   }
 };
 
-const deviceOf = (
-  hold: SessionHold,
-  scrape: Pick<IdentityContext, "mode" | "pins">,
-): IdentityContext["device"] => {
-  if (hold.device.kind === "record") {
-    refuseRecordOverrides(hold.device.record, scrape);
-  }
-
-  return hold.device;
-};
-
-const planVisit = async (
-  request: VisitTarget,
-  scratch: ScratchDir,
-  steps: VisitSteps,
-  deadline: Deadline,
-): Promise<VisitPlan> => {
-  const capabilities = await steps.hostCapabilities(request.browserPath, deadline);
-  const { tag: locale } = presentedLocale(request.pins);
-  const fonts = await steps.fontEvidence.claim(request.browserPath, capabilities, locale, deadline);
-
-  try {
-    const hostZone = readHostZone();
-    const display = process.env.DISPLAY;
-    const xauthority = process.env.XAUTHORITY;
-    const route = routeFor(request.proxy);
-
-    const identity = steps.planIdentity({
-      capabilities:
-        fonts.evidence === undefined
-          ? capabilities
-          : { ...capabilities, fontEvidence: fonts.evidence },
-      device: request.device,
-      exit: { facts: exitFactsFor(route), route: route.kind },
-      hostZone,
-      mode: request.mode,
-      pins: request.pins,
-    });
-
-    return {
-      capabilities,
-      fonts,
-      identity,
-      launch: planLaunch({
-        browserArgs: request.browserArgs,
-        browserPath: request.browserPath,
-        display,
-        headless: request.mode === "headless",
-        identity: identity.inputs,
-        scratchDir: scratch.path,
-        xauthority,
-      }),
-    };
-  } catch (error) {
-    await fonts.settle(null);
-
-    throw error;
-  }
-};
-
 const writeProfile = async (plan: LaunchPlan): Promise<void> => {
   try {
     await prepareProfile(plan);
@@ -216,9 +105,11 @@ const startBrowser = async (
   driver: BrowserDriver,
   scope: ChromeScope,
   plan: LaunchPlan,
+  slot: Slot,
   deadline: Deadline,
 ): Promise<DriverBrowser> => {
   await writeProfile(plan);
+  slot.assertHeld();
 
   try {
     return await timeStage("launch", async () => await scope.launch(driver, plan, deadline));
@@ -274,10 +165,9 @@ const verifyLaunch = async (
   browser: DriverBrowser,
   identity: IdentityPlan,
   deadline: Deadline,
-  steps: VisitSteps,
 ): Promise<{ readonly observation: Observation; readonly fontEvidence: FontEvidenceOutcome }> => {
   const observation = await observeLaunch(browser, identity.read.beforeNavigation, deadline);
-  const { fontEvidence, mismatches } = steps.evaluate(identity, observation);
+  const { fontEvidence, mismatches } = evaluate(identity, observation);
 
   if (mismatches.length > 0) {
     const fields = mismatches.map((mismatch) => describeMismatch(mismatch, observation)).join(", ");
@@ -314,54 +204,65 @@ const observeAfterCapture = async (
   }
 };
 
+type BrowserVisitPlan = Extract<VisitPlan, { kind: "browser" }>;
+
+const settleFonts = async ({ fonts }: BrowserVisitPlan): Promise<void> => {
+  try {
+    await fonts.settle(null);
+  } catch (error) {
+    publishInternalEvent({ detail: messageOf(error), event: "font-settlement-failed" });
+  }
+};
+
 const renderInScope = async (
   driver: BrowserDriver,
-  steps: VisitSteps,
-  request: VisitTarget,
-  deadline: Deadline,
+  plan: BrowserVisitPlan,
+  slot: Slot,
+  deadline: HeldDeadline,
   scope: ChromeScope,
   document: PromiseWithResolvers<SourceDocument>,
 ): Promise<Closed> => {
-  let fonts: FontClaim | undefined;
+  const { capabilities, fonts, identity } = plan;
 
   try {
-    const planned = await timeStage(
-      "identity",
-      async () => await planVisit(request, scope.scratch, steps, deadline),
-    );
-
-    const { capabilities, identity, launch } = planned;
-
-    ({ fonts } = planned);
-
     publishInternalEvent({ detail: JSON.stringify(identity.chosen), event: "identity-chosen" });
 
-    const browser = await startBrowser(driver, scope, launch, deadline);
+    const launch = planLaunch({
+      browserArgs: plan.browserArgs,
+      browserPath: plan.browserPath,
+      display: process.env.DISPLAY,
+      headless: plan.mode === "headless",
+      identity: identity.inputs,
+      scratchDir: scope.scratch.path,
+      xauthority: process.env.XAUTHORITY,
+    });
+
+    const browser = await startBrowser(driver, scope, launch, slot, deadline);
     assertSupported(browser.product);
     assertProbedVersion(browser.product, capabilities);
 
     const { fontEvidence, observation } = await timeStage(
       "verify",
-      async () => await verifyLaunch(browser, identity, deadline, steps),
+      async () => await verifyLaunch(browser, identity, deadline),
     );
 
-    await planned.fonts.settle(fontEvidence);
+    await fonts.settle(fontEvidence);
 
     const { afterCapture, source } = await renderDocument(
       browser,
-      request.url,
+      plan.url,
       deadline,
       async () => await observeAfterCapture(browser, identity.read.afterCapture, deadline),
     );
 
     document.resolve({
       ...source,
-      identity: steps.evaluate(identity, { ...observation, afterCapture }).report,
+      identity: evaluate(identity, { ...observation, afterCapture }).report,
     });
   } catch (error) {
     document.reject(error);
   } finally {
-    await fonts?.settle(null);
+    await settleFonts(plan);
   }
 
   return await scope.retire();
@@ -369,61 +270,31 @@ const renderInScope = async (
 
 export const createBrowsers = (
   driver: BrowserDriver,
-  maxBrowsers?: number,
-  overrides: Partial<VisitSteps> = {},
-): Browsers => {
-  const stopProbes = new AbortController();
-
-  const steps: VisitSteps = {
-    ...defaultSteps,
-    fontEvidence: createFontEvidenceStore({ signal: stopProbes.signal }),
-    hostCapabilities: hostFactsFor(defaultCacheDir()).snapshotFor,
-    ...overrides,
-  };
-
-  const admission = createAdmission(maxBrowsers);
+  steps: Partial<RetireSteps> = {},
+): Sources => {
   const visits = new Set<Promise<Closed>>();
   let closed = false;
 
-  const visitWhenAdmitted = async (
-    request: BrowserRequest,
-    document: PromiseWithResolvers<SourceDocument>,
-  ): Promise<Closed> => {
-    if (closed) {
-      throw clientClosed();
-    }
-
-    await using hold = await steps.sessions.hold(
-      { kind: "anonymous" },
-      {
-        identity: request.pins,
-        seed: () => seedOf(steps.random(SEED_BYTES)),
-        source: request,
-      },
-      request.deadline,
-    );
-
-    const deadline = hold.bind(request.deadline);
-
-    await using _slot = await timeStage(
-      "queue",
-      async () => await admission.slotFor(request, deadline),
-    );
-
-    const target = { ...request, device: deviceOf(hold, request) };
-    const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
-
-    return await renderInScope(driver, steps, target, deadline, scope, document);
-  };
-
   const visit = async (
-    request: BrowserRequest,
+    plan: BrowserVisitPlan,
+    slot: Slot,
+    deadline: HeldDeadline,
     document: PromiseWithResolvers<SourceDocument>,
   ): Promise<Closed> => {
     try {
-      return await visitWhenAdmitted(request, document);
+      slot.assertHeld();
+      deadline.throwIfExpired();
+
+      if (closed) {
+        throw clientClosed();
+      }
+
+      const scope = new ChromeScope(await createOwnedScratch(deadline), steps);
+
+      return await renderInScope(driver, plan, slot, deadline, scope, document);
     } catch (error) {
       document.reject(error);
+      await settleFonts(plan);
 
       return { exited: true };
     }
@@ -435,9 +306,9 @@ export const createBrowsers = (
     visits.delete(closing);
   };
 
-  const start = (request: BrowserRequest): BrowserVisit => {
+  const start: Sources["start"] = (plan, slot, deadline) => {
     const document = Promise.withResolvers<SourceDocument>();
-    const closing = visit(request, document);
+    const closing = visit(plan, slot, deadline, document);
 
     void trackUntilClosed(closing);
     void Promise.allSettled([document.promise]);
@@ -445,14 +316,11 @@ export const createBrowsers = (
     return { closed: closing, document: document.promise };
   };
 
-  const load = async (request: BrowserRequest): Promise<SourceDocument> =>
-    await start(request).document;
-
   const close = async () => {
     closed = true;
     await Promise.allSettled(visits);
     await swept;
   };
 
-  return { close, load, start };
+  return { close, start };
 };
