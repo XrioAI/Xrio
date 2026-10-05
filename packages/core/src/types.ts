@@ -1,4 +1,5 @@
 import type { BlockReport } from "./blocks/classify.ts";
+import type { REPORTABLE_MEMORY_GB } from "./humanizer/owned-inputs.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
@@ -43,15 +44,23 @@ export interface DisplayOptions {
     | readonly (Weighted<WindowSize> | { maximized: true; weight: number })[];
 }
 
+type ReportableMemoryGb = (typeof REPORTABLE_MEMORY_GB)[number];
+
+export interface HardwareOptions {
+  cores?: number | readonly Weighted<{ value: number }>[];
+  memoryGb?: ReportableMemoryGb | readonly Weighted<{ value: ReportableMemoryGb }>[];
+}
+
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
 interface BrowserChoices {
   timezone?: string;
   display?: DisplayOptions;
+  hardware?: HardwareOptions;
 }
 
 type ModeOverride =
-  | (HttpMode & { timezone?: never; display?: never })
+  | (HttpMode & { timezone?: never; display?: never; hardware?: never })
   | (BrowserMode & BrowserChoices)
   | ({ mode?: never; browserPath?: never } & BrowserChoices);
 
@@ -62,6 +71,7 @@ export type ClientOptions = (
       browserArgs?: readonly string[];
       timezone?: never;
       display?: never;
+      hardware?: never;
     }
   | ((BrowserMode | { mode?: never; browserPath: string }) &
       BrowserChoices & { browserArgs?: readonly string[] })

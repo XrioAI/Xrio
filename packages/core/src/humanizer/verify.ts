@@ -29,9 +29,11 @@ const UNRESOLVED_ZONE = "Etc/Unknown";
 
 const HEADLESS_TOKEN = "HeadlessChrome/";
 
-export type ObservedField = Exclude<keyof Observation, "product" | "afterCapture">;
+type ReadField = Exclude<keyof Observation, "product" | "afterCapture">;
 
-export type Observed = Observation[ObservedField];
+export type ObservedField = ReadField | "deviceMemory";
+
+export type Observed = Observation[ReadField];
 
 export type Matcher =
   | { readonly kind: "equals"; readonly value: Observed }
@@ -68,7 +70,9 @@ export type FactTell =
   | "host-fonts"
   | "replay-host-skew"
   | "display-pin-unhonored"
-  | "flag-infobar";
+  | "flag-infobar"
+  | "hardware-capped"
+  | "hardware-unhonored";
 
 export type IdentityTell =
   | "no-taskbar"
@@ -76,9 +80,10 @@ export type IdentityTell =
   | "headless-token"
   | "unmeasured-chrome"
   | FactTell
-  | "fonts-drift";
+  | "fonts-drift"
+  | "hardware-drift";
 
-type ObservedTell = Exclude<IdentityTell, FactTell | "fonts-drift">;
+type ObservedTell = Exclude<IdentityTell, FactTell | "fonts-drift" | "hardware-drift">;
 
 export type FontEvidenceOutcome =
   | { readonly kind: "gathered"; readonly digest: string; readonly sentinel: string }
@@ -141,7 +146,7 @@ const READING = {
   webgl: isFlag,
   zone: isTextOrNull,
   zoneOffsets: isTexts,
-} satisfies { readonly [Field in ObservedField]: (value: unknown) => value is Reading[Field] };
+} satisfies { readonly [Field in ReadField]: (value: unknown) => value is Reading[Field] };
 
 const isObject = (value: unknown): value is object => typeof value === "object" && value !== null;
 
@@ -232,6 +237,12 @@ export const readAfterCapture = (text: string): AfterCapture => {
   throw new Error("The after-capture read returned a malformed reading.");
 };
 
+const deviceMemoryOf = ({ afterCapture }: Observation): number | null =>
+  afterCapture.kind === "secure" ? afterCapture.deviceMemory : null;
+
+const observedValue = (observation: Observation, field: ObservedField): Observed =>
+  field === "deviceMemory" ? deviceMemoryOf(observation) : observation[field];
+
 const languageOf = (locale: string): string => locale.split("-")[0] ?? locale;
 
 const expectedBy = (matcher: Matcher, observation: Observation): Observed => {
@@ -253,7 +264,7 @@ const expectedBy = (matcher: Matcher, observation: Observation): Observed => {
     }
 
     case "at-most-field": {
-      return observation[matcher.field];
+      return observedValue(observation, matcher.field);
     }
 
     case "no-headless-token": {
@@ -312,10 +323,14 @@ const mismatchOf = (
     return undefined;
   }
 
+  if (field === "deviceMemory" && deviceMemoryOf(observation) === null) {
+    return undefined;
+  }
+
   const expected = expectedBy(matcher, observation);
 
   const observed = isVerifiable(matcher, observation)
-    ? observation[field]
+    ? observedValue(observation, field)
     : [observation.zone ?? "", ...observation.zoneOffsets];
 
   return holds(matcher, expected, observed) ? undefined : { expected, field, observed, surface };
@@ -369,6 +384,9 @@ const fontEvidenceOutcome = (
     ? { kind: "confirmed" }
     : { digest: fontsDigest, kind: "gathered", sentinel: fontsSentinel };
 };
+
+const hardwareDriftOf = (notes: readonly IdentityMismatch[]): readonly "hardware-drift"[] =>
+  notes.some(({ surface }) => surface === "hardware") ? ["hardware-drift"] : [];
 
 export const evaluate = (
   {
@@ -426,6 +444,7 @@ export const evaluate = (
         ...TELL_ORDER.filter((tell) => TELLS[tell](observation)),
         ...tells,
         ...(drifted ? ["fonts-drift" as const] : []),
+        ...hardwareDriftOf(notes),
       ],
     },
   };

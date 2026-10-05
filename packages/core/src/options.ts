@@ -1,8 +1,19 @@
 import { CacheDir, defaultCacheDir } from "./cache-dir.ts";
 import { invalidOptions, redactUrl } from "./errors.ts";
-import type { DeviceRecord, DisplayTables, Insets, WindowPin } from "./humanizer/contracts.ts";
+import type {
+  DeviceRecord,
+  DisplayTables,
+  HardwareTables,
+  Insets,
+  WindowPin,
+} from "./humanizer/contracts.ts";
 import { displayMisfit } from "./humanizer/draws.ts";
-import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
+import {
+  chromeAcceptLanguages,
+  FORK_MAX_CORES,
+  measuredLocalesFor,
+  REPORTABLE_MEMORY_GB,
+} from "./humanizer/owned-inputs.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import { canonicalZone } from "./humanizer/zone-name.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
@@ -10,6 +21,7 @@ import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientOptions,
   DisplayOptions,
+  HardwareOptions,
   ModeOptions,
   ProxyEndpoint,
   ResolvedMode,
@@ -224,10 +236,12 @@ const WINDOW_FIELDS = new Set(["width", "height", "x", "y", "weight"]);
 
 type DisplayEntry = DisplayOptions | ScreenSize | Taskbar | WindowSize | { maximized: true };
 
-const isPlainObject = (value: DisplayEntry): boolean =>
+type OptionEntry = DisplayEntry | HardwareOptions | { value: number };
+
+const isPlainObject = (value: OptionEntry): boolean =>
   Object.getPrototypeOf(value ?? 0) === Object.prototype;
 
-const holdsOnly = (value: DisplayEntry, fields: ReadonlySet<string>): boolean =>
+const holdsOnly = (value: OptionEntry, fields: ReadonlySet<string>): boolean =>
   Object.keys(value).every((key) => fields.has(key));
 
 const isWhole = (value: number | undefined, min: number): value is number =>
@@ -245,7 +259,7 @@ const tableOf = <Row extends object>(
 ): readonly Weighted<Row>[] => {
   if (!isTable(value)) {
     if (!isPlainObject(value)) {
-      throw invalidOptions(`display.${field} must be a value or a non-empty weighted table.`);
+      throw invalidOptions(`${field} must be a value or a non-empty weighted table.`);
     }
 
     return [{ ...value, weight: 1 }];
@@ -254,15 +268,15 @@ const tableOf = <Row extends object>(
   const rows = value;
 
   if (rows.length === 0 || !rows.every(isPlainObject)) {
-    throw invalidOptions(`display.${field} must be a value or a non-empty weighted table.`);
+    throw invalidOptions(`${field} must be a value or a non-empty weighted table.`);
   }
 
   if (!rows.every(({ weight }) => Number.isFinite(weight) && weight > 0)) {
-    throw invalidOptions(`display.${field} weights must be positive numbers.`);
+    throw invalidOptions(`${field} weights must be positive numbers.`);
   }
 
   if (!Number.isFinite(rows.reduce((total, { weight }) => total + weight, 0))) {
-    throw invalidOptions(`display.${field} weights must add up to a finite number.`);
+    throw invalidOptions(`${field} weights must add up to a finite number.`);
   }
 
   return rows;
@@ -345,7 +359,7 @@ const parseWindow = (row: WindowRow, weight: number): Weighted<WindowPin> => {
 const parseWindows = (window: NonNullable<DisplayOptions["window"]>) =>
   window === "maximized"
     ? [parseWindow(window, 1)]
-    : tableOf<Exclude<WindowRow, "maximized">>(window, "window").map((row) =>
+    : tableOf<Exclude<WindowRow, "maximized">>(window, "display.window").map((row) =>
         parseWindow(row, row.weight),
       );
 
@@ -357,8 +371,9 @@ const parseDisplay = (display: DisplayOptions): DisplayTables => {
   const { screen, taskbar, window } = display;
 
   return {
-    screens: screen === undefined ? undefined : tableOf(screen, "screen").map(parseScreen),
-    taskbars: taskbar === undefined ? undefined : tableOf(taskbar, "taskbar").map(parseTaskbar),
+    screens: screen === undefined ? undefined : tableOf(screen, "display.screen").map(parseScreen),
+    taskbars:
+      taskbar === undefined ? undefined : tableOf(taskbar, "display.taskbar").map(parseTaskbar),
     windows: window === undefined ? undefined : parseWindows(window),
   };
 };
@@ -399,6 +414,93 @@ const resolveDisplay = (
   });
 };
 
+const HARDWARE_FIELDS = new Set(["cores", "memoryGb"]);
+
+const HARDWARE_ROW_FIELDS = new Set(["value", "weight"]);
+
+type HardwareField = keyof HardwareOptions;
+
+const isCoreCount = (value: number | undefined): boolean =>
+  isWhole(value, 1) && value <= FORK_MAX_CORES;
+
+const isReportableMemory = (value: number | undefined): boolean =>
+  REPORTABLE_MEMORY_GB.some((memory) => memory === value);
+
+const HARDWARE_VALUES = {
+  cores: {
+    isValid: isCoreCount,
+    message: `hardware.cores must be a positive whole number of at most ${FORK_MAX_CORES}, or a weighted table of them.`,
+  },
+  memoryGb: {
+    isValid: isReportableMemory,
+    message: "hardware.memoryGb must be 2, 4, 8, 16 or 32 GB, or a weighted table of them.",
+  },
+} as const satisfies Record<
+  HardwareField,
+  { isValid: (value: number | undefined) => boolean; message: string }
+>;
+
+type HardwareValue = number | readonly Weighted<{ value: number }>[];
+
+const isValueTable = (value: HardwareValue): value is readonly Weighted<{ value: number }>[] =>
+  Array.isArray(value);
+
+const parseHardwareField = (
+  field: HardwareField,
+  value: HardwareValue,
+): NonNullable<HardwareTables[HardwareField]> => {
+  const { isValid, message } = HARDWARE_VALUES[field];
+
+  const rows = isValueTable(value)
+    ? tableOf<{ value: number }>(value, `hardware.${field}`)
+    : [{ value, weight: 1 }];
+
+  if (!rows.every((row) => holdsOnly(row, HARDWARE_ROW_FIELDS))) {
+    throw invalidOptions(`hardware.${field} rows take only a value and a weight.`);
+  }
+
+  if (!rows.every((row) => isValid(row.value))) {
+    throw invalidOptions(message);
+  }
+
+  return rows.map(({ value: entry, weight }) => ({ value: entry, weight }));
+};
+
+const parseHardware = (hardware: HardwareOptions): HardwareTables => {
+  if (!isPlainObject(hardware) || !holdsOnly(hardware, HARDWARE_FIELDS)) {
+    throw invalidOptions("hardware takes cores and memoryGb.");
+  }
+
+  const { cores, memoryGb } = hardware;
+
+  return {
+    cores: cores === undefined ? undefined : parseHardwareField("cores", cores),
+    memoryGb: memoryGb === undefined ? undefined : parseHardwareField("memoryGb", memoryGb),
+  };
+};
+
+const resolveHardware = (
+  hardware: HardwareOptions | undefined,
+  { mode }: ResolvedMode,
+  defaults?: HardwareTables,
+): HardwareTables | undefined => {
+  if (mode === "http") {
+    if (hardware !== undefined) {
+      throw invalidOptions("hardware is only supported in browser modes.");
+    }
+
+    return undefined;
+  }
+
+  if (hardware === undefined) {
+    return defaults;
+  }
+
+  const { cores, memoryGb } = parseHardware(hardware);
+
+  return { cores: cores ?? defaults?.cores, memoryGb: memoryGb ?? defaults?.memoryGb };
+};
+
 export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
@@ -411,6 +513,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   const locale = resolveLocale(options.locale);
   const timezone = resolveTimezone(options.timezone, mode);
   const display = resolveDisplay(options.display, mode);
+  const hardware = resolveHardware(options.hardware, mode);
 
   const cacheDir =
     options.cacheDir === undefined ? defaultCacheDir() : new CacheDir(options.cacheDir);
@@ -418,7 +521,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   return {
     browser: { browserArgs, browserPath: options.browserPath },
     cacheDir,
-    identity: { display, locale, timezone },
+    identity: { display, hardware, locale, timezone },
     maxBrowsers,
     mode: mode.mode,
     route: proxy,
@@ -466,8 +569,14 @@ export const resolveScrapeIntent = (
       : resolveTimezone(options.timezone, mode);
 
   const display = resolveDisplay(options.display, mode, defaults.identity.display);
+  const hardware = resolveHardware(options.hardware, mode, defaults.identity.hardware);
 
-  const identity = { display, locale, timezone: mode.mode === "http" ? undefined : timezone };
+  const identity = {
+    display,
+    hardware,
+    locale,
+    timezone: mode.mode === "http" ? undefined : timezone,
+  };
 
   const source =
     mode.mode === "http" ? mode : { ...mode, browserArgs: defaults.browser.browserArgs };

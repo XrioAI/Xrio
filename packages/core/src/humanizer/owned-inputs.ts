@@ -10,6 +10,8 @@ export const OWNED_SWITCHES = [
   "--use-fake-device-for-media-stream",
 ] as const;
 
+const FORK_HARDWARE_SWITCHES = ["--xrio-hardware-concurrency", "--xrio-device-memory"] as const;
+
 export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE", "TZ", "FONTCONFIG_PATH"] as const;
 
 export const OWNED_FILE_ENVIRONMENT = ["FONTCONFIG_FILE"] as const;
@@ -106,6 +108,33 @@ export const measuredLocalesFor = (tag: string): readonly string[] => {
 
 export const chromeAcceptLanguages = (tag: string): readonly string[] | undefined =>
   isShippedLocale(tag) ? CHROME_ACCEPT_LANGUAGES[tag] : undefined;
+
+export const REPORTABLE_MEMORY_GB = [2, 4, 8, 16, 32] as const;
+
+export const FORK_MAX_CORES = 2_147_483_647;
+
+export const holdsHostHardware = ({
+  cores,
+  memoryGb,
+}: {
+  readonly cores: number;
+  readonly memoryGb: number;
+}): boolean => cores === 0 && memoryGb === 0;
+
+const FORK_MACHINE_CLASSES =
+  "chromium-fork chromium_src/base/pxr_knobs.cc lines 689-691, the default of the machine-classes knob as [cores, memory_gb, free_disk_gb, weight] without the disk column; chromium_src/base/pxr_persona.cc lines 101-135 roll over it";
+
+export const MACHINE_CLASSES = [
+  { cores: 4, memoryGb: 8, source: FORK_MACHINE_CLASSES, weight: 12 },
+  { cores: 8, memoryGb: 8, source: FORK_MACHINE_CLASSES, weight: 8 },
+  { cores: 6, memoryGb: 16, source: FORK_MACHINE_CLASSES, weight: 10 },
+  { cores: 8, memoryGb: 16, source: FORK_MACHINE_CLASSES, weight: 26 },
+  { cores: 16, memoryGb: 16, source: FORK_MACHINE_CLASSES, weight: 8 },
+  { cores: 12, memoryGb: 16, source: FORK_MACHINE_CLASSES, weight: 16 },
+  { cores: 12, memoryGb: 32, source: FORK_MACHINE_CLASSES, weight: 8 },
+  { cores: 16, memoryGb: 32, source: FORK_MACHINE_CLASSES, weight: 10 },
+  { cores: 24, memoryGb: 32, source: FORK_MACHINE_CLASSES, weight: 2 },
+] as const;
 
 const PXRENDER_SCREENS =
   "pxrender src/pxrender/browser/display.py DESKTOP_SCREENS: native DPR-1 panel sizes with approximate desktop population weights";
@@ -272,7 +301,7 @@ export const isOwnedSwitch = (name: string): boolean =>
 export type LaunchInput =
   | {
       readonly sink: "switch";
-      readonly name: (typeof OWNED_SWITCHES)[number];
+      readonly name: (typeof OWNED_SWITCHES)[number] | (typeof FORK_HARDWARE_SWITCHES)[number];
       readonly value?: string;
     }
   | {

@@ -15,6 +15,7 @@ import type {
   CoveredSurface,
   DisplayOptions,
   ErrorCode,
+  HardwareOptions,
   HttpIdentityReport,
   IdentityMismatch,
   IdentityReport,
@@ -175,6 +176,41 @@ describe("XrioClient types", () => {
     void browser.scrape({ display: { window: "fullscreen" }, format: "html", url });
   });
 
+  it("takes hardware in browser modes only, as values or weighted tables", () => {
+    const url = "https://example.com";
+
+    const browser = new XrioClient({
+      browserPath: "/browser",
+      hardware: {
+        cores: [
+          { value: 8, weight: 3 },
+          { value: 12, weight: 1 },
+        ],
+        memoryGb: 16,
+      },
+    });
+
+    expectTypeOf<ClientOptions["hardware"]>().toEqualTypeOf<HardwareOptions | undefined>();
+    void browser.scrape({ format: "html", hardware: { cores: 6 }, url });
+    void browser.scrape({ format: "html", hardware: { memoryGb: [{ value: 8, weight: 1 }] }, url });
+    // @ts-expect-error An http client has no machine to present.
+    void new XrioClient({ hardware: { cores: 8 }, mode: "http" });
+    // @ts-expect-error An explicit http mode takes no hardware.
+    void browser.scrape({ format: "html", hardware: { cores: 8 }, mode: "http", url });
+    // @ts-expect-error A table row needs a weight.
+    void browser.scrape({ format: "html", hardware: { cores: [{ value: 8 }] }, url });
+    // @ts-expect-error Memory is one of the sizes Chrome reports.
+    void browser.scrape({ format: "html", hardware: { memoryGb: 12 }, url });
+    void browser.scrape({
+      format: "html",
+      // @ts-expect-error A memory table's rows hold sizes Chrome reports too.
+      hardware: { memoryGb: [{ value: 12, weight: 1 }] },
+      url,
+    });
+    // @ts-expect-error Cores are a number or a table of rows.
+    void browser.scrape({ format: "html", hardware: { cores: "8" }, url });
+  });
+
   it("takes timezone in browser modes only, as a client default and per scrape", () => {
     const url = "https://example.com";
     const browser = new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });
@@ -301,6 +337,7 @@ describe("XrioClient types", () => {
       | "locale"
       | "timezone"
       | "gpu"
+      | "hardware"
       | "window"
       | "screen"
       | "fonts"

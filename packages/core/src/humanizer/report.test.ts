@@ -181,7 +181,9 @@ describe("the identity report", () => {
 
   it.each(["fr-FR", "ja-JP"])("reports the locale %s an http scrape was pinned to", (locale) => {
     expect(
-      httpIdentity({ display: undefined, locale, timezone: undefined }).report(null),
+      httpIdentity({ display: undefined, hardware: undefined, locale, timezone: undefined }).report(
+        null,
+      ),
     ).toMatchObject({
       locale,
       mode: "http",
@@ -265,6 +267,7 @@ describe("the identity report", () => {
           automation: null,
           fonts: { reason: "no fontstack/ beside the binary", source: "host" },
           gpu: { backend: "swiftshader", persona: null },
+          hardware: { cores: 0, memoryGb: 0, source: "host" },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
@@ -279,7 +282,7 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "UTC" },
           window: { height: 1018, kind: "maximized", source: "drawn", width: 1680, x: 0, y: 32 },
         },
-        tells: ["headless-token", "host-zone-utc", "host-fonts"],
+        tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
       },
     });
   });
@@ -317,7 +320,13 @@ describe("the identity report", () => {
     }).toStrictEqual({
       binary: { commit: null, dirty: null, fork: "xrio", version: "154.0.8037.57" },
       speech: { persona: "basharsx4-google-linux-154" },
-      tells: ["headless-token", "host-zone-utc", "host-fonts", "speech-persona-skew"],
+      tells: [
+        "headless-token",
+        "host-zone-utc",
+        "hardware-unhonored",
+        "host-fonts",
+        "speech-persona-skew",
+      ],
       voices: { kind: "persona", name: "basharsx4-google-linux-154" },
     });
   });
@@ -336,7 +345,7 @@ describe("the identity report", () => {
 
       expect({ binary, tells }).toStrictEqual({
         binary: { commit: COMMIT, dirty: 3, fork: "xrio", version: "154.0.8037.57" },
-        tells: ["headless-token", "host-zone-utc", "host-fonts"],
+        tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
       });
     });
 
@@ -349,7 +358,7 @@ describe("the identity report", () => {
 
       expect({ binary, tells }).toStrictEqual({
         binary: { commit: null, dirty: null, fork: "xrio", version: "154.0.8037.57" },
-        tells: ["headless-token", "host-zone-utc", "host-fonts"],
+        tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
       });
     });
 
@@ -358,7 +367,13 @@ describe("the identity report", () => {
 
       expect({ binary, tells }).toStrictEqual({
         binary: { commit: null, dirty: 0, fork: "xrio", version: "154.0.8037.57" },
-        tells: ["headless-token", "host-zone-utc", "host-fonts", "fork-commit-unreadable"],
+        tells: [
+          "headless-token",
+          "host-zone-utc",
+          "hardware-unhonored",
+          "host-fonts",
+          "fork-commit-unreadable",
+        ],
       });
     });
 
@@ -459,6 +474,7 @@ describe("the identity report", () => {
           automation: null,
           fonts: { reason: null, source: "host" },
           gpu: { backend: "native" },
+          hardware: { cores: 0, memoryGb: 0, source: "host" },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { source: "host" },
@@ -468,7 +484,7 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "America/Toronto" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
-        tells: ["flag-infobar"],
+        tells: ["hardware-unhonored", "flag-infobar"],
       },
     });
   });

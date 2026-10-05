@@ -51,6 +51,7 @@ export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts"
 export type {
   ClientOptions,
   DisplayOptions,
+  HardwareOptions,
   ModeOptions,
   ScrapeFormat,
   ScrapeOptions,

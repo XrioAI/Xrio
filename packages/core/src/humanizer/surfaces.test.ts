@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
+import { forkWithKnobs, HARDWARE_KNOBS } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
-import type { FontStack, HostCapabilities } from "./contracts.ts";
+import type { DeviceRecord, FontStack, HostCapabilities, KnobRegistry } from "./contracts.ts";
 import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityIntent } from "./intent.ts";
@@ -21,7 +22,7 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
 });
 
 const pinnedTo = (locale: string): Partial<IdentityContext> => ({
-  pins: { display: undefined, locale, timezone: undefined },
+  pins: { display: undefined, hardware: undefined, locale, timezone: undefined },
 });
 
 const expectedLocale = (
@@ -427,6 +428,188 @@ const fatalEquals = (field: string, value: number) => ({
   field,
   matcher: { kind: "equals", value },
   severity: "fatal",
+});
+
+const hardwareExpectations = (cores: number, memoryGb: number) => [
+  {
+    compatibility: true,
+    field: "hardwareConcurrency",
+    matcher: { kind: "equals", value: cores },
+    severity: "fatal",
+  },
+  {
+    compatibility: true,
+    field: "deviceMemory",
+    matcher: { kind: "equals", value: memoryGb },
+    severity: "note",
+  },
+];
+
+const hardwareInputs = (cores: number, memoryGb: number) => [
+  { name: "--xrio-hardware-concurrency", sink: "switch", value: String(cores) },
+  { name: "--xrio-device-memory", sink: "switch", value: String(memoryGb) },
+];
+
+const hardwareOf = (overrides: Partial<IdentityContext>) =>
+  resolveSurfaces(contextOf({ capabilities: forkWithKnobs(), ...overrides })).hardware;
+
+const { "device-memory": _memory, ...withoutMemory } = HARDWARE_KNOBS;
+
+const { "hardware-concurrency": _cores, ...withoutCores } = HARDWARE_KNOBS;
+
+const { "spoof-hardware": _spoof, ...withoutSpoof } = HARDWARE_KNOBS;
+
+const recordWith = (cores: number, memoryGb: number): DeviceRecord => {
+  const { record } = planIdentity(contextOf()).chosen;
+
+  if (record === null) {
+    throw new Error("A headless plan records its device.");
+  }
+
+  return { ...record, device: { ...record.device, cores, memoryGb } };
+};
+
+describe("the hardware surface", () => {
+  it("sends both knobs with the seed's drawn row and expects the cores, fatally", () => {
+    expect(hardwareOf({})).toStrictEqual({
+      expected: hardwareExpectations(6, 16),
+      inputs: hardwareInputs(6, 16),
+      tells: [],
+      value: { cores: 6, memoryGb: 16, source: "drawn" },
+    });
+  });
+
+  it.each([
+    { cores: 6, memoryGb: 16, permitted: 32, tells: [] },
+    { cores: 6, memoryGb: 16, permitted: 12, tells: ["hardware-capped"] },
+    { cores: 4, memoryGb: 8, permitted: 6, tells: ["hardware-capped"] },
+  ])(
+    "draws $cores cores and $memoryGb GB on a host that permits $permitted CPUs, telling $tells",
+    ({ cores, memoryGb, permitted, tells }) => {
+      expect(hardwareOf({ capabilities: forkWithKnobs(HARDWARE_KNOBS, permitted) })).toStrictEqual({
+        expected: hardwareExpectations(cores, memoryGb),
+        inputs: hardwareInputs(cores, memoryGb),
+        tells,
+        value: { cores, memoryGb, source: "drawn" },
+      });
+    },
+  );
+
+  it("keeps the host's own values and tells hardware-capped when no row fits the permitted CPUs", () => {
+    expect(hardwareOf({ capabilities: forkWithKnobs(HARDWARE_KNOBS, 2) })).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: ["hardware-capped"],
+      value: { cores: 0, memoryGb: 0, source: "host" },
+    });
+  });
+
+  it.each([
+    { capabilities: { permittedCpus: 32, platform: "linux" } as const, name: "a stock binary" },
+    { capabilities: forkWithKnobs({}), name: "a fork with no knobs" },
+    { capabilities: forkWithKnobs(withoutMemory), name: "a fork without device-memory" },
+    { capabilities: forkWithKnobs(withoutCores), name: "a fork without hardware-concurrency" },
+    { capabilities: forkWithKnobs(withoutSpoof), name: "a fork that does not list spoof-hardware" },
+    {
+      capabilities: forkWithKnobs({
+        ...HARDWARE_KNOBS,
+        "spoof-hardware": { origin: "set", value: "false" },
+      }),
+      name: "a fork with spoof-hardware false",
+    },
+  ])("sends no knob and tells hardware-unhonored on $name", ({ capabilities }) => {
+    expect(hardwareOf({ capabilities })).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: ["hardware-unhonored"],
+      value: { cores: 0, memoryGb: 0, source: "host" },
+    });
+  });
+
+  it("never sends the fork's own seed, machine-classes or machine-class-expect", () => {
+    const everyKnob: KnobRegistry = {
+      ...HARDWARE_KNOBS,
+      "machine-class-expect": { origin: "set", value: "6,16" },
+      "machine-classes": { origin: "set", value: "[[6,16,200,1]]" },
+      seed: { origin: "set", value: "0x1" },
+    };
+
+    const { switches } = planIdentity(contextOf({ capabilities: forkWithKnobs(everyKnob) })).inputs;
+
+    expect(switches.filter((entry) => entry.startsWith("--xrio-"))).toStrictEqual([
+      "--xrio-hardware-concurrency=6",
+      "--xrio-device-memory=16",
+    ]);
+  });
+
+  it("sends the same two knobs in a headed browser", () => {
+    expect(hardwareOf({ mode: "headed" }).inputs).toStrictEqual(hardwareInputs(6, 16));
+  });
+
+  it("presents what the caller pins, whatever the host permits", () => {
+    expect(
+      hardwareOf({
+        capabilities: forkWithKnobs(HARDWARE_KNOBS, 4),
+        pins: {
+          ...noPins,
+          hardware: { cores: [{ value: 8, weight: 1 }], memoryGb: [{ value: 16, weight: 1 }] },
+        },
+      }),
+    ).toStrictEqual({
+      expected: hardwareExpectations(8, 16),
+      inputs: hardwareInputs(8, 16),
+      tells: [],
+      value: { cores: 8, memoryGb: 16, source: "pinned" },
+    });
+  });
+
+  it("presents a pinned memory on a host under the smallest row, with the host's CPUs as cores", () => {
+    expect(
+      hardwareOf({
+        capabilities: forkWithKnobs(HARDWARE_KNOBS, 2),
+        pins: { ...noPins, hardware: { cores: undefined, memoryGb: [{ value: 16, weight: 1 }] } },
+      }),
+    ).toStrictEqual({
+      expected: hardwareExpectations(2, 16),
+      inputs: hardwareInputs(2, 16),
+      tells: ["hardware-capped"],
+      value: { cores: 2, memoryGb: 16, source: "pinned" },
+    });
+  });
+
+  it("draws the other field from Xrio's rows that agree with a pinned one", () => {
+    expect([
+      hardwareOf({
+        pins: { ...noPins, hardware: { cores: [{ value: 12, weight: 1 }], memoryGb: undefined } },
+      }).value,
+      hardwareOf({
+        pins: { ...noPins, hardware: { cores: undefined, memoryGb: [{ value: 32, weight: 1 }] } },
+      }).value,
+    ]).toStrictEqual([
+      { cores: 12, memoryGb: 16, source: "pinned" },
+      { cores: 12, memoryGb: 32, source: "pinned" },
+    ]);
+  });
+
+  it("presents a record's cores and memory, and keeps the host's where the record has none", () => {
+    expect([
+      hardwareOf({ device: { kind: "record", record: recordWith(12, 16) } }),
+      hardwareOf({ device: { kind: "record", record: recordWith(0, 0) } }),
+    ]).toStrictEqual([
+      {
+        expected: hardwareExpectations(12, 16),
+        inputs: hardwareInputs(12, 16),
+        tells: [],
+        value: { cores: 12, memoryGb: 16, source: "record" },
+      },
+      {
+        expected: [],
+        inputs: [],
+        tells: [],
+        value: { cores: 0, memoryGb: 0, source: "host" },
+      },
+    ]);
+  });
 });
 
 describe("the window surface", () => {
@@ -905,7 +1088,7 @@ describe("the fork in the plan", () => {
 
     expect({ binary: plan.chosen.binary, tells: plan.tells }).toStrictEqual({
       binary: { commit: null, dirty: null, fork: "xrio" },
-      tells: ["host-fonts", "speech-persona-skew"],
+      tells: ["hardware-unhonored", "host-fonts", "speech-persona-skew"],
     });
   });
 });
@@ -925,14 +1108,16 @@ describe("the planned tells", () => {
     expect(
       planIdentity(contextOf({ capabilities, exit: proxyRoute, hostZone: "America/Chicago" }))
         .tells,
-    ).toStrictEqual(["exit-unknown"]);
+    ).toStrictEqual(["exit-unknown", "hardware-unhonored"]);
     expect(planIdentity(contextOf({ capabilities, hostZone: "UTC" })).tells).toStrictEqual([
       "host-zone-utc",
+      "hardware-unhonored",
     ]);
     expect(
       planIdentity(contextOf({ capabilities, hostZone: "America/Chicago" })).tells,
-    ).toStrictEqual([]);
+    ).toStrictEqual(["hardware-unhonored"]);
     expect(planIdentity(contextOf({ hostZone: "America/Chicago" })).tells).toStrictEqual([
+      "hardware-unhonored",
       "host-fonts",
     ]);
   });
@@ -963,6 +1148,7 @@ describe("the chosen identity", () => {
         automation: null,
         fonts: { reason: null, source: "host" },
         gpu: { backend: "native" },
+        hardware: { cores: 0, memoryGb: 0, source: "host" },
         leaks: { dnsOverHttps: "off", networkPrediction: "off" },
         locale: { languages: ["en-US", "en"], tag: "en-US" },
         media: { source: "host" },
@@ -1028,7 +1214,7 @@ describe("a display the caller pins", () => {
       window: headed.chosen.surfaces.window,
     }).toStrictEqual({
       screen: { source: "host" },
-      tells: ["display-pin-unhonored", "host-fonts", "flag-infobar"],
+      tells: ["hardware-unhonored", "display-pin-unhonored", "host-fonts", "flag-infobar"],
       window: { size: { height: 900, width: 1600 }, source: "fixed" },
     });
   });

@@ -5,6 +5,7 @@ import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
 import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
 import { fixedDevice } from "../../testing/fixed-seed.ts";
+import { forkWithKnobs } from "../../testing/hardware-fork.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
 import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
@@ -121,6 +122,36 @@ describe(planLaunch, () => {
     expect(args.filter((arg) => GL_SWITCH.test(arg))).toStrictEqual([
       "--use-gl=angle",
       "--use-angle=vulkan",
+    ]);
+  });
+
+  it("sends a fork's hardware knobs after the GPU switches and before the window's", () => {
+    const { args } = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/xrio-chrome/chrome",
+      display: undefined,
+      headless: true,
+      identity: planIdentity({
+        capabilities: forkWithKnobs(),
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headless",
+        pins: noPins,
+      }).inputs,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(
+      args.slice(
+        args.indexOf("--enable-unsafe-swiftshader"),
+        args.indexOf("--window-size=1680,1018"),
+      ),
+    ).toStrictEqual([
+      "--enable-unsafe-swiftshader",
+      "--xrio-hardware-concurrency=6",
+      "--xrio-device-memory=16",
     ]);
   });
 
@@ -330,7 +361,7 @@ describe(planLaunch, () => {
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
-        pins: { display: undefined, locale: "de-DE", timezone: undefined },
+        pins: { display: undefined, hardware: undefined, locale: "de-DE", timezone: undefined },
       }).inputs,
       scratchDir,
       xauthority: undefined,

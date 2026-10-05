@@ -408,6 +408,9 @@ describe("browserArgs option", () => {
     "--screen-info={0,0 1x1}",
     "--pxr-seed=1",
     "--xrio-gl-persona=x",
+    "--xrio-hardware-concurrency=8",
+    "--xrio-device-memory=16",
+    "--xrio-spoof-hardware=false",
     "--enable-features=X",
     "--disable-features=X",
     "--user-data-dir=/tmp/x",
@@ -552,6 +555,7 @@ describe("locale option", () => {
     expect(defaults.identity.locale).toBeUndefined();
     expect(resolveScrapeIntent(page, defaults).identity).toStrictEqual({
       display: undefined,
+      hardware: undefined,
       locale: undefined,
       timezone: undefined,
     });
@@ -893,6 +897,160 @@ describe("display option", () => {
         { ...page, mode: "http" },
         resolveClientOptions({ ...browser, display: { window: "maximized" } }),
       ).identity.display,
+    ).toBeUndefined();
+  });
+});
+
+describe("hardware option", () => {
+  const browser = { browserPath: "/browser", mode: "headless" } as const;
+
+  it("turns single values into one-row tables and leaves the rest to the draw", () => {
+    expect(
+      resolveClientOptions({ ...browser, hardware: { cores: 8, memoryGb: 16 } }).identity.hardware,
+    ).toStrictEqual({
+      cores: [{ value: 8, weight: 1 }],
+      memoryGb: [{ value: 16, weight: 1 }],
+    });
+    expect(
+      resolveClientOptions({ ...browser, hardware: { memoryGb: 32 } }).identity.hardware,
+    ).toStrictEqual({ cores: undefined, memoryGb: [{ value: 32, weight: 1 }] });
+    expect(resolveClientOptions(browser).identity.hardware).toBeUndefined();
+  });
+
+  it("keeps weighted tables in order", () => {
+    expect(
+      resolveClientOptions({
+        ...browser,
+        hardware: {
+          cores: [
+            { value: 8, weight: 3 },
+            { value: 12, weight: 1 },
+          ],
+          memoryGb: [
+            { value: 8, weight: 1 },
+            { value: 32, weight: 2 },
+          ],
+        },
+      }).identity.hardware,
+    ).toStrictEqual({
+      cores: [
+        { value: 8, weight: 3 },
+        { value: 12, weight: 1 },
+      ],
+      memoryGb: [
+        { value: 8, weight: 1 },
+        { value: 32, weight: 2 },
+      ],
+    });
+  });
+
+  it("lets a scrape replace one field of the client's hardware and keeps the other", () => {
+    const defaults = resolveClientOptions({ ...browser, hardware: { cores: 8, memoryGb: 16 } });
+
+    expect(
+      resolveScrapeIntent({ ...page, hardware: { memoryGb: 32 } }, defaults).identity.hardware,
+    ).toStrictEqual({ cores: [{ value: 8, weight: 1 }], memoryGb: [{ value: 32, weight: 1 }] });
+    expect(resolveScrapeIntent(page, defaults).identity.hardware).toBe(defaults.identity.hardware);
+  });
+
+  it.each([
+    { hardware: { cores: 0 }, name: "zero cores" },
+    { hardware: { cores: -4 }, name: "negative cores" },
+    { hardware: { cores: 6.5 }, name: "fractional cores" },
+    { hardware: { cores: Number.NaN }, name: "NaN cores" },
+    { hardware: { cores: Number.POSITIVE_INFINITY }, name: "infinite cores" },
+    { hardware: { cores: 2_147_483_648 }, name: "more cores than the fork accepts" },
+    { hardware: { cores: "8" }, name: "cores as text" },
+    {
+      hardware: {
+        cores: [
+          { value: 8, weight: 1 },
+          { value: 0, weight: 1 },
+        ],
+      },
+      name: "a zero row",
+    },
+  ])("refuses $name", ({ hardware }) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, hardware })).toThrow(
+      expect.objectContaining(
+        refusal(
+          "hardware.cores must be a positive whole number of at most 2147483647, or a weighted table of them.",
+        ),
+      ),
+    );
+  });
+
+  it.each([1, 3, 6, 12, 24, 64, 0, -8, 8.5, Number.NaN])("refuses %s GB of memory", (memoryGb) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, hardware: { memoryGb } })).toThrow(
+      expect.objectContaining(
+        refusal("hardware.memoryGb must be 2, 4, 8, 16 or 32 GB, or a weighted table of them."),
+      ),
+    );
+  });
+
+  it.each([2, 4, 8, 16, 32] as const)("accepts %s GB of memory", (memoryGb) => {
+    expect(
+      resolveClientOptions({ ...browser, hardware: { memoryGb } }).identity.hardware?.memoryGb,
+    ).toStrictEqual([{ value: memoryGb, weight: 1 }]);
+  });
+
+  it.each([
+    {
+      hardware: { cores: [] },
+      message: "hardware.cores must be a value or a non-empty weighted table.",
+    },
+    {
+      hardware: { cores: [{ value: 8, weight: 0 }] },
+      message: "hardware.cores weights must be positive numbers.",
+    },
+    {
+      hardware: {
+        memoryGb: [
+          { value: 8, weight: 1e308 },
+          { value: 16, weight: 1e308 },
+        ],
+      },
+      message: "hardware.memoryGb weights must add up to a finite number.",
+    },
+    {
+      hardware: { cores: [{ typo: 1, value: 8, weight: 1 }] },
+      message: "hardware.cores rows take only a value and a weight.",
+    },
+    {
+      hardware: { memoryGb: [{ typo: 1, value: 8, weight: 1 }] },
+      message: "hardware.memoryGb rows take only a value and a weight.",
+    },
+    {
+      hardware: { cores: { value: 8 } },
+      message:
+        "hardware.cores must be a positive whole number of at most 2147483647, or a weighted table of them.",
+    },
+    { hardware: { gpu: "x" }, message: "hardware takes cores and memoryGb." },
+    { hardware: null, message: "hardware takes cores and memoryGb." },
+  ])("refuses the malformed hardware $hardware", ({ hardware, message }) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, hardware })).toThrow(
+      expect.objectContaining(refusal(message)),
+    );
+  });
+
+  it("is only for browser modes", () => {
+    const notInHttp = refusal("hardware is only supported in browser modes.");
+
+    // @ts-expect-error hardware needs a browser mode.
+    expect(() => resolveClientOptions({ hardware: { cores: 8 }, mode: "http" })).toThrow(
+      expect.objectContaining(notInHttp),
+    );
+    expect(() =>
+      resolveScrapeIntent({ ...page, hardware: {} }, resolveClientOptions({ mode: "http" })),
+    ).toThrow(expect.objectContaining(notInHttp));
+    expect(
+      resolveScrapeIntent(
+        { ...page, mode: "http" },
+        resolveClientOptions({ ...browser, hardware: { cores: 8 } }),
+      ).identity.hardware,
     ).toBeUndefined();
   });
 });

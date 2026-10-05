@@ -35,10 +35,10 @@ export const recordOf = (
   surfaces: SurfaceChoices,
 ): DeviceRecord => ({
   device: {
-    cores: 0,
+    cores: surfaces.hardware.cores,
     fonts: fontsOf(surfaces),
     gpu: structuredClone(surfaces.gpu),
-    memoryGb: 0,
+    memoryGb: surfaces.hardware.memoryGb,
     screen: structuredClone(screen),
     voices: voicesOf(surfaces.speech),
     window: structuredClone(window),

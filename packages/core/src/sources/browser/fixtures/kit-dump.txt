@@ -1,15 +1,18 @@
 xrio-knobs: 77 knobs
 [set] config-file = /opt/synthetic-fork/xrio-config.json
+[def] device-memory = <unset>
 [set] dump-config = 
 [def] gl-persona = <unset>
 [der] gl-table = <absent>
 [def] gl-table-suffix = .xrio-gl.json
+[def] hardware-concurrency = <unset>
 [def] media-table-suffix = .xrio-media.json
 [def] persona-dir = <unset>
 [def] persona-dir-name = personas
 [set] speech-persona = synthetic-voices-154
 [der] speech-table = <absent>
 [def] speech-table-suffix = .xrio-speech.json
+[def] spoof-hardware = true
 [def] suppress-headless-token = true
 [def] synthetic-knob-01 = 3
 [def] synthetic-knob-02 = 6
@@ -72,7 +75,4 @@ xrio-knobs: 77 knobs
 [def] synthetic-knob-59 = 177
 [def] synthetic-knob-60 = 180
 [def] synthetic-knob-61 = 183
-[def] synthetic-knob-62 = 186
-[def] synthetic-knob-63 = 189
-[def] synthetic-knob-64 = 192
 [umb] synthetic-umbrella-knob = true

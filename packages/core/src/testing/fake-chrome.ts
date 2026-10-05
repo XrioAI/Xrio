@@ -274,6 +274,8 @@ const pairOf = (name: string, fallback: readonly [number, number]): readonly [nu
 
 const HOST_CORES = 8;
 
+const HOST_MEMORY_GB = 8;
+
 const knobNumber = (name: string, fallback: number): number =>
   Number(switchValue(name) ?? fallback);
 
@@ -347,7 +349,7 @@ const SECURE_CONTEXT_READING = {
     platformVersion: "6.8.0",
     wow64: false,
   },
-  deviceMemory: 8,
+  deviceMemory: knobNumber("--xrio-device-memory", HOST_MEMORY_GB),
   kind: "secure",
   webgpu: false,
 };

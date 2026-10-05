@@ -3,13 +3,19 @@ import { createHash } from "node:crypto";
 import { CHROME_MIN_WINDOW } from "./contracts.ts";
 import type {
   DisplayTables,
+  HardwareTables,
   Insets,
   PresentedDevice,
   Seed,
   WindowPin,
   WindowState,
 } from "./contracts.ts";
-import { DESKTOP_LAYOUTS, DESKTOP_SCREENS, WINDOW_STATES } from "./owned-inputs.ts";
+import {
+  DESKTOP_LAYOUTS,
+  DESKTOP_SCREENS,
+  MACHINE_CLASSES,
+  WINDOW_STATES,
+} from "./owned-inputs.ts";
 
 export const SEED_BYTES = 8;
 
@@ -69,6 +75,69 @@ const pick = <Row extends Weighted>(rows: readonly Row[], seed: Seed, purpose: s
   }
 
   return last;
+};
+
+type MachineClass = (typeof MACHINE_CLASSES)[number];
+
+const pinnedValue = (
+  rows: readonly (Weighted & { readonly value: number })[] | undefined,
+  seed: Seed,
+  purpose: string,
+): number | undefined => (rows === undefined ? undefined : pick(rows, seed, purpose).value);
+
+export interface DrawnHardware {
+  readonly cores: number;
+  readonly memoryGb: number;
+  readonly source: "drawn" | "pinned";
+  readonly capped: boolean;
+}
+
+export const drawHardware = (
+  seed: Seed,
+  tables: HardwareTables = {},
+  ceilings: readonly number[] = [],
+): DrawnHardware | undefined => {
+  const eligible = MACHINE_CLASSES.filter(({ cores }) =>
+    ceilings.every((ceiling) => cores <= ceiling),
+  );
+
+  const cores = pinnedValue(tables.cores, seed, "hardware-cores");
+  const memoryGb = pinnedValue(tables.memoryGb, seed, "hardware-memory");
+
+  if (cores !== undefined && memoryGb !== undefined) {
+    return { capped: false, cores, memoryGb, source: "pinned" };
+  }
+
+  const pool = cores === undefined ? eligible : MACHINE_CLASSES;
+
+  const rowsFrom = (candidates: readonly MachineClass[]): readonly MachineClass[] => {
+    const agreeing = candidates.filter(
+      (row) =>
+        (cores === undefined || row.cores === cores) &&
+        (memoryGb === undefined || row.memoryGb === memoryGb),
+    );
+
+    return agreeing.length > 0 ? agreeing : candidates;
+  };
+
+  const rows = rowsFrom(pool);
+  const uncapped = rowsFrom(MACHINE_CLASSES);
+
+  if (rows.length === 0) {
+    return memoryGb === undefined
+      ? undefined
+      : { capped: true, cores: Math.min(...ceilings), memoryGb, source: "pinned" };
+  }
+
+  const row = pick(rows, seed, "hardware");
+
+  return {
+    capped:
+      rows.length !== uncapped.length || rows.some((candidate) => !uncapped.includes(candidate)),
+    cores: cores ?? row.cores,
+    memoryGb: memoryGb ?? row.memoryGb,
+    source: cores === undefined && memoryGb === undefined ? "drawn" : "pinned",
+  };
 };
 
 export interface Bounds {

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { fixedDevice } from "../testing/fixed-seed.ts";
+import { forkWithKnobs } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
@@ -106,6 +107,7 @@ describe("each matcher kind", () => {
       kind: "equals",
       missed: { ...linuxHeadless, languages: ["de-DE", "de"] },
       rule: expectation({}),
+      seen: ["de-DE", "de"],
       wanted: ["en-US", "en"],
     },
     {
@@ -116,6 +118,7 @@ describe("each matcher kind", () => {
         field: "intlLocale",
         matcher: { kind: "same-language", locale: "en-US" },
       }),
+      seen: "de-DE",
       wanted: "en",
     },
     {
@@ -127,6 +130,7 @@ describe("each matcher kind", () => {
         matcher: { kind: "zone-offsets" },
         surface: "timezone",
       }),
+      seen: ["GMT+00:00", "GMT+00:00"],
       wanted: ["GMT+05:30", "GMT+05:30"],
     },
     {
@@ -138,6 +142,7 @@ describe("each matcher kind", () => {
         matcher: { field: "availWidth", kind: "at-most-field" },
         surface: "window",
       }),
+      seen: 1681,
       wanted: 1680,
     },
     {
@@ -153,20 +158,24 @@ describe("each matcher kind", () => {
         matcher: { kind: "no-headless-token" },
         surface: "automation",
       }),
+      seen: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
       wanted:
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
     },
-  ] as const)("$kind holds or names the field it missed", ({ held, missed, rule, wanted }) => {
-    expect(evaluate(planWith([rule]), held).mismatches).toStrictEqual([]);
-    expect(evaluate(planWith([rule]), missed).mismatches).toStrictEqual([
-      {
-        expected: wanted,
-        field: rule.field,
-        observed: missed[rule.field],
-        surface: rule.surface,
-      },
-    ]);
-  });
+  ] as const)(
+    "$kind holds or names the field it missed",
+    ({ held, missed, rule, seen, wanted }) => {
+      expect(evaluate(planWith([rule]), held).mismatches).toStrictEqual([]);
+      expect(evaluate(planWith([rule]), missed).mismatches).toStrictEqual([
+        {
+          expected: wanted,
+          field: rule.field,
+          observed: seen,
+          surface: rule.surface,
+        },
+      ]);
+    },
+  );
 });
 
 describe("severity", () => {
@@ -183,7 +192,7 @@ describe("severity", () => {
         },
         { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
       ],
-      report: { notes: [], tells: [] },
+      report: { notes: [], tells: ["hardware-unhonored"] },
     });
   });
 
@@ -200,7 +209,7 @@ describe("severity", () => {
           },
           { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
         ],
-        tells: ["unmeasured-chrome"],
+        tells: ["unmeasured-chrome", "hardware-unhonored"],
       },
     });
   });
@@ -249,7 +258,7 @@ describe("severity", () => {
             surface: "timezone",
           },
         ],
-        tells: [],
+        tells: ["hardware-unhonored"],
       },
     });
   });
@@ -268,7 +277,7 @@ describe("severity", () => {
         }),
       ).toMatchObject({
         mismatches: [{ expected: "UTC0", field: "zone", observed: zone, surface: "timezone" }],
-        report: { notes: [], tells: ["unmeasured-chrome"] },
+        report: { notes: [], tells: ["unmeasured-chrome", "hardware-unhonored"] },
       });
     },
   );
@@ -284,7 +293,80 @@ describe("severity", () => {
       mismatches: [],
       report: {
         notes: [{ expected: "en", field: "intlLocale", observed: "fr-CA", surface: "locale" }],
-        tells: [],
+        tells: ["hardware-unhonored"],
+      },
+    });
+  });
+});
+
+const hardwarePlan = () =>
+  planFor({ capabilities: { ...forkWithKnobs(), fontStack: CHECKED_FONT_STACK } });
+
+const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
+  battery: true,
+  clientHints: null,
+  deviceMemory,
+  kind: "secure",
+  webgpu: false,
+});
+
+describe("the hardware expectations", () => {
+  const seen = { ...linuxHeadless, hardwareConcurrency: 6 };
+
+  it("holds when the page reads the drawn cores and memory", () => {
+    expect(evaluate(hardwarePlan(), { ...seen, afterCapture: secure(16) })).toMatchObject({
+      mismatches: [],
+      report: { notes: [], tells: [] },
+    });
+  });
+
+  it("fails a scrape whose page reads other cores than the drawn ones", () => {
+    expect(
+      evaluate(hardwarePlan(), { ...linuxHeadless, afterCapture: secure(16) }).mismatches,
+    ).toStrictEqual([
+      { expected: 6, field: "hardwareConcurrency", observed: 32, surface: "hardware" },
+    ]);
+  });
+
+  it("notes other memory than the drawn one and tells hardware-drift, never failing the scrape", () => {
+    expect(evaluate(hardwarePlan(), { ...seen, afterCapture: secure(8) })).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [{ expected: 16, field: "deviceMemory", observed: 8, surface: "hardware" }],
+        tells: ["hardware-drift"],
+      },
+    });
+  });
+
+  it.each([
+    { afterCapture: { kind: "insecure" }, name: "an insecure page" },
+    { afterCapture: { kind: "failed" }, name: "a failed read" },
+    { afterCapture: { kind: "skipped" }, name: "a skipped read" },
+    { afterCapture: { kind: "not-navigated" }, name: "a scrape that never navigated" },
+    { afterCapture: secure(null), name: "a page with no deviceMemory" },
+  ] as const)("expects no memory from $name", ({ afterCapture }) => {
+    expect(evaluate(hardwarePlan(), { ...seen, afterCapture })).toMatchObject({
+      mismatches: [],
+      report: { notes: [], tells: [] },
+    });
+  });
+
+  it("expects nothing on stock Chrome, whatever cores and memory the host shows", () => {
+    expect(
+      evaluate(planFor(), { ...linuxHeadless, afterCapture: secure(32), hardwareConcurrency: 64 }),
+    ).toMatchObject({
+      mismatches: [],
+      report: { notes: [], tells: ["hardware-unhonored"] },
+    });
+  });
+
+  it("only notes a core mismatch on an unmeasured Chrome major", () => {
+    expect(
+      evaluate(hardwarePlan(), { ...linuxHeadless, afterCapture: secure(16), product: UNMEASURED }),
+    ).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [{ expected: 6, field: "hardwareConcurrency", observed: 32, surface: "hardware" }],
       },
     });
   });
@@ -298,7 +380,7 @@ describe("the colour scheme", () => {
         notes: [
           { expected: "light", field: "colorScheme", observed: "dark", surface: "automation" },
         ],
-        tells: [],
+        tells: ["hardware-unhonored"],
       },
     });
   });
@@ -355,7 +437,7 @@ describe("the headed window", () => {
           { expected: 1024, field: "outerWidth", observed: 1600, surface: "window" },
           { expected: 768, field: "outerHeight", observed: 900, surface: "window" },
         ],
-        tells: ["no-taskbar", "display-implausible", "flag-infobar"],
+        tells: ["no-taskbar", "display-implausible", "hardware-unhonored", "flag-infobar"],
       },
     });
   });
@@ -378,7 +460,7 @@ describe("a pinned alias", () => {
           notes: [],
           observed: { timeZone: "Europe/Kiev" },
           surfaces: { timezone: { source: "pin", zone: "Europe/Kiev" } },
-          tells: [],
+          tells: ["hardware-unhonored"],
         },
       },
     );
@@ -412,7 +494,10 @@ describe("tells", () => {
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.0.0 Safari/537.36",
     };
 
-    expect(evaluate(planFor(), headless).report.tells).toStrictEqual(["headless-token"]);
+    expect(evaluate(planFor(), headless).report.tells).toStrictEqual([
+      "headless-token",
+      "hardware-unhonored",
+    ]);
   });
 
   it("lists what the plan's facts show after what Chrome was observed to present", () => {
@@ -426,6 +511,7 @@ describe("tells", () => {
     expect(evaluate(proxied, headless).report.tells).toStrictEqual([
       "headless-token",
       "exit-unknown",
+      "hardware-unhonored",
     ]);
   });
 });
@@ -467,7 +553,7 @@ describe("the fonts evidence", () => {
       fontEvidence: { kind: "confirmed" },
       mismatches: [],
       notes: [],
-      tells: [],
+      tells: ["hardware-unhonored"],
     });
   });
 
@@ -492,7 +578,7 @@ describe("the fonts evidence", () => {
       notes: [
         { expected: "c6755abb", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
       ],
-      tells: ["fonts-drift"],
+      tells: ["hardware-unhonored", "fonts-drift"],
     });
   });
 
@@ -517,7 +603,7 @@ describe("the fonts evidence", () => {
       notes: [
         { expected: true, field: "fontsSentinelResolved", observed: false, surface: "fonts" },
       ],
-      tells: ["fonts-drift"],
+      tells: ["hardware-unhonored", "fonts-drift"],
     });
   });
 
@@ -787,7 +873,7 @@ describe("the zone check run against the host's Intl", () => {
       expect(zoneCheckUnder(zone)).toMatchObject({
         mismatches: [],
         observation: { requestedZone: zone },
-        report: { notes: [], tells: [] },
+        report: { notes: [], tells: ["hardware-unhonored"] },
       });
     },
   );
@@ -804,7 +890,7 @@ describe("the zone check run against the host's Intl", () => {
       }).toMatchObject({
         described: [`timezone zone (TZ=${zone}; Chrome named no zone)`],
         mismatches: [{ expected: zone, field: "zone", observed: null, surface: "timezone" }],
-        report: { notes: [], tells: [] },
+        report: { notes: [], tells: ["hardware-unhonored"] },
       });
     },
   );

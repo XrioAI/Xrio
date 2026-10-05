@@ -190,6 +190,41 @@ describe("browsers on the kit fork", () => {
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
+  it("sends the drawn cores and memory to the fork and reads the same values back", async () => {
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: createCapabilityProbe({
+        parallelism: () => 32,
+        processStatusFile: path.join(root, "no-status"),
+        root: path.join(root, "scratch"),
+      }),
+      random: fixedRandom,
+    });
+
+    using deadline = startDeadline(10_000);
+
+    try {
+      const { identity } = await browsers.visit({
+        browserArgs: [],
+        browserPath: await fakeForkPath("kit", { root }),
+        deadline,
+        mode: "headless",
+        pins: noPins,
+        proxy: undefined,
+        url: new URL("https://fake.test/page"),
+      }).document;
+
+      expect(identity).toMatchObject({
+        notes: [],
+        observed: { deviceMemory: 16, hardwareConcurrency: 6 },
+        record: { device: { cores: 6, memoryGb: 16 } },
+        surfaces: { hardware: { cores: 6, memoryGb: 16, source: "drawn" } },
+      });
+      expect(identity.tells).toStrictEqual([]);
+    } finally {
+      await browsers.close();
+    }
+  });
+
   it("refuses a launched Chrome whose version differs from the probed version", async () => {
     await expect(loadWithFork("kit", root, "154.0.8037.99")).rejects.toSatisfy(
       (error) =>
@@ -1381,7 +1416,7 @@ describe("the launch identity check", () => {
         fonts: { reason: "no fontstack/ beside the binary", source: "host" },
         timezone: { source: "host", zone: "UTC" },
       },
-      tells: ["headless-token", "host-zone-utc", "host-fonts"],
+      tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
     });
   });
 
@@ -1402,7 +1437,7 @@ describe("the launch identity check", () => {
     await browsers.close();
     expect(document.identity).toMatchObject({
       surfaces: { timezone: { source: "pin", zone: "UTC" } },
-      tells: ["headless-token", "host-fonts"],
+      tells: ["headless-token", "hardware-unhonored", "host-fonts"],
     });
   });
 
@@ -1503,7 +1538,7 @@ describe("the launch identity check", () => {
         await settledValue(
           browsers.visit({
             ...(await normalRequest(deadline)),
-            pins: { display: undefined, locale: "de-DE", timezone: undefined },
+            pins: { display: undefined, hardware: undefined, locale: "de-DE", timezone: undefined },
           }).document,
         ),
     );

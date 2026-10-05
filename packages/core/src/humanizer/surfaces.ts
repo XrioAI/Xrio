@@ -12,12 +12,13 @@ import type {
   WindowPin,
   WindowState,
 } from "./contracts.ts";
-import { drawDisplay, windowBounds, workAreaOf } from "./draws.ts";
+import { drawDisplay, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
 import type { IdentityIntent } from "./intent.ts";
 import {
   chromeAcceptLanguages,
+  holdsHostHardware,
   isChromeBadFlag,
   XRIO_SENT_BAD_FLAG_SWITCHES,
 } from "./owned-inputs.ts";
@@ -66,6 +67,11 @@ export interface SurfaceChoices {
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
   readonly timezone: { readonly source: "pin" | "exit" | "host"; readonly zone: string };
   readonly gpu: GpuChoice;
+  readonly hardware: {
+    readonly source: "drawn" | "pinned" | "record" | "host";
+    readonly cores: number;
+    readonly memoryGb: number;
+  };
   readonly window:
     | ({ readonly source: DeviceSource; readonly kind: "maximized" | "floating" } & Bounds)
     | { readonly source: "fixed"; readonly size: Size };
@@ -100,6 +106,7 @@ export const EMISSION_ORDER = [
   "locale",
   "timezone",
   "gpu",
+  "hardware",
   "window",
   "screen",
   "fonts",
@@ -157,6 +164,7 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
     hostZone: timezone.kind === "host" ? timezone.zone : context.hostZone,
     pins: {
       display: context.pins.display,
+      hardware: context.pins.hardware,
       locale,
       timezone: timezone.kind === "pinned" ? timezone.zone : undefined,
     },
@@ -375,6 +383,68 @@ const resolveGpu = ({
   expected: [WEBGL_CONTEXT],
   ...chooseGpu(capabilities),
 });
+
+const HARDWARE_KNOBS = ["hardware-concurrency", "device-memory"] as const;
+
+const HOST_HARDWARE: SurfaceChoices["hardware"] = { cores: 0, memoryGb: 0, source: "host" };
+
+const honorsHardware = (capabilities: HostCapabilities): boolean =>
+  HARDWARE_KNOBS.every((knob) => capabilities.fork?.knobs[knob] !== undefined) &&
+  knobOf(capabilities, "spoof-hardware") === "true";
+
+const hardwareExpectations = ({ cores, memoryGb }: SurfaceChoices["hardware"]): Expectation[] => [
+  compatible("hardwareConcurrency", equals(cores), "fatal"),
+  compatible("deviceMemory", equals(memoryGb), "note"),
+];
+
+const hardwareInputs = ({ cores, memoryGb }: SurfaceChoices["hardware"]): LaunchInput[] => [
+  { name: "--xrio-hardware-concurrency", sink: "switch", value: String(cores) },
+  { name: "--xrio-device-memory", sink: "switch", value: String(memoryGb) },
+];
+
+const presentHardware = (
+  choice: SurfaceChoices["hardware"],
+  tells: readonly FactTell[] = [],
+): Resolutions["hardware"] => ({
+  expected: hardwareExpectations(choice),
+  inputs: hardwareInputs(choice),
+  tells,
+  value: choice,
+});
+
+const keepHost = (tells: readonly FactTell[]): Resolutions["hardware"] => ({
+  expected: [],
+  inputs: [],
+  tells,
+  value: HOST_HARDWARE,
+});
+
+const resolveHardware = (
+  { capabilities, device, pins }: Pick<IdentityContext, "capabilities" | "device" | "pins">,
+  { seed }: Device,
+): Resolutions["hardware"] => {
+  if (!honorsHardware(capabilities)) {
+    return keepHost(["hardware-unhonored"]);
+  }
+
+  if (device.kind === "record") {
+    const { cores, memoryGb } = device.record.device;
+
+    return holdsHostHardware(device.record.device)
+      ? keepHost([])
+      : presentHardware({ cores, memoryGb, source: "record" });
+  }
+
+  const drawn = drawHardware(seed, pins.hardware, [capabilities.permittedCpus]);
+
+  if (drawn === undefined) {
+    return keepHost(["hardware-capped"]);
+  }
+
+  const { capped, cores, memoryGb, source } = drawn;
+
+  return presentHardware({ cores, memoryGb, source }, capped ? ["hardware-capped"] : []);
+};
 
 const resolveHeadedWindow = (): Resolutions["window"] => ({
   expected: [
@@ -612,6 +682,7 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => {
     automation: resolveAutomation(replayed),
     fonts: resolveFonts(replayed),
     gpu: resolveGpu(replayed),
+    hardware: resolveHardware(replayed, device),
     leaks: resolveLeaks(),
     locale: resolveLocale(replayed),
     media: resolveMedia(replayed),

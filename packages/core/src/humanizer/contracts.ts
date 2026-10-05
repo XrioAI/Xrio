@@ -22,6 +22,15 @@ interface Weighted {
   readonly weight: number;
 }
 
+interface ValueRow extends Weighted {
+  readonly value: number;
+}
+
+export interface HardwareTables {
+  readonly cores?: readonly ValueRow[];
+  readonly memoryGb?: readonly ValueRow[];
+}
+
 export type WindowPin =
   | { readonly kind: "maximized" }
   | {

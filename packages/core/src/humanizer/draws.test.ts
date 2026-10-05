@@ -1,14 +1,29 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
+import { forkWithKnobs } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { DeviceRecord, Observation } from "./contracts.ts";
-import { displayMisfit, drawDisplay, seedOf, windowBounds, workAreaOf } from "./draws.ts";
+import {
+  displayMisfit,
+  drawDisplay,
+  drawHardware,
+  seedOf,
+  windowBounds,
+  workAreaOf,
+} from "./draws.ts";
 import type { DrawnDisplay } from "./draws.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityPlan } from "./humanizer.ts";
-import { DESKTOP_LAYOUTS, DESKTOP_SCREENS, WINDOW_STATES } from "./owned-inputs.ts";
+import {
+  DESKTOP_LAYOUTS,
+  DESKTOP_SCREENS,
+  MACHINE_CLASSES,
+  WINDOW_STATES,
+} from "./owned-inputs.ts";
 import { recordOverrides } from "./surfaces.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import { evaluate } from "./verify.ts";
@@ -20,6 +35,8 @@ const FREQUENCY_SEEDS = 100_000;
 const POINT = 0.01;
 
 const seedAt = (index: number): string => index.toString(16).padStart(16, "0");
+
+const PARENT_DISPLAY_DIGEST = "0072162c4e7b714f1ffb1b536c8ab71ad4837de2c068149d29faa6d4213c7360";
 
 const draws = (count: number): DrawnDisplay[] =>
   Array.from({ length: count }, (_, index) => drawDisplay(seedAt(index + 1)));
@@ -136,6 +153,483 @@ describe(drawDisplay, () => {
   });
 });
 
+const planFor = (seed: string, capabilities: IdentityContext["capabilities"]) =>
+  planIdentity({
+    capabilities,
+    device: { kind: "fresh", seed },
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: "UTC",
+    mode: "headless",
+    pins: noPins,
+  }).chosen.surfaces;
+
+const DISPLAY_GOLDEN = [
+  {
+    screen: {
+      layout: "gnome",
+      size: {
+        height: 1024,
+        width: 1280,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 0,
+        left: 0,
+        right: 0,
+        top: 32,
+      },
+    },
+    seed: "0000000000000001",
+    window: {
+      height: 992,
+      kind: "maximized",
+      source: "drawn",
+      width: 1280,
+      x: 0,
+      y: 32,
+    },
+  },
+  {
+    screen: {
+      layout: "gnome",
+      size: {
+        height: 900,
+        width: 1440,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 0,
+        left: 0,
+        right: 0,
+        top: 32,
+      },
+    },
+    seed: "0000000000000002",
+    window: {
+      height: 868,
+      kind: "maximized",
+      source: "drawn",
+      width: 1440,
+      x: 0,
+      y: 32,
+    },
+  },
+  {
+    screen: {
+      layout: "gnome",
+      size: {
+        height: 900,
+        width: 1600,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 0,
+        left: 0,
+        right: 0,
+        top: 32,
+      },
+    },
+    seed: "0000000000000003",
+    window: {
+      height: 868,
+      kind: "maximized",
+      source: "drawn",
+      width: 1600,
+      x: 0,
+      y: 32,
+    },
+  },
+  {
+    screen: {
+      layout: "kde",
+      size: {
+        height: 800,
+        width: 1280,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 44,
+        left: 0,
+        right: 0,
+        top: 0,
+      },
+    },
+    seed: "0000000000000005",
+    window: {
+      height: 756,
+      kind: "maximized",
+      source: "drawn",
+      width: 1280,
+      x: 0,
+      y: 0,
+    },
+  },
+  {
+    screen: {
+      layout: "cinnamon",
+      size: {
+        height: 1080,
+        width: 1920,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 40,
+        left: 0,
+        right: 0,
+        top: 0,
+      },
+    },
+    seed: "0000000000000008",
+    window: {
+      height: 1040,
+      kind: "maximized",
+      source: "drawn",
+      width: 1920,
+      x: 0,
+      y: 0,
+    },
+  },
+  {
+    screen: {
+      layout: "kde",
+      size: {
+        height: 900,
+        width: 1440,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 44,
+        left: 0,
+        right: 0,
+        top: 0,
+      },
+    },
+    seed: "000000000000000d",
+    window: {
+      height: 856,
+      kind: "maximized",
+      source: "drawn",
+      width: 1440,
+      x: 0,
+      y: 0,
+    },
+  },
+  {
+    screen: {
+      layout: "gnome",
+      size: {
+        height: 900,
+        width: 1440,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 0,
+        left: 0,
+        right: 0,
+        top: 32,
+      },
+    },
+    seed: "0000000000000015",
+    window: {
+      height: 868,
+      kind: "maximized",
+      source: "drawn",
+      width: 1440,
+      x: 0,
+      y: 32,
+    },
+  },
+  {
+    screen: {
+      layout: "cinnamon",
+      size: {
+        height: 1200,
+        width: 1920,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 40,
+        left: 0,
+        right: 0,
+        top: 0,
+      },
+    },
+    seed: "0000000000000022",
+    window: {
+      height: 1160,
+      kind: "maximized",
+      source: "drawn",
+      width: 1920,
+      x: 0,
+      y: 0,
+    },
+  },
+  {
+    screen: {
+      layout: "gnome",
+      size: {
+        height: 1080,
+        width: 1920,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 0,
+        left: 0,
+        right: 0,
+        top: 32,
+      },
+    },
+    seed: "0000000000000059",
+    window: {
+      height: 829,
+      kind: "floating",
+      source: "drawn",
+      width: 1396,
+      x: 2,
+      y: 166,
+    },
+  },
+  {
+    screen: {
+      layout: "ubuntu",
+      size: {
+        height: 1080,
+        width: 1920,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 0,
+        left: 66,
+        right: 0,
+        top: 32,
+      },
+    },
+    seed: "000000000000063d",
+    window: {
+      height: 829,
+      kind: "floating",
+      source: "drawn",
+      width: 1635,
+      x: 181,
+      y: 136,
+    },
+  },
+  {
+    screen: {
+      layout: "cinnamon",
+      size: {
+        height: 1080,
+        width: 1920,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 40,
+        left: 0,
+        right: 0,
+        top: 0,
+      },
+    },
+    seed: "0000000000006ff1",
+    window: {
+      height: 821,
+      kind: "floating",
+      source: "drawn",
+      width: 1879,
+      x: 13,
+      y: 114,
+    },
+  },
+  {
+    screen: {
+      layout: "kde",
+      size: {
+        height: 1080,
+        width: 1920,
+      },
+      source: "drawn",
+      workArea: {
+        bottom: 44,
+        left: 0,
+        right: 0,
+        top: 0,
+      },
+    },
+    seed: "0000000000012511",
+    window: {
+      height: 817,
+      kind: "floating",
+      source: "drawn",
+      width: 1790,
+      x: 62,
+      y: 5,
+    },
+  },
+] as const;
+
+const single = (value: number) => [{ value, weight: 1 }];
+
+describe(drawHardware, () => {
+  it.each([
+    { permitted: 32, row: { capped: false, cores: 6, memoryGb: 16, source: "drawn" } },
+    { permitted: 24, row: { capped: false, cores: 6, memoryGb: 16, source: "drawn" } },
+    { permitted: 12, row: { capped: true, cores: 6, memoryGb: 16, source: "drawn" } },
+    { permitted: 8, row: { capped: true, cores: 8, memoryGb: 8, source: "drawn" } },
+    { permitted: 6, row: { capped: true, cores: 4, memoryGb: 8, source: "drawn" } },
+    { permitted: 4, row: { capped: true, cores: 4, memoryGb: 8, source: "drawn" } },
+    { permitted: 2, row: undefined },
+  ])(
+    "draws $row for the fixed seed on a host that permits $permitted CPUs",
+    ({ permitted, row }) => {
+      expect(drawHardware(fixedSeed, undefined, [permitted])).toStrictEqual(row);
+    },
+  );
+
+  it("filters the rows before the roll, so every ceiling renormalises the weights that remain", () => {
+    const permitted = [32, 12, 6];
+
+    for (const ceiling of permitted) {
+      const rows = MACHINE_CLASSES.filter(({ cores }) => cores <= ceiling);
+      const total = rows.reduce((sum, { weight }) => sum + weight, 0);
+
+      const counts = new Map<string, number>();
+
+      for (let index = 1; index <= FREQUENCY_SEEDS; index += 1) {
+        const drawn = drawHardware(seedAt(index), undefined, [ceiling]);
+        const key = `${drawn?.cores}/${drawn?.memoryGb}`;
+
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+
+      expect([...counts.keys()].toSorted()).toStrictEqual(
+        rows.map(({ cores, memoryGb }) => `${cores}/${memoryGb}`).toSorted(),
+      );
+
+      for (const row of rows) {
+        const drawn = (counts.get(`${row.cores}/${row.memoryGb}`) ?? 0) / FREQUENCY_SEEDS;
+
+        expect(Math.abs(drawn - row.weight / total)).toBeLessThan(POINT);
+      }
+    }
+  });
+
+  it("never draws more cores than any ceiling in the list allows", () => {
+    for (let index = 1; index <= CONTAINMENT_SEEDS; index += 1) {
+      expect(drawHardware(seedAt(index), undefined, [16, 12])?.cores).toBeLessThanOrEqual(12);
+    }
+  });
+
+  it.each(DISPLAY_GOLDEN)(
+    "draws the display the parent commit drew for $seed, whatever the hardware draw",
+    ({ screen, seed, window }) => {
+      const drawn = planFor(seed, forkWithKnobs());
+
+      expect({ screen: drawn.screen, window: drawn.window }).toStrictEqual({ screen, window });
+    },
+  );
+
+  it("draws the display the parent commit drew for each of 10,000 seeds", () => {
+    const lines = draws(CONTAINMENT_SEEDS).map((drawn) => JSON.stringify(drawn));
+
+    expect(createHash("sha256").update(lines.join("\n")).digest("hex")).toBe(PARENT_DISPLAY_DIGEST);
+  });
+
+  it.each([
+    {
+      ceilings: [3],
+      name: "a pinned memory on a host under the smallest row presents it with the host's CPUs as cores",
+      row: { capped: true, cores: 3, memoryGb: 16, source: "pinned" },
+      tables: { memoryGb: single(16) },
+    },
+    {
+      ceilings: [6],
+      name: "a pinned memory no row has caps when the ceiling trims the rows it draws from",
+      row: { capped: true, cores: 4, memoryGb: 2, source: "pinned" },
+      tables: { memoryGb: single(2) },
+    },
+    {
+      ceilings: [4],
+      name: "a pinned 4 GB no row has caps to the one row under the ceiling",
+      row: { capped: true, cores: 4, memoryGb: 4, source: "pinned" },
+      tables: { memoryGb: single(4) },
+    },
+    {
+      ceilings: [8],
+      name: "a pinned 8 GB caps nothing when the ceiling keeps every row with 8 GB",
+      row: { capped: false, cores: 4, memoryGb: 8, source: "pinned" },
+      tables: { memoryGb: single(8) },
+    },
+    {
+      ceilings: [16, 2],
+      name: "a pinned memory under an unsorted ceiling list obeys the smallest ceiling",
+      row: { capped: true, cores: 2, memoryGb: 16, source: "pinned" },
+      tables: { memoryGb: single(16) },
+    },
+    {
+      ceilings: [32],
+      name: "a pinned memory under a ceiling that removes no row caps nothing",
+      row: { capped: false, cores: 12, memoryGb: 32, source: "pinned" },
+      tables: { memoryGb: single(32) },
+    },
+    {
+      ceilings: [8],
+      name: "a pinned memory caps only when the ceiling removed a row with that memory",
+      row: { capped: true, cores: 6, memoryGb: 16, source: "pinned" },
+      tables: { memoryGb: single(16) },
+    },
+    {
+      name: "a pinned core count draws its memory from the rows with those cores",
+      row: { capped: false, cores: 12, memoryGb: 16, source: "pinned" },
+      tables: { cores: single(12) },
+    },
+    {
+      name: "a pinned memory draws its cores from the rows with that memory",
+      row: { capped: false, cores: 12, memoryGb: 32, source: "pinned" },
+      tables: { memoryGb: single(32) },
+    },
+    {
+      ceilings: [6],
+      name: "a pinned memory with no row under the ceiling draws its cores from the rows that remain",
+      row: { capped: true, cores: 4, memoryGb: 32, source: "pinned" },
+      tables: { memoryGb: single(32) },
+    },
+    {
+      name: "a core count Xrio's rows never name draws its memory from all of them",
+      row: { capped: false, cores: 3, memoryGb: 16, source: "pinned" },
+      tables: { cores: single(3) },
+    },
+    {
+      ceilings: [6],
+      name: "a pinned core count ignores the ceiling",
+      row: { capped: false, cores: 16, memoryGb: 16, source: "pinned" },
+      tables: { cores: single(16) },
+    },
+    {
+      ceilings: [2],
+      name: "both fields pinned ignore the ceiling and Xrio's rows",
+      row: { capped: false, cores: 3, memoryGb: 32, source: "pinned" },
+      tables: { cores: single(3), memoryGb: single(32) },
+    },
+    {
+      name: "a weighted table of cores replaces Xrio's weights",
+      row: { capped: false, cores: 4, memoryGb: 8, source: "pinned" },
+      tables: {
+        cores: [
+          { value: 4, weight: 1 },
+          { value: 8, weight: 3 },
+        ],
+      },
+    },
+  ])("gives $name", ({ ceilings = [32], row, tables }) => {
+    expect(drawHardware(fixedSeed, tables, ceilings)).toStrictEqual(row);
+  });
+
+  it("draws a pinned 8 GB's row as it would with no ceiling when the ceiling removes none of its rows", () => {
+    expect(drawHardware(fixedSeed, { memoryGb: single(8) }, [8])).toStrictEqual(
+      drawHardware(fixedSeed, { memoryGb: single(8) }),
+    );
+  });
+});
+
 const launchOf = ({ chosen, expected, inputs, read }: IdentityPlan) => ({
   expected,
   inputs,
@@ -218,7 +712,12 @@ describe("the device record", () => {
       ...context,
       device: { kind: "record", record },
       hostZone: "Asia/Tokyo",
-      pins: { display: undefined, locale: "de-DE", timezone: "America/New_York" },
+      pins: {
+        display: undefined,
+        hardware: undefined,
+        locale: "de-DE",
+        timezone: "America/New_York",
+      },
     });
 
     expect(launchOf(replayed)).toStrictEqual(launchOf(plan));
@@ -306,6 +805,15 @@ const headedContext: IdentityContext = {
   pins: noPins,
 };
 
+const recorded = (plan: IdentityPlan) => {
+  const { cores, memoryGb } = evaluate(plan, {
+    ...hostScreen,
+    hardwareConcurrency: plan.chosen.surfaces.hardware.cores,
+  }).report.record.device;
+
+  return { cores, memoryGb };
+};
+
 describe("a headed browser's record", () => {
   it("holds the host display and Chrome's own window it presented, whatever its seed", () => {
     const reports = [fixedSeed, "0000000000000028"].map(
@@ -336,6 +844,16 @@ describe("a headed browser's record", () => {
       digests: { device: null },
       record: null,
     });
+  });
+
+  it("holds the drawn cores and memory the fork presented, and none where the host's own showed", () => {
+    const forked = planIdentity({ ...headedContext, capabilities: forkWithKnobs() });
+    const stock = planIdentity(headedContext);
+
+    expect([recorded(forked), recorded(stock)]).toStrictEqual([
+      { cores: 6, memoryGb: 16 },
+      { cores: 0, memoryGb: 0 },
+    ]);
   });
 
   it("is refused in headless mode, where Chrome's own window cannot be presented", () => {
@@ -423,7 +941,7 @@ describe("a record replayed on another host", () => {
     }).toStrictEqual({
       gpu: { backend: "native" },
       record: { backend: "swiftshader", persona: null },
-      tells: ["host-zone-utc", "replay-host-skew"],
+      tells: ["host-zone-utc", "hardware-unhonored", "replay-host-skew"],
     });
   });
 
@@ -445,7 +963,7 @@ describe("a record replayed on another host", () => {
         digest: "62bbc5617946311ab21ed9ec8ef22f68a15e4ccf06cebf01aca807fedb1def3d",
         kind: "stack",
       },
-      tells: ["host-zone-utc", "host-fonts", "replay-host-skew"],
+      tells: ["host-zone-utc", "hardware-unhonored", "host-fonts", "replay-host-skew"],
     });
   });
 });
@@ -457,6 +975,7 @@ describe("a record made from a scrape's pins", () => {
       taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
       windows: [{ kind: "maximized", weight: 1 }],
     },
+    hardware: undefined,
     locale: "de-DE",
     timezone: "Europe/Berlin",
   } as const;
