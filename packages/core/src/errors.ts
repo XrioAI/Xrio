@@ -2,8 +2,10 @@ import type { BlockReport } from "./blocks/classify.ts";
 import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
-  MODE_NOT_IMPLEMENTED: undefined;
-  NETWORK_ERROR: undefined;
+  BROWSER_CRASHED: undefined;
+  BROWSER_LAUNCH_FAILED: { stderr: string };
+  CLIENT_CLOSED: undefined;
+  NETWORK_ERROR: { netError: string } | undefined;
   PROXY_AUTH_FAILED: undefined;
   PROXY_CONNECT_FAILED: { status: number };
   PROXY_UNREACHABLE: undefined;
@@ -46,8 +48,10 @@ type ErrorByCode = { [Code in XrioErrorCode]: XrioError<Code> } & {
 };
 
 const errorClasses = {
+  BROWSER_CRASHED: XrioError,
+  BROWSER_LAUNCH_FAILED: XrioError,
+  CLIENT_CLOSED: XrioError,
   INVALID_OPTIONS: TypeError,
-  MODE_NOT_IMPLEMENTED: XrioError,
   NETWORK_ERROR: XrioError,
   PROXY_AUTH_FAILED: XrioError,
   PROXY_CONNECT_FAILED: XrioError,
@@ -90,3 +94,6 @@ export const redactUrl = (url: URL | string): string => {
 
   return redacted.href;
 };
+
+export const clientClosed = (): XrioError =>
+  new XrioError("CLIENT_CLOSED", "The client is closed.", { details: undefined });
