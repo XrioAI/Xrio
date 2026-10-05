@@ -72,7 +72,7 @@ export type IdentityTell =
 
 type ObservedTell = Exclude<IdentityTell, FactTell | "fonts-drift">;
 
-type FontEvidenceOutcome =
+export type FontEvidenceOutcome =
   | { readonly kind: "gathered"; readonly digest: string; readonly sentinel: string }
   | { readonly kind: "confirmed" }
   | { readonly kind: "drifted" }

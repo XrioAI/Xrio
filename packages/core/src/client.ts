@@ -1,3 +1,4 @@
+import { hostCacheRoot } from "./cache-dir.ts";
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
 import { startDeadline } from "./deadline.ts";
 import { clientClosed } from "./errors.ts";
@@ -5,6 +6,7 @@ import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
 import { createBrowsers } from "./sources/browser/browsers.ts";
 import type { Browsers } from "./sources/browser/browsers.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
+import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import { hostFactsFor } from "./sources/browser/host-facts.ts";
 import type { ClientHostFacts } from "./sources/browser/host-facts.ts";
 import { loadHttpDocument } from "./sources/http.ts";
@@ -76,6 +78,7 @@ export class XrioClient {
     this.#defaults = resolveClientOptions(options);
     this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
     this.#browsers = createBrowsers(cdpDriver, this.#defaults.maxBrowsers, {
+      fontEvidence: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
       hostCapabilities: this.#hostFacts.snapshotFor,
     });
   }

@@ -11,12 +11,14 @@ import type { AfterCapture, HostCapabilities, Observation } from "../../humanize
 import { readHostZone } from "../../humanizer/host-zone.ts";
 import { planIdentity } from "../../humanizer/humanizer.ts";
 import type { IdentityPlan } from "../../humanizer/humanizer.ts";
+import { presentedLocale } from "../../humanizer/surfaces.ts";
 import {
   describeMismatch,
   evaluate,
   readAfterCapture,
   readObservation,
 } from "../../humanizer/verify.ts";
+import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import { exitFactsFor, routeFor } from "../../proxy/route.ts";
 import { sessionFor } from "../../sessions/session.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
@@ -29,6 +31,8 @@ import {
 } from "./browser-process.ts";
 import { ChromeScope } from "./chrome-scope.ts";
 import type { Closed, RetireSteps } from "./chrome-scope.ts";
+import { createFontEvidenceStore } from "./font-evidence.ts";
+import type { FontClaim, FontEvidenceStore } from "./font-evidence.ts";
 import { hostFactsFor } from "./host-facts.ts";
 import type { HostFacts } from "./host-facts.ts";
 import { planLaunch } from "./launch-plan.ts";
@@ -63,17 +67,23 @@ interface BrowserVisit {
 interface VisitSteps extends Partial<RetireSteps> {
   readonly sessionFor: typeof sessionFor;
   readonly hostCapabilities: HostFacts["snapshotFor"];
+  readonly fontEvidence: FontEvidenceStore;
   readonly planIdentity: typeof planIdentity;
   readonly evaluate: typeof evaluate;
 }
 
 interface VisitPlan {
   readonly capabilities: HostCapabilities;
+  readonly fonts: FontClaim;
   readonly identity: IdentityPlan;
   readonly launch: LaunchPlan;
 }
 
-const defaultSteps: Omit<VisitSteps, "hostCapabilities"> = { evaluate, planIdentity, sessionFor };
+const defaultSteps: Omit<VisitSteps, "fontEvidence" | "hostCapabilities"> = {
+  evaluate,
+  planIdentity,
+  sessionFor,
+};
 
 export interface Browsers {
   readonly start: (request: BrowserRequest) => BrowserVisit;
@@ -146,32 +156,45 @@ const planVisit = async (
   deadline: Deadline,
 ): Promise<VisitPlan> => {
   const capabilities = await steps.hostCapabilities(request.browserPath, deadline);
-  const hostZone = readHostZone();
-  const display = process.env.DISPLAY;
-  const xauthority = process.env.XAUTHORITY;
-  const route = routeFor(request.proxy);
+  const { tag: locale } = presentedLocale(request.pins);
+  const fonts = await steps.fontEvidence.claim(request.browserPath, capabilities, locale, deadline);
 
-  const identity = steps.planIdentity({
-    capabilities,
-    exit: { facts: exitFactsFor(route), route: route.kind },
-    hostZone,
-    mode: request.mode,
-    pins: request.pins,
-  });
+  try {
+    const hostZone = readHostZone();
+    const display = process.env.DISPLAY;
+    const xauthority = process.env.XAUTHORITY;
+    const route = routeFor(request.proxy);
 
-  return {
-    capabilities,
-    identity,
-    launch: planLaunch({
-      browserArgs: request.browserArgs,
-      browserPath: request.browserPath,
-      display,
-      headless: request.mode === "headless",
-      identity: identity.inputs,
-      scratchDir: scratch.path,
-      xauthority,
-    }),
-  };
+    const identity = steps.planIdentity({
+      capabilities:
+        fonts.evidence === undefined
+          ? capabilities
+          : { ...capabilities, fontEvidence: fonts.evidence },
+      exit: { facts: exitFactsFor(route), route: route.kind },
+      hostZone,
+      mode: request.mode,
+      pins: request.pins,
+    });
+
+    return {
+      capabilities,
+      fonts,
+      identity,
+      launch: planLaunch({
+        browserArgs: request.browserArgs,
+        browserPath: request.browserPath,
+        display,
+        headless: request.mode === "headless",
+        identity: identity.inputs,
+        scratchDir: scratch.path,
+        xauthority,
+      }),
+    };
+  } catch (error) {
+    await fonts.settle(null);
+
+    throw error;
+  }
 };
 
 const writeProfile = async (plan: LaunchPlan): Promise<void> => {
@@ -245,9 +268,9 @@ const verifyLaunch = async (
   identity: IdentityPlan,
   deadline: Deadline,
   steps: VisitSteps,
-): Promise<Observation> => {
+): Promise<{ readonly observation: Observation; readonly fontEvidence: FontEvidenceOutcome }> => {
   const observation = await observeLaunch(browser, identity.read.beforeNavigation, deadline);
-  const { mismatches } = steps.evaluate(identity, observation);
+  const { fontEvidence, mismatches } = steps.evaluate(identity, observation);
 
   if (mismatches.length > 0) {
     const fields = mismatches.map((mismatch) => describeMismatch(mismatch, observation)).join(", ");
@@ -259,7 +282,7 @@ const verifyLaunch = async (
     );
   }
 
-  return observation;
+  return { fontEvidence, observation };
 };
 
 const observeAfterCapture = async (
@@ -292,11 +315,17 @@ const renderInScope = async (
   scope: ChromeScope,
   document: PromiseWithResolvers<SourceDocument>,
 ): Promise<Closed> => {
+  let fonts: FontClaim | undefined;
+
   try {
-    const { capabilities, identity, launch } = await timeStage(
+    const planned = await timeStage(
       "identity",
       async () => await planVisit(request, scope.scratch, steps, deadline),
     );
+
+    const { capabilities, identity, launch } = planned;
+
+    ({ fonts } = planned);
 
     publishInternalEvent({ detail: JSON.stringify(identity.chosen), event: "identity-chosen" });
 
@@ -304,10 +333,12 @@ const renderInScope = async (
     assertSupported(browser.product);
     assertProbedVersion(browser.product, capabilities);
 
-    const observation = await timeStage(
+    const { fontEvidence, observation } = await timeStage(
       "verify",
       async () => await verifyLaunch(browser, identity, deadline, steps),
     );
+
+    await planned.fonts.settle(fontEvidence);
 
     const { afterCapture, source } = await renderDocument(
       browser,
@@ -322,6 +353,8 @@ const renderInScope = async (
     });
   } catch (error) {
     document.reject(error);
+  } finally {
+    await fonts?.settle(null);
   }
 
   return await scope.retire();
@@ -382,8 +415,11 @@ export const createBrowsers = (
   maxBrowsers = defaultMaxBrowsers(),
   overrides: Partial<VisitSteps> = {},
 ): Browsers => {
+  const stopProbes = new AbortController();
+
   const steps: VisitSteps = {
     ...defaultSteps,
+    fontEvidence: createFontEvidenceStore({ signal: stopProbes.signal }),
     hostCapabilities: hostFactsFor(defaultCacheDir()).snapshotFor,
     ...overrides,
   };

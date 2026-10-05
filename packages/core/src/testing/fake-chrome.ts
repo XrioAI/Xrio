@@ -24,6 +24,7 @@ const SCENARIOS = [
   "unsized-window",
   "fork",
   "fonts-drift",
+  "fonts-unresolved",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -266,7 +267,7 @@ const OBSERVATION = {
   devicePixelRatio: 1,
   fontsDigest: "c41f09a2",
   fontsSentinel: scenario === "fonts-drift" ? "dead0000" : "5e17a1b2",
-  fontsSentinelResolved: true,
+  fontsSentinelResolved: scenario !== "fonts-unresolved",
   hover: "hover",
   intlLocale: "en-US",
   languages: ["en-US", "en"],

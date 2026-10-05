@@ -1,11 +1,21 @@
+import { randomUUID } from "node:crypto";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vite-plus/test";
 
 import { startDeadline, untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
@@ -23,13 +33,28 @@ import { manualClock } from "../../testing/manual-clock.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import { stageTimeline } from "../../testing/stage-timeline.ts";
 import { scratchRoot } from "./browser-process.ts";
-import { createBrowsers } from "./browsers.ts";
+import { createBrowsers as createBrowsersWithDefaults } from "./browsers.ts";
+import type { Browsers } from "./browsers.ts";
 import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import type { RetireSteps } from "./chrome-scope.ts";
+import { createFontEvidenceStore } from "./font-evidence.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 import type { BrowserDriver } from "./port.ts";
+
+const createBrowsers: typeof createBrowsersWithDefaults = (driver, maxBrowsers, overrides) => {
+  const evidence = path.join(tmpdir(), `xrio-evidence-${randomUUID()}`);
+
+  onTestFinished(async () => {
+    await rm(evidence, { force: true, recursive: true });
+  });
+
+  return createBrowsersWithDefaults(driver, maxBrowsers, {
+    fontEvidence: createFontEvidenceStore({ root: evidence }),
+    ...overrides,
+  });
+};
 
 const ABORT_DURING_LAUNCH_MS = 200;
 
@@ -1912,4 +1937,161 @@ describe("the after-capture read", () => {
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
+});
+
+const LINUX_HOST = async () => await Promise.resolve({ platform: "linux" as const });
+
+const PINNED_HOST = async () =>
+  await Promise.resolve({ fontStack: CHECKED_FONT_STACK, platform: "linux" as const });
+
+const fontsOf = async (browsers: Browsers, browserPath: string) => {
+  using deadline = startDeadline(10_000);
+
+  const { identity } = await browsers.load({
+    browserArgs: [],
+    browserPath,
+    deadline,
+    mode: "headless",
+    pins: noPins,
+    proxy: undefined,
+    url: new URL("https://fake.test/page"),
+  });
+
+  if (identity === undefined || identity.mode === "http") {
+    throw new Error("The visit reported no browser identity.");
+  }
+
+  return identity;
+};
+
+describe("the fonts evidence across visits", () => {
+  let root = "";
+  let normal = "";
+  let drifting = "";
+  let unresolved = "";
+  const clock = { elapsedMs: 0 };
+
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-fonts-visits-"));
+    normal = await fakeChromePath("normal");
+    drifting = await fakeChromePath("fonts-drift");
+    unresolved = await fakeChromePath("fonts-unresolved");
+  });
+
+  afterEach(async () => {
+    clock.elapsedMs = 0;
+    await rm(path.join(root, "scratch"), { force: true, recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  const storeAt = (storeRoot = path.join(root, "scratch")) =>
+    createFontEvidenceStore({ now: () => 1_000_000 + clock.elapsedMs, root: storeRoot });
+
+  const browsersFor = (maxBrowsers = 1, store = storeAt(), hostCapabilities = LINUX_HOST) =>
+    createBrowsers(cdpDriver, maxBrowsers, { fontEvidence: store, hostCapabilities });
+
+  it("reads the full set on the first visit and only the sentinel on the next, from the stored evidence", async () => {
+    const browsers = browsersFor();
+    const first = await fontsOf(browsers, normal);
+
+    clock.elapsedMs = 5_400_000;
+
+    const second = await fontsOf(browsers, normal);
+
+    await browsers.close();
+    expect({
+      coverage: [first.coverage.fonts, { ...second.coverage.fonts, key: "key" }],
+      digests: [first.observed.fontsDigest, second.observed.fontsDigest],
+    }).toStrictEqual({
+      coverage: [{ state: "observed" }, { ageMs: 5_400_000, key: "key", state: "cached" }],
+      digests: ["c41f09a2", "c41f09a2"],
+    });
+  });
+
+  it("notes a sentinel that drifted from the stored evidence, tells fonts-drift, and gathers again", async () => {
+    using seeding = startDeadline(10_000);
+
+    const claim = await storeAt().claim(drifting, { platform: "linux" }, "en-US", seeding);
+
+    await claim.settle({ digest: "c41f09a2", kind: "gathered", sentinel: "5e17a1b2" });
+
+    const browsers = browsersFor();
+    const drifted = await fontsOf(browsers, drifting);
+    const regathered = await fontsOf(browsers, drifting);
+
+    await browsers.close();
+    expect({
+      coverage: [drifted.coverage.fonts, regathered.coverage.fonts],
+      digests: [drifted.observed.fontsDigest, regathered.observed.fontsDigest],
+      notes: drifted.notes,
+      tells: [drifted.tells.includes("fonts-drift"), regathered.tells.includes("fonts-drift")],
+    }).toStrictEqual({
+      coverage: [{ reason: "fonts-drift", state: "unchecked" }, { state: "observed" }],
+      digests: [null, "c41f09a2"],
+      notes: [
+        { expected: "5e17a1b2", field: "fontsSentinel", observed: "dead0000", surface: "fonts" },
+      ],
+      tells: [true, false],
+    });
+  });
+
+  it("never stores the evidence of a gathering launch whose pinned stack resolved no sentinel family", async () => {
+    const browsers = browsersFor(1, storeAt(), PINNED_HOST);
+    const first = await fontsOf(browsers, unresolved);
+    const second = await fontsOf(browsers, unresolved);
+
+    await browsers.close();
+    expect({
+      coverage: [first.coverage.fonts, second.coverage.fonts],
+      digests: [first.observed.fontsDigest, second.observed.fontsDigest],
+      notes: first.notes,
+      tells: [first.tells.includes("fonts-drift"), second.tells.includes("fonts-drift")],
+    }).toStrictEqual({
+      coverage: [{ state: "observed" }, { state: "observed" }],
+      digests: ["c41f09a2", "c41f09a2"],
+      notes: [
+        { expected: true, field: "fontsSentinelResolved", observed: false, surface: "fonts" },
+      ],
+      tells: [true, true],
+    });
+  });
+
+  it("reads the full set in exactly one of several concurrent visits", async () => {
+    const browsers = browsersFor(3);
+
+    const reports = await Promise.all([
+      fontsOf(browsers, normal),
+      fontsOf(browsers, normal),
+      fontsOf(browsers, normal),
+    ]);
+
+    await browsers.close();
+
+    const states = reports.map(({ coverage }) => coverage.fonts.state);
+
+    expect(states.toSorted((left, right) => left.localeCompare(right))).toStrictEqual([
+      "cached",
+      "cached",
+      "observed",
+    ]);
+  });
+
+  it("still resolves, and keeps the evidence in memory, when it cannot be written to disk", async () => {
+    const blocked = path.join(root, "blocked");
+
+    await writeFile(blocked, "a file where the scratch root should be");
+
+    const browsers = browsersFor(1, storeAt(blocked));
+    const first = await fontsOf(browsers, normal);
+    const second = await fontsOf(browsers, normal);
+
+    await browsers.close();
+    expect([first.coverage.fonts.state, second.coverage.fonts.state]).toStrictEqual([
+      "observed",
+      "cached",
+    ]);
+  });
 });

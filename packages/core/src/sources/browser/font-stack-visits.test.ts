@@ -12,6 +12,7 @@ import { noPins } from "../../testing/no-pins.ts";
 import { createBrowsers } from "./browsers.ts";
 import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
+import { createFontEvidenceStore } from "./font-evidence.ts";
 
 describe("scrapes that run beside each other while the font stack check fails", () => {
   let root = "";
@@ -31,6 +32,7 @@ describe("scrapes that run beside each other while the font stack check fails", 
 
   it("resolves both, each reporting the host's fonts and the reason the stack was refused", async () => {
     const browsers = createBrowsers(cdpDriver, 2, {
+      fontEvidence: createFontEvidenceStore({ root: path.join(root, "scratch") }),
       hostCapabilities: createCapabilityProbe({
         budgetMs: 300,
         fcList: stack.fcList,
