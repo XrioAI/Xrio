@@ -14,6 +14,7 @@ import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
 import { conformancePages } from "../src/testing/conformance-pages.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
+import { noPins } from "../src/testing/no-pins.ts";
 
 const SCRAPE_TIMEOUT_MS = 30_000;
 
@@ -110,6 +111,7 @@ const scrapeOnce = async (): Promise<Sample> => {
       browserPath: chromePath(),
       deadline,
       mode,
+      pins: noPins,
       proxy: undefined,
       url: new URL(values.route, server.origin),
     });

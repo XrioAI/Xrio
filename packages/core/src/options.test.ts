@@ -394,3 +394,110 @@ describe("browserArgs option", () => {
     },
   );
 });
+
+describe("locale option", () => {
+  const browser = { browserPath: "/browser", mode: "headless" } as const;
+
+  const posixLocale = {
+    code: "INVALID_OPTIONS",
+    message:
+      "locale must be a BCP 47 language tag such as de-DE, not a POSIX locale such as en_US.UTF-8.",
+    name: "TypeError",
+  };
+
+  const malformedLocale = {
+    code: "INVALID_OPTIONS",
+    message: "locale must be one BCP 47 language tag such as de-DE.",
+    name: "TypeError",
+  };
+
+  it.each([
+    { given: "de-de", tag: "de-DE" },
+    { given: "EN-au", tag: "en-AU" },
+    { given: "pt-BR", tag: "pt-BR" },
+  ])("canonicalizes $given to $tag", ({ given, tag }) => {
+    expect(resolveClientOptions({ locale: given, mode: "http" }).locale).toBe(tag);
+    expect(
+      resolveScrapeOptions({ ...page, locale: given }, resolveClientOptions({ mode: "http" }))
+        .source.pins.locale,
+    ).toBe(tag);
+  });
+
+  it("leaves the locale unpinned until a caller pins one", () => {
+    const defaults = resolveClientOptions(browser);
+
+    expect(defaults.locale).toBeUndefined();
+    expect(resolveScrapeOptions(page, defaults).source.pins).toStrictEqual({
+      locale: undefined,
+      timezone: undefined,
+    });
+  });
+
+  it("applies the client default to every mode and lets a scrape override it", () => {
+    const defaults = resolveClientOptions({ ...browser, locale: "ja-JP" });
+
+    expect(resolveScrapeOptions(page, defaults).source.pins.locale).toBe("ja-JP");
+    expect(resolveScrapeOptions({ ...page, mode: "http" }, defaults).source.pins.locale).toBe(
+      "ja-JP",
+    );
+    expect(resolveScrapeOptions({ ...page, locale: "en-GB" }, defaults).source.pins.locale).toBe(
+      "en-GB",
+    );
+    expect(resolveScrapeOptions({ ...page, locale: undefined }, defaults).source.pins.locale).toBe(
+      "ja-JP",
+    );
+  });
+
+  it.each(["en_US.UTF-8", "en_US", "de_DE@euro", "C.UTF-8"])(
+    "refuses the POSIX form %j with the POSIX message",
+    (locale) => {
+      expect(() => resolveClientOptions({ locale, mode: "http" })).toThrow(
+        expect.objectContaining(posixLocale),
+      );
+      expect(() =>
+        resolveScrapeOptions({ ...page, locale }, resolveClientOptions({ mode: "http" })),
+      ).toThrow(expect.objectContaining(posixLocale));
+    },
+  );
+
+  it.each(["", "de-DE,fr-FR", "en-US ", " de-DE", "C", "de-"])(
+    "refuses the malformed form %j with the BCP 47 message",
+    (locale) => {
+      expect(() => resolveClientOptions({ locale, mode: "http" })).toThrow(
+        expect.objectContaining(malformedLocale),
+      );
+      expect(() =>
+        resolveScrapeOptions({ ...page, locale }, resolveClientOptions({ mode: "http" })),
+      ).toThrow(expect.objectContaining(malformedLocale));
+    },
+  );
+
+  it.each([
+    {
+      locale: "de",
+      message:
+        "locale de is not one Xrio has measured Chrome's language list for. Try de-AT, de-CH, or de-DE.",
+    },
+    {
+      locale: "ja-JP-u-ca-japanese",
+      message:
+        "locale ja-JP-u-ca-japanese is not one Xrio has measured Chrome's language list for. Try ja-JP.",
+    },
+    {
+      locale: "zh-Hant-TW",
+      message:
+        "locale zh-Hant-TW is not one Xrio has measured Chrome's language list for. Try zh-CN, zh-HK, or zh-TW.",
+    },
+    {
+      locale: "sw-KE",
+      message: "locale sw-KE is not one Xrio has measured Chrome's language list for.",
+    },
+  ])(
+    "refuses the unmeasured tag $locale and names the measured tags of its language",
+    (refusal) => {
+      expect(() => resolveClientOptions({ locale: refusal.locale, mode: "http" })).toThrow(
+        expect.objectContaining({ code: "INVALID_OPTIONS", message: refusal.message }),
+      );
+    },
+  );
+});

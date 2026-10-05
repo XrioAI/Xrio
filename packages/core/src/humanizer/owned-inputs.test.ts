@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isOwnedSwitch } from "./owned-inputs.ts";
+import {
+  CHROME_ACCEPT_LANGUAGES,
+  chromeAcceptLanguages,
+  isOwnedSwitch,
+  measuredLocalesFor,
+} from "./owned-inputs.ts";
 
 describe(isOwnedSwitch, () => {
   it.each([
@@ -78,5 +83,42 @@ describe(isOwnedSwitch, () => {
     "--window-position-x",
   ])("leaves %s to the caller", (name) => {
     expect(isOwnedSwitch(name)).toBeFalsy();
+  });
+});
+
+describe(chromeAcceptLanguages, () => {
+  it.each([
+    { languages: ["en-US", "en"], tag: "en-US" },
+    { languages: ["de-DE", "de", "en-US", "en"], tag: "de-DE" },
+    { languages: ["pt-BR", "pt", "en-US", "en"], tag: "pt-BR" },
+    { languages: ["en-AU", "en-US", "en"], tag: "en-AU" },
+    { languages: ["ja", "en-US", "en"], tag: "ja-JP" },
+  ])("lists $languages for $tag", ({ languages, tag }) => {
+    expect(chromeAcceptLanguages(tag)).toStrictEqual(languages);
+  });
+
+  it.each(["sw-KE", "de", "toString", "__proto__", ""])("has no list for %j", (tag) => {
+    expect(chromeAcceptLanguages(tag)).toBeUndefined();
+  });
+
+  it("leads each list with its tag, or with the bare language Chrome uses for it", () => {
+    for (const [tag, [first, ...rest]] of Object.entries(CHROME_ACCEPT_LANGUAGES)) {
+      const [language] = tag.split("-");
+
+      expect([tag, language]).toContain(first);
+      expect(new Set([first, ...rest]).size).toBe(rest.length + 1);
+    }
+  });
+});
+
+describe(measuredLocalesFor, () => {
+  it.each([
+    { language: "de", tags: ["de-AT", "de-CH", "de-DE"] },
+    { language: "de-DE", tags: ["de-AT", "de-CH", "de-DE"] },
+    { language: "ja-JP-u-ca-japanese", tags: ["ja-JP"] },
+    { language: "sw-KE", tags: [] },
+    { language: "toString", tags: [] },
+  ])("finds $tags for $language", ({ language, tags }) => {
+    expect(measuredLocalesFor(language)).toStrictEqual(tags);
   });
 });

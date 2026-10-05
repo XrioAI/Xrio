@@ -1,5 +1,6 @@
 import type { BlockReport } from "./blocks/classify.ts";
 import type { Deadline } from "./deadline.ts";
+import type { IdentityIntent } from "./humanizer/intent.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
@@ -23,12 +24,13 @@ export type ClientOptions = (
   | ((BrowserMode | { mode?: never; browserPath: string }) & {
       browserArgs?: readonly string[];
     })
-) & { proxy?: string; maxBrowsers?: number };
+) & { proxy?: string; maxBrowsers?: number; locale?: string };
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
   format: Format;
   proxy?: string;
+  locale?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -88,11 +90,13 @@ export interface ClientDefaults {
   mode: ResolvedMode;
   proxy: ProxyEndpoint | undefined;
   maxBrowsers: number | undefined;
+  locale: string | undefined;
 }
 
 type SourceRequest = (HttpMode | (BrowserMode & { browserArgs: readonly string[] })) & {
   url: URL;
   proxy: ProxyEndpoint | undefined;
+  pins: IdentityIntent;
 };
 
 export type DocumentRequest = SourceRequest & { deadline: Deadline };

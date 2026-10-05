@@ -1,4 +1,5 @@
 import type { Closed, DeviceRecord } from "../humanizer/contracts.ts";
+import type { IdentityIntent } from "../humanizer/intent.ts";
 
 export type SessionId = string;
 
@@ -8,18 +9,13 @@ export interface Ownership {
   readonly signal: AbortSignal;
 }
 
-export interface ResolvedPins {
-  readonly locale: string | undefined;
-  readonly timezone: string | undefined;
-}
-
 export type SessionContext =
   | { readonly kind: "anonymous"; readonly ownership: Pick<Ownership, "signal"> }
   | {
       readonly kind: "named";
       readonly id: SessionId;
       readonly record: DeviceRecord;
-      readonly pins: ResolvedPins;
+      readonly pins: IdentityIntent;
       readonly ownership: Ownership;
     };
 

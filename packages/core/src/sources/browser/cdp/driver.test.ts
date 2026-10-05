@@ -10,6 +10,7 @@ import { planIdentity } from "../../../humanizer/humanizer.ts";
 import { fakeChromePath } from "../../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft } from "../../../testing/leftovers.ts";
 import { manualClock } from "../../../testing/manual-clock.ts";
+import { noPins } from "../../../testing/no-pins.ts";
 import { createScratchDir, removeScratchDir } from "../browser-process.ts";
 import { createBrowsers } from "../browsers.ts";
 import { hostCapabilities } from "../capabilities.ts";
@@ -70,6 +71,7 @@ describe("the CDP driver's launch", () => {
       browserPath: await fakeChromePath("slow-start"),
       deadline,
       mode: "headless",
+      pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
     });
@@ -98,6 +100,7 @@ describe("the CDP driver's launch", () => {
           browserPath: await fakeChromePath("exit-after-capture-error"),
           deadline,
           mode: "headless",
+          pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
         }),
@@ -274,6 +277,7 @@ describe("the CDP driver's documents", () => {
         browserPath: await fakeChromePath("startup-blank-commit"),
         deadline,
         mode: "headless",
+        pins: noPins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
       });
@@ -313,6 +317,7 @@ describe("the CDP driver's capture", () => {
           browserPath: await fakeChromePath(scenario),
           deadline,
           mode: "headless",
+          pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
         });

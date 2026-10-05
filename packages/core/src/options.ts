@@ -1,4 +1,5 @@
 import { invalidOptions, redactUrl } from "./errors.ts";
+import { chromeAcceptLanguages, measuredLocalesFor } from "./humanizer/owned-inputs.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientDefaults,
@@ -13,6 +14,13 @@ import type {
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
+
+const POSIX_LOCALE_MARKS = /[_.@]/u;
+
+const POSIX_LOCALE_MESSAGE =
+  "locale must be a BCP 47 language tag such as de-DE, not a POSIX locale such as en_US.UTF-8.";
+
+const BCP47_LOCALE_MESSAGE = "locale must be one BCP 47 language tag such as de-DE.";
 
 const proxyProtocols = new Map<string, ProxyEndpoint["protocol"]>([
   ["http:", "http"],
@@ -113,6 +121,51 @@ const parseTargetUrl = (value: string): URL => {
   return url;
 };
 
+const malformedLocale = (locale: string, cause?: unknown) =>
+  invalidOptions(
+    POSIX_LOCALE_MARKS.test(locale) ? POSIX_LOCALE_MESSAGE : BCP47_LOCALE_MESSAGE,
+    cause,
+  );
+
+const canonicalLocales = (locale: string): readonly string[] => {
+  try {
+    return Intl.getCanonicalLocales(locale);
+  } catch (error) {
+    throw malformedLocale(locale, error);
+  }
+};
+
+const unmeasuredLocale = (tag: string) => {
+  const measured = measuredLocalesFor(tag);
+
+  const suggestion =
+    measured.length === 0
+      ? ""
+      : ` Try ${new Intl.ListFormat("en", { type: "disjunction" }).format(measured)}.`;
+
+  return invalidOptions(
+    `locale ${tag} is not one Xrio has measured Chrome's language list for.${suggestion}`,
+  );
+};
+
+const resolveLocale = (locale: string | undefined): string | undefined => {
+  if (locale === undefined) {
+    return undefined;
+  }
+
+  const [tag, ...extra] = canonicalLocales(locale);
+
+  if (tag === undefined || extra.length > 0) {
+    throw malformedLocale(locale);
+  }
+
+  if (chromeAcceptLanguages(tag) === undefined) {
+    throw unmeasuredLocale(tag);
+  }
+
+  return tag;
+};
+
 const resolveMaxBrowsers = (maxBrowsers: number | undefined): number | undefined => {
   if (maxBrowsers !== undefined && (!Number.isInteger(maxBrowsers) || maxBrowsers < 1)) {
     throw invalidOptions("maxBrowsers must be a positive integer.");
@@ -145,9 +198,11 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   const mode = resolveMode(options);
   const browserArgs = resolveBrowserArgs(options.browserArgs, mode);
   const proxy = options.proxy === undefined ? undefined : parseProxy(options.proxy);
+  const locale = resolveLocale(options.locale);
 
   return {
     browserArgs,
+    locale,
     maxBrowsers,
     mode,
     proxy,
@@ -180,10 +235,13 @@ export const resolveScrapeOptions = (
     throw invalidOptions("browserArgs is a client option.");
   }
 
+  const locale = options.locale === undefined ? defaults.locale : resolveLocale(options.locale);
+  const pins = { locale, timezone: undefined };
+
   const source =
     mode.mode === "http"
-      ? { ...mode, proxy, url }
-      : { ...mode, browserArgs: defaults.browserArgs, proxy, url };
+      ? { ...mode, pins, proxy, url }
+      : { ...mode, browserArgs: defaults.browserArgs, pins, proxy, url };
 
   return { format, signal, source, timeoutMs };
 };

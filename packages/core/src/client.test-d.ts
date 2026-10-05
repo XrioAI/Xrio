@@ -96,6 +96,35 @@ describe("XrioClient types", () => {
     void new XrioClient({ mode: "http" }).scrape({ browserArgs, format: "html", url });
   });
 
+  it("accepts a locale as a client default and a per-scrape override in every mode", () => {
+    const url = "https://example.com";
+    const http = new XrioClient({ locale: "fr-FR", mode: "http" });
+    const headless = new XrioClient({ browserPath: "/browser", locale: "de-DE", mode: "headless" });
+    const headed = new XrioClient({ browserPath: "/browser", locale: "pt-BR" });
+
+    expectTypeOf<ClientOptions["locale"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf(http.scrape({ format: "html", locale: "en-GB", url })).toEqualTypeOf<
+      Promise<ScrapeResult<"html">>
+    >();
+    expectTypeOf(headless.scrape({ format: "html", locale: "en-AU", url })).toEqualTypeOf<
+      Promise<ScrapeResult<"html">>
+    >();
+    expectTypeOf(
+      headed.scrape({
+        browserPath: "/other",
+        format: "json",
+        locale: "ja-JP",
+        mode: "headless",
+        url,
+      }),
+    ).toEqualTypeOf<Promise<ScrapeResult<"json">>>();
+    expectTypeOf(
+      headed.scrape({ format: "html", locale: "en-GB", mode: "http", url }),
+    ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
+    // @ts-expect-error A locale is one tag, not a list.
+    void new XrioClient({ locale: ["de-DE"], mode: "http" });
+  });
+
   it("exposes each response header as an optional string and cookies separately", () => {
     expectTypeOf<ScrapeResult["headers"]["content-type"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ScrapeResult["cookies"]>().toEqualTypeOf<string[]>();

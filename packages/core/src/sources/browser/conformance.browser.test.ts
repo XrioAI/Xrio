@@ -22,6 +22,7 @@ import {
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
+import { noPins } from "../../testing/no-pins.ts";
 import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../testing/processes.ts";
 import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import {
@@ -252,6 +253,7 @@ const load = async (
       browserPath: chromePath(),
       deadline,
       mode,
+      pins: noPins,
       proxy: undefined,
       url: new URL(route, server.origin),
     });
@@ -843,6 +845,7 @@ const failOnce = async (
     browserPath: failure.browserPath ?? chromePath(),
     deadline: deadline.boundTo(owner.signal),
     mode,
+    pins: noPins,
     proxy: undefined,
     url: new URL(failure.route, server.origin),
   });
@@ -879,6 +882,7 @@ describe.each(MODES)("browser visits, %s", (mode) => {
         browserPath: chromePath(),
         deadline,
         mode,
+        pins: noPins,
         proxy: undefined,
         url: new URL("/static", server.origin),
       });

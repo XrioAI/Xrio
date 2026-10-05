@@ -16,6 +16,7 @@ import { sessionFor } from "../../sessions/session.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { leftovers, nothingLeft, ownedScratchDirs } from "../../testing/leftovers.ts";
 import { manualClock } from "../../testing/manual-clock.ts";
+import { noPins } from "../../testing/no-pins.ts";
 import { stageTimeline } from "../../testing/stage-timeline.ts";
 import { scratchRoot } from "./browser-process.ts";
 import { createBrowsers } from "./browsers.ts";
@@ -105,6 +106,7 @@ const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) 
       browserPath: await fakeChromePath(scenario),
       deadline,
       mode: "headless",
+      pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
     });
@@ -216,6 +218,7 @@ describe("browser lifecycle on the fake browser", () => {
         browserPath: await fakeChromePath("slow-start"),
         deadline,
         mode: "headless",
+        pins: noPins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
       }),
@@ -242,6 +245,7 @@ describe("browser lifecycle on the fake browser", () => {
           browserPath: await fakeChromePath(scenario),
           deadline,
           mode: "headless",
+          pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
         }),
@@ -263,6 +267,7 @@ const queuedRequest = async () => ({
   browserArgs: [],
   browserPath: await fakeChromePath("slow-start"),
   mode: "headless" as const,
+  pins: noPins,
   proxy: undefined,
   url: new URL("https://fake.test/"),
 });
@@ -349,6 +354,7 @@ const visitOn = async (
     browserPath,
     deadline: deadline.boundTo(owner.signal),
     mode: "headless",
+    pins: noPins,
     proxy: undefined,
     url: new URL("https://fake.test/page"),
   });
@@ -412,6 +418,7 @@ describe("browser visits on the fake browser", () => {
       },
       deadline,
       mode: "headless",
+      pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
     });
@@ -467,6 +474,7 @@ const loadTwice = async (steps: PlanningOverrides, firstScenario: string) => {
     browserArgs: [],
     deadline,
     mode: "headless" as const,
+    pins: noPins,
     proxy: undefined,
     url: new URL("https://fake.test/page"),
   };
@@ -554,6 +562,7 @@ const normalRequest = async (deadline: Deadline) => ({
   browserPath: await fakeChromePath("normal"),
   deadline,
   mode: "headless" as const,
+  pins: noPins,
   proxy: undefined,
   url: new URL("https://fake.test/page"),
 });
