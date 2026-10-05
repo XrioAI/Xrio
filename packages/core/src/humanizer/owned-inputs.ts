@@ -167,6 +167,55 @@ export const WINDOW_STATES = [
   { kind: "floating", source: WINDOW_WEIGHT_SOURCE, weight: 20 },
 ] as const;
 
+const CHROME_BAD_FLAGS = {
+  chromium: "154.0.8037.57",
+  linuxSwitches: ["--enable-speech-dispatcher"],
+  switches: [
+    "--host-resolver-rules",
+    "--host-rules",
+    "--log-net-log",
+    "--net-log-capture-mode",
+    "--disable-gpu-sandbox",
+    "--disable-landlock-sandbox",
+    "--disable-seccomp-filter-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-webnn-compiler-sandbox",
+    "--no-sandbox",
+    "--disable-web-security",
+    "--single-process",
+    "--translate-security-origin",
+    "--disable-webrtc-encryption",
+    "--ignore-certificate-errors",
+    "--ignore-certificate-errors-spki-list",
+    "--gaia-url",
+    "--translate-script-url",
+    "--extensions-on-chrome-urls",
+    "--extensions-on-extension-urls",
+    "--allowlisted-extension-id",
+    "--disable-blink-features",
+    "--unsafely-treat-insecure-origin-as-secure",
+    "--unsafely-allow-protected-media-identifier-for-domain",
+    "--disable-best-effort-tasks",
+    "--disable-hid-blocklist",
+    "--install-isolated-web-app-from-file",
+    "--install-isolated-web-app-from-url",
+    "--webauthn-remote-proxied-requests-allowed-additional-origin",
+    "--history-clusters-cluster-override-file",
+    "--disable-input-event-activation-protection",
+    "--enable-gpu-benchmarking",
+    "--cast-developer-certificate-path",
+    "--ignore-bad-message-for-testing",
+    "--disable-actor-safety-checks",
+    "--disable-site-isolation-trials",
+  ],
+} as const;
+
+export const XRIO_SENT_BAD_FLAG_SWITCHES = ["--disable-blink-features"] as const;
+
+export const isChromeBadFlag = (name: string, platform: NodeJS.Platform): boolean =>
+  CHROME_BAD_FLAGS.switches.some((bad) => bad === name) ||
+  (platform === "linux" && CHROME_BAD_FLAGS.linuxSwitches.some((bad) => bad === name));
+
 export const FORK_SWITCH_PREFIXES = ["--pxr-", "--xrio-"] as const;
 
 export const FORK_DUMP_SWITCH = "--xrio-dump-config";

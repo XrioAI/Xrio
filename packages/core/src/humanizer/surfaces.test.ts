@@ -785,6 +785,7 @@ describe("the automation surface", () => {
         },
       ],
       inputs: [],
+      tells: [],
       value: null,
     });
   });
@@ -807,6 +808,7 @@ describe("the automation surface", () => {
         },
       ],
       inputs: [],
+      tells: [],
       value: null,
     });
   });
@@ -814,7 +816,62 @@ describe("the automation surface", () => {
   it("expects no colour scheme on macOS, where it follows the host", () => {
     expect(
       resolveSurfaces(contextOf({ capabilities: { platform: "darwin" } })).automation,
-    ).toStrictEqual({ expected: [noWebdriver], inputs: [], value: null });
+    ).toStrictEqual({ expected: [noWebdriver], inputs: [], tells: [], value: null });
+  });
+});
+
+const forkWithInfobarKnob = (value: string): HostCapabilities => {
+  const { fork } = forkWith(null);
+
+  if (fork === undefined) {
+    throw new Error("forkWith builds a fork.");
+  }
+
+  return {
+    ...forkWith(null),
+    fork: {
+      ...fork,
+      knobs: { ...fork.knobs, "suppress-startup-infobars": { origin: "set", value } },
+    },
+  };
+};
+
+const flagInfobarTells = (overrides: Partial<IdentityContext>): readonly string[] =>
+  resolveSurfaces(contextOf(overrides)).automation.tells ?? [];
+
+describe("the flag-infobar tell", () => {
+  it("marks every headed stock launch, which always sends the AutomationControlled switch", () => {
+    expect(flagInfobarTells({ mode: "headed" })).toStrictEqual(["flag-infobar"]);
+    expect(
+      flagInfobarTells({ capabilities: { platform: "darwin" }, mode: "headed" }),
+    ).toStrictEqual(["flag-infobar"]);
+  });
+
+  it("does not mark a headless launch, which has no infobar to show", () => {
+    expect(flagInfobarTells({ mode: "headless" })).toStrictEqual([]);
+  });
+
+  it("does not mark a fork whose suppress-startup-infobars knob is true", () => {
+    expect(
+      flagInfobarTells({ capabilities: forkWithInfobarKnob("true"), mode: "headed" }),
+    ).toStrictEqual([]);
+  });
+
+  it("marks a fork whose suppress-startup-infobars knob is false", () => {
+    expect(
+      flagInfobarTells({ capabilities: forkWithInfobarKnob("false"), mode: "headed" }),
+    ).toStrictEqual(["flag-infobar"]);
+  });
+
+  it("marks a fork that does not list the knob", () => {
+    expect(flagInfobarTells({ capabilities: forkWith(null), mode: "headed" })).toStrictEqual([
+      "flag-infobar",
+    ]);
+  });
+
+  it("carries the tell into the plan for a headed stock launch only", () => {
+    expect(planIdentity(contextOf({ mode: "headed" })).tells).toContain("flag-infobar");
+    expect(planIdentity(contextOf({ mode: "headless" })).tells).not.toContain("flag-infobar");
   });
 });
 
@@ -947,7 +1004,7 @@ describe("a display the caller pins", () => {
       window: headed.chosen.surfaces.window,
     }).toStrictEqual({
       screen: { source: "host" },
-      tells: ["display-pin-unhonored", "host-fonts"],
+      tells: ["display-pin-unhonored", "host-fonts", "flag-infobar"],
       window: { size: { height: 900, width: 1600 }, source: "fixed" },
     });
   });

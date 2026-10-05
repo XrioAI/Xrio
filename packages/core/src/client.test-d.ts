@@ -264,6 +264,7 @@ describe("XrioClient types", () => {
       readonly dirty: number | null;
     }>();
     expectTypeOf<"fork-commit-unreadable">().toExtend<IdentityTell>();
+    expectTypeOf<"flag-infobar">().toExtend<IdentityTell>();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
       | "fonts-drift"

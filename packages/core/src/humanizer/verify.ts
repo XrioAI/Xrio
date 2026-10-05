@@ -67,7 +67,8 @@ export type FactTell =
   | "fork-commit-unreadable"
   | "host-fonts"
   | "replay-host-skew"
-  | "display-pin-unhonored";
+  | "display-pin-unhonored"
+  | "flag-infobar";
 
 export type IdentityTell =
   | "no-taskbar"

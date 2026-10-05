@@ -459,7 +459,7 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "America/Toronto" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
-        tells: [],
+        tells: ["flag-infobar"],
       },
     });
   });

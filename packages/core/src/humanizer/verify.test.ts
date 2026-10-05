@@ -349,7 +349,7 @@ describe("the headed window", () => {
           { expected: 1024, field: "outerWidth", observed: 1600, surface: "window" },
           { expected: 768, field: "outerHeight", observed: 900, surface: "window" },
         ],
-        tells: ["no-taskbar", "display-implausible"],
+        tells: ["no-taskbar", "display-implausible", "flag-infobar"],
       },
     });
   });

@@ -3,8 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   CHROME_ACCEPT_LANGUAGES,
   chromeAcceptLanguages,
+  isChromeBadFlag,
   isOwnedSwitch,
   measuredLocalesFor,
+  OWNED_SWITCHES,
+  XRIO_SENT_BAD_FLAG_SWITCHES,
 } from "./owned-inputs.ts";
 
 describe(isOwnedSwitch, () => {
@@ -120,5 +123,42 @@ describe(measuredLocalesFor, () => {
     { language: "toString", tags: [] },
   ])("finds $tags for $language", ({ language, tags }) => {
     expect(measuredLocalesFor(language)).toStrictEqual(tags);
+  });
+});
+
+describe(isChromeBadFlag, () => {
+  it.each(["--no-sandbox", "--host-resolver-rules", "--log-net-log", "--disable-blink-features"])(
+    "lists %s on every platform",
+    (name) => {
+      expect(isChromeBadFlag(name, "linux")).toBeTruthy();
+      expect(isChromeBadFlag(name, "darwin")).toBeTruthy();
+    },
+  );
+
+  it("lists the speech dispatcher switch on Linux only", () => {
+    expect(isChromeBadFlag("--enable-speech-dispatcher", "linux")).toBeTruthy();
+    expect(isChromeBadFlag("--enable-speech-dispatcher", "darwin")).toBeFalsy();
+  });
+
+  it("lists the bad switches and leaves out the ones Xrio manages or Chrome does not flag", () => {
+    expect(isChromeBadFlag("--no-sandbox", "linux")).toBeTruthy();
+
+    for (const name of ["--lang", "--window-size", "--proxy-server", "--disable-features"]) {
+      expect(isChromeBadFlag(name, "linux")).toBeFalsy();
+    }
+  });
+
+  it("never lists a switch Xrio's identity owns, so an identity input cannot raise the infobar", () => {
+    expect(isChromeBadFlag("--no-sandbox", "linux")).toBeTruthy();
+
+    for (const name of OWNED_SWITCHES) {
+      expect(isChromeBadFlag(name, "linux")).toBeFalsy();
+    }
+  });
+
+  it("lists every bad switch Xrio's own launch sends", () => {
+    for (const name of XRIO_SENT_BAD_FLAG_SWITCHES) {
+      expect(isChromeBadFlag(name, "darwin")).toBeTruthy();
+    }
   });
 });

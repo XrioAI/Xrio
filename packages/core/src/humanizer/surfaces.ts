@@ -16,7 +16,11 @@ import { drawDisplay, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
 import type { IdentityIntent } from "./intent.ts";
-import { chromeAcceptLanguages } from "./owned-inputs.ts";
+import {
+  chromeAcceptLanguages,
+  isChromeBadFlag,
+  XRIO_SENT_BAD_FLAG_SWITCHES,
+} from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
 import type { Expectation, FactTell, Matcher, Observed, ObservedField } from "./verify.ts";
 import { canonicalZone } from "./zone-name.ts";
@@ -573,19 +577,32 @@ const NO_HEADLESS_TOKEN: Expectation = {
   severity: "fatal",
 };
 
-const resolveAutomation = ({
+const showsFlagInfobar = ({
   capabilities,
-}: Pick<IdentityContext, "capabilities">): Resolutions["automation"] => ({
-  expected: [
-    compatible("webdriver", equals(false), "fatal"),
-    ...(knobOf(capabilities, "suppress-headless-token") === "true" ? [NO_HEADLESS_TOKEN] : []),
-    ...(capabilities.platform === "linux"
-      ? [compatible("colorScheme", equals("light"), "note")]
-      : []),
-  ],
-  inputs: [],
-  value: null,
-});
+  mode,
+}: Pick<IdentityContext, "capabilities" | "mode">): boolean =>
+  mode === "headed" &&
+  knobOf(capabilities, "suppress-startup-infobars") !== "true" &&
+  XRIO_SENT_BAD_FLAG_SWITCHES.some((name) => isChromeBadFlag(name, capabilities.platform));
+
+const resolveAutomation = (
+  context: Pick<IdentityContext, "capabilities" | "mode">,
+): Resolutions["automation"] => {
+  const { capabilities } = context;
+
+  return {
+    expected: [
+      compatible("webdriver", equals(false), "fatal"),
+      ...(knobOf(capabilities, "suppress-headless-token") === "true" ? [NO_HEADLESS_TOKEN] : []),
+      ...(capabilities.platform === "linux"
+        ? [compatible("colorScheme", equals("light"), "note")]
+        : []),
+    ],
+    inputs: [],
+    tells: showsFlagInfobar(context) ? ["flag-infobar"] : [],
+    value: null,
+  };
+};
 
 export const resolveSurfaces = (context: IdentityContext): Resolutions => {
   const replayed = replayPolicy(context);
