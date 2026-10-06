@@ -63,6 +63,10 @@ const headlessLinux: Observation = {
   userAgent: linuxUserAgent,
   webdriver: false,
   webgl: true,
+  webglExtensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+  webglRenderer:
+    "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+  webglVendor: "Google Inc. (Google)",
   zone: "UTC",
   zoneOffsets: ["GMT+00:00", "GMT+00:00"],
 };
@@ -116,7 +120,7 @@ const secureCoverage = {
   userAgent: { state: "observed" },
   voices: { reason: "not-observed", state: "unchecked" },
   webglPixels: { reason: "lanes-only", state: "unchecked" },
-  webglStrings: { reason: "not-observed", state: "unchecked" },
+  webglStrings: { state: "observed" },
   webgpu: { state: "observed" },
   webrtc: { reason: "not-observed", state: "unchecked" },
   window: { state: "observed" },
@@ -258,6 +262,12 @@ describe("the identity report", () => {
           timeZone: "UTC",
           userAgent: linuxUserAgent,
           webdriver: false,
+          webgl: {
+            extensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+            renderer:
+              "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+            vendor: "Google Inc. (Google)",
+          },
           webgpu: false,
           window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
         },
@@ -448,6 +458,12 @@ describe("the identity report", () => {
           timeZone: "America/Toronto",
           userAgent: macUserAgent,
           webdriver: false,
+          webgl: {
+            extensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+            renderer:
+              "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+            vendor: "Google Inc. (Google)",
+          },
           webgpu: null,
           window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
         },
@@ -520,6 +536,41 @@ describe("the secure-context surfaces' coverage", () => {
       });
     },
   );
+});
+
+describe("the WebGL strings' coverage", () => {
+  const plan = planIdentity({
+    capabilities: { permittedCpus: 32, platform: "linux" },
+    device: fixedDevice,
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: "UTC",
+    mode: "headless",
+    pins: noPins,
+  });
+
+  it("reports them observed on a page whose scrape never navigated", () => {
+    const { coverage, observed } = evaluate(plan, {
+      ...headlessLinux,
+      afterCapture: { kind: "not-navigated" },
+    }).report;
+
+    expect({ coverage: coverage.webglStrings, vendor: observed.webgl.vendor }).toStrictEqual({
+      coverage: { state: "observed" },
+      vendor: "Google Inc. (Google)",
+    });
+  });
+
+  it("reports a null vendor, renderer and extension list for a page with no context", () => {
+    const { observed } = evaluate(plan, {
+      ...headlessLinux,
+      webgl: false,
+      webglExtensions: null,
+      webglRenderer: null,
+      webglVendor: null,
+    }).report;
+
+    expect(observed.webgl).toStrictEqual({ extensions: null, renderer: null, vendor: null });
+  });
 });
 
 describe("a secure origin whose individual reads gave nothing", () => {

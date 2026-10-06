@@ -245,6 +245,9 @@ export interface Observation {
   readonly maxTouchPoints: number;
   readonly webdriver: boolean;
   readonly webgl: boolean;
+  readonly webglVendor: string | null;
+  readonly webglRenderer: string | null;
+  readonly webglExtensions: readonly string[] | null;
   readonly userAgent: string;
   readonly fontsSentinel: string;
   readonly fontsSentinelResolved: boolean;

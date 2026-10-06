@@ -90,6 +90,11 @@ export interface ObservedIdentity {
   readonly clientHints: ClientHints | null;
   readonly battery: boolean | null;
   readonly webgpu: boolean | null;
+  readonly webgl: {
+    readonly vendor: string | null;
+    readonly renderer: string | null;
+    readonly extensions: readonly string[] | null;
+  };
 }
 
 export interface BrowserIdentityReport {
@@ -205,7 +210,7 @@ export const coverageOf = (
     userAgent: observedCoverage(),
     voices: unchecked("not-observed"),
     webglPixels: unchecked("lanes-only"),
-    webglStrings: unchecked("not-observed"),
+    webglStrings: observedCoverage(),
     webgpu: afterCaptureCoverage(afterCapture),
     webrtc: unchecked("not-observed"),
     window: observedCoverage(),
@@ -247,6 +252,11 @@ export const observedOf = (
     timeZone: observation.zone,
     userAgent: observation.userAgent,
     webdriver: observation.webdriver,
+    webgl: {
+      extensions: observation.webglExtensions === null ? null : [...observation.webglExtensions],
+      renderer: observation.webglRenderer,
+      vendor: observation.webglVendor,
+    },
     webgpu,
     window: {
       outerHeight: observation.outerHeight,

@@ -792,6 +792,10 @@ const hostScreen: Observation = {
   userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36",
   webdriver: false,
   webgl: true,
+  webglExtensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+  webglRenderer:
+    "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+  webglVendor: "Google Inc. (Google)",
   zone: "UTC",
   zoneOffsets: ["GMT+00:00", "GMT+00:00"],
 };

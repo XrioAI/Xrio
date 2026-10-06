@@ -272,6 +272,30 @@ const pairOf = (name: string, fallback: readonly [number, number]): readonly [nu
   return groups === undefined ? fallback : [Number(groups.first), Number(groups.second)];
 };
 
+const WEBGL_VENDOR = "Google Inc. (Google)";
+
+const WEBGL_RENDERER =
+  "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)";
+
+const WEBGL_EXTENSIONS = [
+  "ANGLE_instanced_arrays",
+  "EXT_blend_minmax",
+  "EXT_color_buffer_half_float",
+  "EXT_float_blend",
+  "EXT_texture_filter_anisotropic",
+  "OES_element_index_uint",
+  "OES_standard_derivatives",
+  "OES_texture_float",
+  "OES_vertex_array_object",
+  "WEBGL_color_buffer_float",
+  "WEBGL_compressed_texture_astc",
+  "WEBGL_compressed_texture_etc",
+  "WEBGL_compressed_texture_etc1",
+  "WEBGL_debug_renderer_info",
+  "WEBGL_depth_texture",
+  "WEBGL_lose_context",
+];
+
 const HOST_CORES = 8;
 
 const HOST_MEMORY_GB = 8;
@@ -328,6 +352,9 @@ const OBSERVATION = {
   userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
   webdriver: false,
   webgl: scenario !== "no-webgl",
+  webglExtensions: scenario === "no-webgl" ? null : WEBGL_EXTENSIONS,
+  webglRenderer: scenario === "no-webgl" ? null : WEBGL_RENDERER,
+  webglVendor: scenario === "no-webgl" ? null : WEBGL_VENDOR,
   zone: "UTC",
   zoneOffsets: UTC_OFFSETS,
 };

@@ -56,6 +56,10 @@ const linuxHeadless: Observation = {
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
   webdriver: false,
   webgl: true,
+  webglExtensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+  webglRenderer:
+    "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+  webglVendor: "Google Inc. (Google)",
   zone: "Asia/Calcutta",
   zoneOffsets: ["GMT+05:30", "GMT+05:30"],
 };
@@ -162,6 +166,24 @@ describe("each matcher kind", () => {
       wanted:
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
     },
+    {
+      held: { ...linuxHeadless, webglExtensions: ["WEBGL_debug_renderer_info"] },
+      kind: "excludes-all",
+      missed: {
+        ...linuxHeadless,
+        webglExtensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+      },
+      rule: expectation({
+        field: "webglExtensions",
+        matcher: {
+          kind: "excludes-all",
+          values: ["WEBGL_compressed_texture_astc", "WEBGL_compressed_texture_etc"],
+        },
+        surface: "gpu",
+      }),
+      seen: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+      wanted: ["WEBGL_compressed_texture_astc", "WEBGL_compressed_texture_etc"],
+    },
   ] as const)(
     "$kind holds or names the field it missed",
     ({ held, missed, rule, seen, wanted }) => {
@@ -176,6 +198,33 @@ describe("each matcher kind", () => {
       ]);
     },
   );
+});
+
+describe("the excludes-all matcher", () => {
+  const rule = expectation({
+    field: "webglExtensions",
+    matcher: { kind: "excludes-all", values: ["WEBGL_compressed_texture_etc"] },
+    surface: "gpu",
+  });
+
+  it("does not hold for a page that read no extension list", () => {
+    expect(
+      evaluate(planWith([rule]), { ...linuxHeadless, webglExtensions: null }).mismatches,
+    ).toStrictEqual([
+      {
+        expected: ["WEBGL_compressed_texture_etc"],
+        field: "webglExtensions",
+        observed: null,
+        surface: "gpu",
+      },
+    ]);
+  });
+
+  it("holds for an empty extension list", () => {
+    expect(
+      evaluate(planWith([rule]), { ...linuxHeadless, webglExtensions: [] }).mismatches,
+    ).toStrictEqual([]);
+  });
 });
 
 describe("severity", () => {
@@ -635,6 +684,9 @@ describe(readObservation, () => {
   it.each([
     { read: JSON.stringify({ ...reading, webdriver: "false" }), refusal: "webdriver" },
     { read: JSON.stringify({ ...reading, webgl: undefined }), refusal: "webgl" },
+    { read: JSON.stringify({ ...reading, webglVendor: 7 }), refusal: "webglVendor" },
+    { read: JSON.stringify({ ...reading, webglRenderer: undefined }), refusal: "webglRenderer" },
+    { read: JSON.stringify({ ...reading, webglExtensions: [1] }), refusal: "webglExtensions" },
     { read: JSON.stringify({ ...reading, fontsDigest: 7 }), refusal: "fontsDigest" },
     { read: JSON.stringify({ ...reading, fontsSentinel: null }), refusal: "fontsSentinel" },
     {
@@ -664,6 +716,7 @@ const FULL_MEASURES = 120;
 
 interface PageOptions {
   readonly canCreateWebgl?: boolean;
+  readonly webglContext?: object;
   readonly fallsBack?: boolean;
   readonly measured?: string[];
 }
@@ -675,13 +728,14 @@ const genericOf = (font: string): string => `72px ${font.slice(font.lastIndexOf(
 
 const canvasDocument = ({
   canCreateWebgl = true,
+  webglContext = {},
   fallsBack = false,
   measured = [],
 }: PageOptions) => ({
   createElement: () => ({
     getContext: (kind: string) => {
       if (kind === "webgl") {
-        return canCreateWebgl ? {} : null;
+        return canCreateWebgl ? webglContext : null;
       }
 
       const context = {
@@ -779,6 +833,76 @@ describe(identityRead, () => {
     expect(
       readObservation(MEASURED, runRead(read, lightDesktop, { canCreateWebgl: webgl })),
     ).toMatchObject({ webgl });
+  });
+
+  it("reads the unmasked vendor and renderer and the supported extensions from the one context", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    const webglContext = {
+      getExtension: (name: string) =>
+        name === "WEBGL_debug_renderer_info"
+          ? { UNMASKED_RENDERER_WEBGL: 37_446, UNMASKED_VENDOR_WEBGL: 37_445 }
+          : null,
+      getParameter: (parameter: number) =>
+        parameter === 37_445 ? "Google Inc. (Google)" : "ANGLE (Google, SwiftShader)",
+      getSupportedExtensions: () => ["WEBGL_compressed_texture_etc", "WEBGL_debug_renderer_info"],
+    };
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, { webglContext }))).toMatchObject({
+      webgl: true,
+      webglExtensions: ["WEBGL_compressed_texture_etc", "WEBGL_debug_renderer_info"],
+      webglRenderer: "ANGLE (Google, SwiftShader)",
+      webglVendor: "Google Inc. (Google)",
+    });
+  });
+
+  it("reads the extension list but no strings from a context without the debug extension", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    const webglContext = {
+      getExtension: () => null,
+      getSupportedExtensions: () => ["OES_texture_float"],
+    };
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, { webglContext }))).toMatchObject({
+      webgl: true,
+      webglExtensions: ["OES_texture_float"],
+      webglRenderer: null,
+      webglVendor: null,
+    });
+  });
+
+  it("reads nothing from a context whose reads throw, without throwing", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    const webglContext = {
+      getExtension: () => {
+        throw new Error("lost context");
+      },
+      getSupportedExtensions: () => {
+        throw new Error("lost context");
+      },
+    };
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, { webglContext }))).toMatchObject({
+      webgl: true,
+      webglExtensions: null,
+      webglRenderer: null,
+      webglVendor: null,
+    });
+  });
+
+  it("reads all three as null without a context", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    expect(
+      readObservation(MEASURED, runRead(read, lightDesktop, { canCreateWebgl: false })),
+    ).toMatchObject({
+      webgl: false,
+      webglExtensions: null,
+      webglRenderer: null,
+      webglVendor: null,
+    });
   });
 
   it("without evidence, measures the sentinel and 40 families against each generic and reports both digests", () => {

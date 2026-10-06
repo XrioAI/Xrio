@@ -1400,6 +1400,7 @@ describe("the launch identity check", () => {
         deviceMemory: { state: "observed" },
         screen: { state: "observed" },
         timezone: { state: "observed" },
+        webglStrings: { state: "observed" },
       },
       exit: { facts: { kind: "unknown" }, route: "direct" },
       mode: "headless",
@@ -1409,6 +1410,11 @@ describe("the launch identity check", () => {
         offsets: ["GMT+00:00", "GMT+00:00"],
         screen: { availHeight: 1018, availTop: 32, height: 1050, width: 1680 },
         timeZone: "UTC",
+        webgl: {
+          renderer:
+            "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+          vendor: "Google Inc. (Google)",
+        },
         window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
       },
       seed: fixedSeed,

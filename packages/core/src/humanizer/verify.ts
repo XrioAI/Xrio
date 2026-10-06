@@ -41,7 +41,8 @@ export type Matcher =
   | { readonly kind: "named-zone" }
   | { readonly kind: "zone-offsets" }
   | { readonly kind: "at-most-field"; readonly field: ObservedField }
-  | { readonly kind: "no-headless-token" };
+  | { readonly kind: "no-headless-token" }
+  | { readonly kind: "excludes-all"; readonly values: readonly string[] };
 
 export interface Expectation {
   readonly field: ObservedField;
@@ -144,6 +145,9 @@ const READING = {
   userAgent: isText,
   webdriver: isFlag,
   webgl: isFlag,
+  webglExtensions: isTextsOrNull,
+  webglRenderer: isTextOrNull,
+  webglVendor: isTextOrNull,
   zone: isTextOrNull,
   zoneOffsets: isTexts,
 } satisfies { readonly [Field in ReadField]: (value: unknown) => value is Reading[Field] };
@@ -271,6 +275,10 @@ const expectedBy = (matcher: Matcher, observation: Observation): Observed => {
       return observation.userAgent.replaceAll(HEADLESS_TOKEN, "Chrome/");
     }
 
+    case "excludes-all": {
+      return matcher.values;
+    }
+
     default: {
       throw new Error(`No rule for ${JSON.stringify(matcher satisfies never)}.`);
     }
@@ -280,6 +288,8 @@ const expectedBy = (matcher: Matcher, observation: Observation): Observed => {
 const isTextValue = (value: Observed): value is string => typeof value === "string";
 
 const namesZone = (zone: Observed): boolean => isTextValue(zone) && zone !== UNRESOLVED_ZONE;
+
+const isTextList = (value: Observed): value is readonly string[] => Array.isArray(value);
 
 const isNumberValue = (value: Observed): value is number => typeof value === "number";
 
@@ -299,6 +309,10 @@ const holds = (matcher: Matcher, expected: Observed, observed: Observed): boolea
 
     case "no-headless-token": {
       return isTextValue(observed) && !observed.includes(HEADLESS_TOKEN);
+    }
+
+    case "excludes-all": {
+      return isTextList(observed) && matcher.values.every((value) => !observed.includes(value));
     }
 
     case "equals":
@@ -494,6 +508,31 @@ const READ_SOURCE = `(requested, fonts) => {
 
     return (hash >>> 0).toString(16).padStart(8, "0");
   };
+  const attempt = (read) => {
+    try {
+      return read();
+    } catch {
+      return null;
+    }
+  };
+  const webglContext = attempt(() => document.createElement("canvas").getContext("webgl"));
+  const webglDebug = webglContext === null ? null : attempt(() => webglContext.getExtension("WEBGL_debug_renderer_info"));
+  const webglText = (name) =>
+    webglDebug === null
+      ? null
+      : attempt(() => {
+          const value = webglContext.getParameter(webglDebug[name]);
+
+          return typeof value === "string" ? value : null;
+        });
+  const webglExtensions =
+    webglContext === null
+      ? null
+      : attempt(() => {
+          const names = webglContext.getSupportedExtensions();
+
+          return Array.isArray(names) ? names.map(String) : null;
+        });
   const sentinelRows = fontRows(${JSON.stringify(FONT_SENTINEL_FAMILIES)});
 
   return JSON.stringify({
@@ -526,7 +565,10 @@ const READ_SOURCE = `(requested, fonts) => {
     maxTouchPoints: navigator.maxTouchPoints,
     hardwareConcurrency: navigator.hardwareConcurrency,
     webdriver: navigator.webdriver,
-    webgl: document.createElement("canvas").getContext("webgl") !== null,
+    webgl: webglContext !== null,
+    webglVendor: webglText("UNMASKED_VENDOR_WEBGL"),
+    webglRenderer: webglText("UNMASKED_RENDERER_WEBGL"),
+    webglExtensions,
     userAgent: navigator.userAgent,
   });
 }`;
