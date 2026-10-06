@@ -167,6 +167,7 @@ const { args } = planLaunch({
     mode,
     pins: noPins,
   }).inputs,
+  proxyServer: undefined,
   scratchDir: "<scratch>",
   xauthority: process.env.XAUTHORITY,
 });

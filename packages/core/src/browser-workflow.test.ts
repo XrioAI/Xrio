@@ -2024,7 +2024,7 @@ describe("the identity-chosen event", () => {
           surfaces: {
             automation: null,
             gpu: { backend: "swiftshader", persona: null },
-            leaks: { dnsOverHttps: "off", networkPrediction: "off" },
+            leaks: { dnsOverHttps: "off", networkPrediction: "off", webrtc: "default" },
             locale: { languages: ["en-US", "en"], tag: "en-US" },
             media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
             screen: {

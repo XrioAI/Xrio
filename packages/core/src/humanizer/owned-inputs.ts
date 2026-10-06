@@ -28,6 +28,7 @@ export const OWNED_FILE_ENVIRONMENT = ["FONTCONFIG_FILE"] as const;
 export const OWNED_PREFERENCES = [
   "intl.accept_languages",
   "net.network_prediction_options",
+  "webrtc.ip_handling_policy",
 ] as const;
 
 export const OWNED_LOCAL_STATE = ["dns_over_https.mode"] as const;

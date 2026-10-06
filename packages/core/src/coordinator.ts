@@ -106,7 +106,15 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
       hostZone: readHostZone(),
     });
 
-    return { ...intent.source, capabilities, fonts, identity, kind: "browser", url: intent.url };
+    return {
+      ...intent.source,
+      capabilities,
+      fonts,
+      identity,
+      kind: "browser",
+      proxy: intent.route,
+      url: intent.url,
+    };
   } catch (error) {
     await fonts.settle(null);
 

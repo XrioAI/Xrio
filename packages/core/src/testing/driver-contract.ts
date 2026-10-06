@@ -95,6 +95,7 @@ const withDriver = async (
       mode: "headless",
       pins: noPins,
     }).inputs,
+    proxyServer: undefined,
     scratchDir: scratch.path,
     xauthority: process.env.XAUTHORITY,
   });

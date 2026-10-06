@@ -602,10 +602,6 @@ export const resolveScrapeIntent = (
 
   const proxy = options.proxy === undefined ? defaults.route : parseProxy(options.proxy);
 
-  if (proxy !== undefined && mode.mode !== "http") {
-    throw invalidOptions('proxy is not supported in browser modes yet; use mode: "http".');
-  }
-
   if ("browserArgs" in options && options.browserArgs !== undefined) {
     throw invalidOptions("browserArgs is a client option.");
   }

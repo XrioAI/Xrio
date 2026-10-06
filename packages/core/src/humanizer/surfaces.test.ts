@@ -2103,14 +2103,35 @@ describe("the screen surface", () => {
 });
 
 describe("the leaks surface", () => {
-  it("turns network prediction and DNS-over-HTTPS off", () => {
+  it("turns network prediction and DNS-over-HTTPS off and writes WebRTC's default policy on a direct route", () => {
     expect(resolveSurfaces(contextOf()).leaks).toStrictEqual({
       expected: [],
       inputs: [
         { name: "net.network_prediction_options", sink: "preference", value: 2 },
         { name: "dns_over_https.mode", sink: "local-state", value: "off" },
+        { name: "webrtc.ip_handling_policy", sink: "preference", value: "default" },
       ],
-      value: { dnsOverHttps: "off", networkPrediction: "off" },
+      value: { dnsOverHttps: "off", networkPrediction: "off", webrtc: "default" },
+    });
+  });
+
+  it("limits WebRTC to proxied traffic on a proxy route", () => {
+    expect(resolveSurfaces(contextOf({ exit: proxyRoute })).leaks).toStrictEqual({
+      expected: [],
+      inputs: [
+        { name: "net.network_prediction_options", sink: "preference", value: 2 },
+        { name: "dns_over_https.mode", sink: "local-state", value: "off" },
+        {
+          name: "webrtc.ip_handling_policy",
+          sink: "preference",
+          value: "disable_non_proxied_udp",
+        },
+      ],
+      value: {
+        dnsOverHttps: "off",
+        networkPrediction: "off",
+        webrtc: "disable_non_proxied_udp",
+      },
     });
   });
 });
@@ -2536,7 +2557,11 @@ describe("the chosen identity", () => {
         fonts: { reason: null, source: "host" },
         gpu: { backend: "native", persona: null },
         hardware: { cores: 0, memoryGb: 0, source: "host" },
-        leaks: { dnsOverHttps: "off", networkPrediction: "off" },
+        leaks: {
+          dnsOverHttps: "off",
+          networkPrediction: "off",
+          webrtc: "disable_non_proxied_udp",
+        },
         locale: { languages: ["en-US", "en"], tag: "en-US" },
         media: { source: "host" },
         screen: { source: "host" },

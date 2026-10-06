@@ -24,6 +24,7 @@ const launchOf = (headless: boolean, browserArgs: readonly string[]) => {
     display: undefined,
     headless,
     identity: identity.inputs,
+    proxyServer: undefined,
     scratchDir: SCRATCH,
     xauthority: undefined,
   });

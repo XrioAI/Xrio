@@ -13,6 +13,8 @@ import {
 } from "../../humanizer/verify.ts";
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import type { HeldDeadline } from "../../lifetime.ts";
+import { startRelay } from "../../proxy/relay.ts";
+import type { Relay } from "../../proxy/relay.ts";
 import type { Slot } from "../../slot.ts";
 import type { SourceDocument } from "../../types.ts";
 import type { Visit, VisitPlan } from "../visit.ts";
@@ -206,6 +208,12 @@ const settleFonts = async ({ fonts }: BrowserVisitPlan): Promise<void> => {
   }
 };
 
+const proxyRelayFor = async (
+  { proxy }: BrowserVisitPlan,
+  deadline: HeldDeadline,
+): Promise<Relay | undefined> =>
+  proxy === undefined ? undefined : await startRelay(proxy, deadline, "loopback");
+
 const renderInScope = async (
   driver: BrowserDriver,
   plan: BrowserVisitPlan,
@@ -213,6 +221,7 @@ const renderInScope = async (
   deadline: HeldDeadline,
   scope: ChromeScope,
   document: PromiseWithResolvers<SourceDocument>,
+  proxyServer: string | undefined,
 ): Promise<Closed> => {
   const { capabilities, fonts, identity } = plan;
 
@@ -225,6 +234,7 @@ const renderInScope = async (
       display: process.env.DISPLAY,
       headless: plan.mode === "headless",
       identity: identity.inputs,
+      proxyServer,
       scratchDir: scope.scratch.path,
       xauthority: process.env.XAUTHORITY,
     });
@@ -283,9 +293,10 @@ export const createBrowsers = (
         throw clientClosed();
       }
 
+      await using relay = await proxyRelayFor(plan, deadline);
       const scope = new ChromeScope(await createOwnedScratch(registry, deadline), steps);
 
-      return await renderInScope(driver, plan, slot, deadline, scope, document);
+      return await renderInScope(driver, plan, slot, deadline, scope, document, relay?.url);
     } catch (error) {
       document.reject(error);
       await settleFonts(plan);

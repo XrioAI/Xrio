@@ -406,6 +406,7 @@ const withBrowser = async <Result>(
       mode,
       pins: noPins,
     }).inputs,
+    proxyServer: undefined,
     scratchDir: scratch.path,
     xauthority: process.env.XAUTHORITY,
   });
@@ -983,6 +984,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
         mode,
         pins: noPins,
       }).inputs,
+      proxyServer: undefined,
       scratchDir: path.dirname(profile ?? ""),
       xauthority: process.env.XAUTHORITY,
     });

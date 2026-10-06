@@ -30,6 +30,7 @@ const browserPlan: VisitPlan = {
   }),
   kind: "browser",
   mode: "headless",
+  proxy: undefined,
   url: new URL("https://example.com"),
 };
 

@@ -79,6 +79,7 @@ const setup = async () => {
       mode: "headless",
       pins: noPins,
     }).inputs,
+    proxyServer: undefined,
     scratchDir: scope.scratch.path,
     xauthority: undefined,
   });

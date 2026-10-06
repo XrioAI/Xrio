@@ -156,23 +156,23 @@ describe("proxy option", () => {
     expect(resolveScrapeIntent(page, resolveClientOptions({ mode: "http" })).route).toBeUndefined();
   });
 
-  it("refuses a proxy in browser modes until the browser relay exists", () => {
+  it("keeps a browser-mode scrape's proxy as its route and leaves the password out of its URL", () => {
     const browser = resolveClientOptions({ browserPath: "/browser", mode: "headless" });
 
-    expect(() =>
-      resolveScrapeIntent({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
-    ).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS", name: "TypeError" }));
+    const { route } = resolveScrapeIntent(
+      { ...page, proxy: "http://user:secret@proxy.test:8000" },
+      browser,
+    );
+
+    expect(route?.hostname).toBe("proxy.test");
+    expect(route?.redactedUrl).toBe("http://proxy.test:8000/");
+    expect(route?.credentials).toStrictEqual({ password: "secret", username: "user" });
     expect(
-      inspectedFailure(() =>
-        resolveScrapeIntent({ ...page, proxy: "http://user:secret@proxy.test:8000" }, browser),
-      ),
-    ).not.toContain("secret");
-    expect(() =>
       resolveScrapeIntent(
-        { ...page, mode: "http" },
+        page,
         resolveClientOptions({ browserPath: "/browser", mode: "headed", proxy: "socks5://p.test" }),
-      ),
-    ).not.toThrow();
+      ).route?.hostname,
+    ).toBe("p.test");
   });
 });
 

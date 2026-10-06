@@ -287,7 +287,7 @@ describe("the identity report", () => {
           fonts: { reason: "no fontstack/ beside the binary", source: "host" },
           gpu: { backend: "swiftshader", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },
-          leaks: { dnsOverHttps: "off", networkPrediction: "off" },
+          leaks: { dnsOverHttps: "off", networkPrediction: "off", webrtc: "default" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { devices: { audioinput: 1, audiooutput: 1, videoinput: 0 }, source: "fake" },
           screen: {
@@ -522,7 +522,7 @@ describe("the identity report", () => {
           fonts: { reason: null, source: "host" },
           gpu: { backend: "native", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },
-          leaks: { dnsOverHttps: "off", networkPrediction: "off" },
+          leaks: { dnsOverHttps: "off", networkPrediction: "off", webrtc: "default" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
           media: { source: "host" },
           screen: { source: "host" },

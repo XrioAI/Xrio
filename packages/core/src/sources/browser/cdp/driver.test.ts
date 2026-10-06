@@ -131,6 +131,7 @@ describe("the CDP driver's documents", () => {
         mode: "headless",
         pins: noPins,
       }).inputs,
+      proxyServer: undefined,
       scratchDir: scratch.path,
       xauthority: undefined,
     });
@@ -172,6 +173,7 @@ describe("the CDP driver's documents", () => {
         mode: "headless",
         pins: noPins,
       }).inputs,
+      proxyServer: undefined,
       scratchDir: scratch.path,
       xauthority: undefined,
     });
@@ -231,6 +233,7 @@ describe("the CDP driver's documents", () => {
         mode: "headless",
         pins: noPins,
       }).inputs,
+      proxyServer: undefined,
       scratchDir: scratch.path,
       xauthority: undefined,
     });

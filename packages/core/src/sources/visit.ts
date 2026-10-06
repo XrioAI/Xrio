@@ -21,6 +21,7 @@ export type VisitPlan =
       readonly capabilities: HostCapabilities;
       readonly identity: IdentityPlan;
       readonly fonts: FontClaim;
+      readonly proxy: ProxyEndpoint | undefined;
     } & BrowserIntent)
   | {
       readonly kind: "http";

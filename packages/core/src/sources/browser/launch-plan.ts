@@ -12,6 +12,7 @@ export interface LaunchRequest {
   scratchDir: string;
   display: string | undefined;
   xauthority: string | undefined;
+  proxyServer: string | undefined;
   identity: BrowserInputs;
 }
 
@@ -155,10 +156,27 @@ export const parseBrowserArgs = (browserArgs: readonly string[]): readonly strin
   return Object.freeze(args);
 };
 
-const xrioSwitches = ({ identity }: LaunchRequest, directories: LaunchDirectories): string[] => [
+const PROXY_BYPASS_NOTHING = "<-loopback>";
+
+const RESOLVE_NOTHING_LOCALLY = "MAP * ^NOTFOUND,EXCLUDE 127.0.0.1";
+
+const proxySwitches = (proxyServer: string | undefined): string[] =>
+  proxyServer === undefined
+    ? []
+    : [
+        `--proxy-server=${proxyServer}`,
+        `--proxy-bypass-list=${PROXY_BYPASS_NOTHING}`,
+        `--host-resolver-rules=${RESOLVE_NOTHING_LOCALLY}`,
+      ];
+
+const xrioSwitches = (
+  { identity, proxyServer }: LaunchRequest,
+  directories: LaunchDirectories,
+): string[] => [
   `--disable-features=${DISABLED_FEATURES.join(",")}`,
   "--disable-component-update",
   "--disable-domain-reliability",
+  ...proxySwitches(proxyServer),
   ...identity.switches,
   `--crash-dumps-dir=${directories.crashes}`,
 ];

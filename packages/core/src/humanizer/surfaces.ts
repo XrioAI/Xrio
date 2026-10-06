@@ -70,6 +70,8 @@ interface Size {
 
 type DeviceSource = "drawn" | "display" | "record";
 
+type WebRtcPolicy = "default" | "disable_non_proxied_udp";
+
 export interface SurfaceChoices {
   readonly seed: { readonly source: DeviceChoice["kind"] };
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
@@ -95,7 +97,11 @@ export interface SurfaceChoices {
     | { readonly source: "package"; readonly payload: string; readonly config: string }
     | { readonly source: "host"; readonly reason: string | null };
   readonly speech: { readonly persona: string | null };
-  readonly leaks: { readonly networkPrediction: "off"; readonly dnsOverHttps: "off" };
+  readonly leaks: {
+    readonly networkPrediction: "off";
+    readonly dnsOverHttps: "off";
+    readonly webrtc: WebRtcPolicy;
+  };
   readonly media:
     | { readonly source: "fake"; readonly devices: MediaDeviceCounts }
     | { readonly source: "host" };
@@ -762,18 +768,23 @@ const resolveSpeech = ({
   };
 };
 
-const resolveLeaks = (): Resolutions["leaks"] => ({
-  expected: [],
-  inputs: [
-    {
-      name: "net.network_prediction_options",
-      sink: "preference",
-      value: NETWORK_PREDICTION_NEVER,
-    },
-    { name: "dns_over_https.mode", sink: "local-state", value: "off" },
-  ],
-  value: { dnsOverHttps: "off", networkPrediction: "off" },
-});
+const resolveLeaks = ({ exit }: Pick<IdentityContext, "exit">): Resolutions["leaks"] => {
+  const webrtc: WebRtcPolicy = exit.route === "proxy" ? "disable_non_proxied_udp" : "default";
+
+  return {
+    expected: [],
+    inputs: [
+      {
+        name: "net.network_prediction_options",
+        sink: "preference",
+        value: NETWORK_PREDICTION_NEVER,
+      },
+      { name: "dns_over_https.mode", sink: "local-state", value: "off" },
+      { name: "webrtc.ip_handling_policy", sink: "preference", value: webrtc },
+    ],
+    value: { dnsOverHttps: "off", networkPrediction: "off", webrtc },
+  };
+};
 
 const resolveMedia = ({
   capabilities,
@@ -832,7 +843,7 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => {
     fonts: resolveFonts(replayed),
     gpu: resolveGpu(gl),
     hardware: resolveHardware(replayed, device, gl.presented),
-    leaks: resolveLeaks(),
+    leaks: resolveLeaks(replayed),
     locale: resolveLocale(replayed),
     media: resolveMedia(replayed),
     screen: resolveScreen(replayed, device),

@@ -20,16 +20,23 @@ interface IdentityChoice {
   readonly platform: NodeJS.Platform;
   readonly timezone: string;
   readonly fontStack?: HostCapabilities["fontStack"];
+  readonly route?: "direct" | "proxy";
 }
 
-const identityFor = ({ fontStack, headless, platform, timezone }: IdentityChoice): BrowserInputs =>
+const identityFor = ({
+  fontStack,
+  headless,
+  platform,
+  route = "direct",
+  timezone,
+}: IdentityChoice): BrowserInputs =>
   planIdentity({
     capabilities:
       fontStack === undefined
         ? { permittedCpus: 32, platform }
         : { fontStack, permittedCpus: 32, platform },
     device: fixedDevice,
-    exit: { facts: { kind: "unknown" }, route: "direct" },
+    exit: { facts: { kind: "unknown" }, route },
     hostZone: timezone,
     mode: headless ? "headless" : "headed",
     pins: noPins,
@@ -79,6 +86,7 @@ describe(planLaunch, () => {
       display: ":99",
       headless: true,
       identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: "/tmp/xvfb-run.Xauthority",
     });
@@ -115,6 +123,7 @@ describe(planLaunch, () => {
         mode: "headed",
         pins: noPins,
       }).inputs,
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -139,6 +148,7 @@ describe(planLaunch, () => {
         mode: "headless",
         pins: noPins,
       }).inputs,
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -164,6 +174,7 @@ describe(planLaunch, () => {
       display: undefined,
       headless: false,
       identity: identityFor({ headless: false, platform: "darwin", timezone: "UTC" }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -185,6 +196,7 @@ describe(planLaunch, () => {
       display: undefined,
       headless: false,
       identity: identityFor({ headless: false, platform: "darwin", timezone: "UTC" }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -205,6 +217,7 @@ describe(planLaunch, () => {
       display: ":0",
       headless: true,
       identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -226,6 +239,7 @@ describe(planLaunch, () => {
         display: ":7",
         headless: false,
         identity: identityFor({ headless: false, platform: "linux", timezone: "America/Chicago" }),
+        proxyServer: undefined,
         scratchDir,
         xauthority: "/tmp/xvfb-run.Xauthority",
       }).env,
@@ -255,6 +269,7 @@ describe(planLaunch, () => {
         platform: "linux",
         timezone: "UTC",
       }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -300,6 +315,7 @@ describe(planLaunch, () => {
         display: undefined,
         headless: true,
         identity,
+        proxyServer: undefined,
         scratchDir,
         xauthority: undefined,
       }),
@@ -324,6 +340,7 @@ describe(planLaunch, () => {
       display: undefined,
       headless: true,
       identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -339,6 +356,7 @@ describe(planLaunch, () => {
         contents: {
           intl: { accept_languages: "en-US,en" },
           net: { network_prediction_options: 2 },
+          webrtc: { ip_handling_policy: "default" },
         },
         path: `${scratchDir}/profile/Default/Preferences`,
       },
@@ -363,6 +381,7 @@ describe(planLaunch, () => {
         mode: "headless",
         pins: { display: undefined, hardware: undefined, locale: "de-DE", timezone: undefined },
       }).inputs,
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -372,7 +391,7 @@ describe(planLaunch, () => {
     ).toStrictEqual(["--accept-lang=de-DE,de,en-US,en"]);
     expect([env.LANG, env.LANGUAGE]).toStrictEqual(["C.UTF-8", "de_DE"]);
     expect(files[0].contents).toBe(
-      '{"intl":{"accept_languages":"de-DE,de,en-US,en"},"net":{"network_prediction_options":2}}',
+      '{"intl":{"accept_languages":"de-DE,de,en-US,en"},"net":{"network_prediction_options":2},"webrtc":{"ip_handling_policy":"default"}}',
     );
   });
 
@@ -383,6 +402,7 @@ describe(planLaunch, () => {
       display: undefined,
       headless: true,
       identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      proxyServer: undefined,
       scratchDir,
       xauthority: undefined,
     });
@@ -404,18 +424,29 @@ const golden: Readonly<Record<string, GoldenPlan>> = goldenPlans;
 interface GoldenCase extends IdentityChoice {
   readonly display: string | undefined;
   readonly xauthority: string | undefined;
+  readonly proxied: boolean;
 }
 
-const labelOf = ({ display, headless, platform, timezone, xauthority }: GoldenCase): string =>
+const RELAY_URL = "http://127.0.0.1:41234";
+
+const labelOf = ({
+  display,
+  headless,
+  platform,
+  proxied,
+  timezone,
+  xauthority,
+}: GoldenCase): string =>
   [
     headless ? "headless" : "headed",
     platform,
     `timezone=${timezone}`,
     `display=${display ?? "unset"}`,
     `xauthority=${xauthority ?? "unset"}`,
+    ...(proxied ? ["proxy=relay"] : []),
   ].join(" ");
 
-const goldenCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
+const directCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
   (["linux", "darwin"] as const).flatMap((platform) =>
     ["UTC", "America/Chicago"].flatMap((timezone) =>
       [undefined, ":7"].flatMap((display) =>
@@ -423,6 +454,7 @@ const goldenCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
           display,
           headless,
           platform,
+          proxied: false,
           timezone,
           xauthority,
         })),
@@ -431,10 +463,24 @@ const goldenCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
   ),
 );
 
+const proxiedCases: readonly GoldenCase[] = [true, false].flatMap((headless) =>
+  (["linux", "darwin"] as const).map((platform) => ({
+    display: undefined,
+    headless,
+    platform,
+    proxied: true,
+    timezone: "UTC",
+    xauthority: undefined,
+  })),
+);
+
+const goldenCases: readonly GoldenCase[] = [...directCases, ...proxiedCases];
+
 const requestOf = ({
   display,
   headless,
   platform,
+  proxied,
   timezone,
   xauthority,
 }: GoldenCase): LaunchRequest => ({
@@ -442,7 +488,8 @@ const requestOf = ({
   browserPath: "/opt/chrome/chrome",
   display,
   headless,
-  identity: identityFor({ headless, platform, timezone }),
+  identity: identityFor({ headless, platform, route: proxied ? "proxy" : "direct", timezone }),
+  proxyServer: proxied ? RELAY_URL : undefined,
   scratchDir,
   xauthority,
 });
@@ -450,9 +497,9 @@ const requestOf = ({
 const goldenOf = ({ args, env, files }: LaunchPlan): GoldenPlan => ({ args, env, files });
 
 describe("the launch plan golden", () => {
-  it("covers every combination of mode, platform, timezone, display and xauthority once", () => {
+  it("covers every combination of mode, platform, timezone, display and xauthority once, and each mode and platform through the relay", () => {
     expect(goldenCases.map(labelOf).toSorted()).toStrictEqual(Object.keys(golden).toSorted());
-    expect(new Set(goldenCases.map(labelOf)).size).toBe(32);
+    expect(new Set(goldenCases.map(labelOf)).size).toBe(36);
   });
 
   it("holds no fontconfig variable in any plan made without a font stack", () => {
