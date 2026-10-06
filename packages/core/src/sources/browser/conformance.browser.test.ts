@@ -475,6 +475,7 @@ describe.each(MODES)("documents captured, %s", (mode) => {
       const { source: document } = await renderDocument(
         browser,
         new URL("/static", server.origin),
+        undefined,
         deadline,
         NO_AFTER_CAPTURE_READ,
       );
@@ -491,6 +492,7 @@ describe.each(MODES)("documents captured, %s", (mode) => {
       await renderDocument(
         browser,
         new URL("/static", server.origin),
+        undefined,
         deadline,
         NO_AFTER_CAPTURE_READ,
       );

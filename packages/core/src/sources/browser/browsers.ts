@@ -221,7 +221,7 @@ const renderInScope = async (
   deadline: HeldDeadline,
   scope: ChromeScope,
   document: PromiseWithResolvers<SourceDocument>,
-  proxyServer: string | undefined,
+  relay: Relay | undefined,
 ): Promise<Closed> => {
   const { capabilities, fonts, identity } = plan;
 
@@ -234,7 +234,7 @@ const renderInScope = async (
       display: process.env.DISPLAY,
       headless: plan.mode === "headless",
       identity: identity.inputs,
-      proxyServer,
+      proxyServer: relay?.url,
       scratchDir: scope.scratch.path,
       xauthority: process.env.XAUTHORITY,
     });
@@ -254,6 +254,7 @@ const renderInScope = async (
     const { afterCapture, source } = await renderDocument(
       browser,
       plan.url,
+      relay,
       deadline,
       async () => await observeAfterCapture(browser, identity.read.afterCapture, deadline),
     );
@@ -296,7 +297,7 @@ export const createBrowsers = (
       await using relay = await proxyRelayFor(plan, deadline);
       const scope = new ChromeScope(await createOwnedScratch(registry, deadline), steps);
 
-      return await renderInScope(driver, plan, slot, deadline, scope, document, relay?.url);
+      return await renderInScope(driver, plan, slot, deadline, scope, document, relay);
     } catch (error) {
       document.reject(error);
       await settleFonts(plan);

@@ -257,6 +257,7 @@ describe("the CDP driver's documents", () => {
       const { source: document } = await renderDocument(
         browser,
         new URL("https://fake.test/page"),
+        undefined,
         deadline,
         async () => await Promise.resolve(null),
       );
