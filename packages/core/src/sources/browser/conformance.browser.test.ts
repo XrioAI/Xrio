@@ -368,6 +368,22 @@ const NO_AFTER_CAPTURE_READ = async (): Promise<null> => await Promise.resolve(n
 
 const isNumber = (value: unknown): value is number => typeof value === "number";
 
+const isTextsOrNull = (value: unknown): value is readonly string[] | null =>
+  value === null || (Array.isArray(value) && value.every(isText));
+
+const hasPageWebgl = (
+  report: unknown,
+): report is { webgl: { renderer: string | null; extensions: readonly string[] | null } } =>
+  typeof report === "object" &&
+  report !== null &&
+  "webgl" in report &&
+  typeof report.webgl === "object" &&
+  report.webgl !== null &&
+  "renderer" in report.webgl &&
+  (report.webgl.renderer === null || isText(report.webgl.renderer)) &&
+  "extensions" in report.webgl &&
+  isTextsOrNull(report.webgl.extensions);
+
 const PLATFORM_READ =
   'navigator.userAgentData.getHighEntropyValues(["platform"]).then(({ platform }) => platform)';
 
@@ -661,6 +677,44 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
 
     expect(rowText).toMatch(WEBGPU_TIMING);
     expect(row).toMatchObject({ ...agreed, error: null });
+  });
+
+  it("shows the drawn GL persona's renderer and none of its hidden extensions on /identity", async () => {
+    const capabilities = await createCapabilityProbe()(chromePath());
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+    if (!hasPageWebgl(report)) {
+      throw new Error("The identity page reports no WebGL strings.");
+    }
+
+    const { persona } = identity.surfaces.gpu;
+    const artifact = capabilities.fork?.personas.gl.find(({ name }) => name === persona?.name);
+
+    const hiddenShown = (artifact?.hiddenExtensions ?? []).filter(
+      (name) => report.webgl.extensions?.includes(name) === true,
+    );
+
+    expect({
+      artifact: artifact?.name ?? null,
+      hiddenShown,
+      unavailable: identity.tells.filter((tell) => tell === "gl-persona-unavailable"),
+    }).toStrictEqual({
+      artifact: persona?.name ?? null,
+      hiddenShown: [],
+      unavailable: persona === null ? ["gl-persona-unavailable"] : [],
+    });
+    expect(report.webgl).toMatchObject(
+      artifact === undefined ? {} : { renderer: artifact.renderer },
+    );
+    expect(identity.observed.webgl).toMatchObject(
+      artifact === undefined ? {} : { renderer: report.webgl.renderer },
+    );
   });
 
   it.each([
