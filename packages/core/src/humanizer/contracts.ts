@@ -31,9 +31,14 @@ interface ValueRow extends Weighted {
   readonly value: number;
 }
 
+export interface NameRow extends Weighted {
+  readonly name: string;
+}
+
 export interface HardwareTables {
   readonly cores?: readonly ValueRow[];
   readonly memoryGb?: readonly ValueRow[];
+  readonly gpu?: readonly NameRow[];
 }
 
 export type WindowPin =

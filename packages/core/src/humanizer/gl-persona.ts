@@ -12,10 +12,15 @@ export interface EligiblePersona {
   readonly gpu: GpuChoice;
 }
 
+type PinnedPersona =
+  | { readonly kind: "eligible"; readonly choice: EligiblePersona }
+  | { readonly kind: "refused"; readonly reason: string };
+
 export interface GlLineup {
   readonly drawable: readonly EligiblePersona[];
   readonly pinnable: readonly EligiblePersona[];
   readonly skewed: boolean;
+  readonly pin: (name: string) => PinnedPersona;
 }
 
 type Verdict =
@@ -37,6 +42,8 @@ const HIDE_ONLY_ON_NATIVE = "it claims SwiftShader, and this launch renders on t
 const UNKNOWN_HOST_RENDERER = "this host's own renderer is unknown";
 
 const FEWEST_CLASS_CORES = Math.min(...MACHINE_CLASSES.map(({ cores }) => cores));
+
+const NOT_A_FORK = "this browser is not an Xrio fork package, so it has no GL personas";
 
 const ANGLE_OPENING = "ANGLE (";
 
@@ -180,21 +187,42 @@ const isDrawable = ({ persona }: EligiblePersona): boolean => DRAWN_KINDS.has(pe
 const eligibleOf = (verdict: Verdict): EligiblePersona[] =>
   verdict.kind === "eligible" ? [{ gpu: verdict.gpu, persona: verdict.persona }] : [];
 
+const refusalOf = (verdict: Verdict): [string, string][] =>
+  verdict.kind === "eligible" ? [] : [[verdict.persona.name, verdict.reason]];
+
+const refused = (reason: string): PinnedPersona => ({ kind: "refused", reason });
+
 export const glLineupOf = (
   backend: GpuChoice["backend"],
   { fork, hostRenderer }: HostCapabilities,
 ): GlLineup => {
   if (fork === undefined) {
-    return { drawable: [], pinnable: [], skewed: false };
+    return { drawable: [], pin: () => refused(NOT_A_FORK), pinnable: [], skewed: false };
   }
 
   const launch = { backend, hostRenderer, version: fork.version };
   const verdicts = fork.personas.gl.map((persona) => verdictOf(persona, launch));
-
   const pinnable = verdicts.flatMap(eligibleOf);
+
+  const refusals = new Map([
+    ...fork.personas.refusedGl.map(({ reason, stem }): [string, string] => [
+      stem,
+      `its artifact ${reason}`,
+    ]),
+    ...verdicts.flatMap(refusalOf),
+  ]);
+
+  const pin = (name: string): PinnedPersona => {
+    const choice = pinnable.find(({ persona }) => persona.name === name);
+
+    return choice === undefined
+      ? refused(refusals.get(name) ?? `this browser's package has no GL persona named ${name}`)
+      : { choice, kind: "eligible" };
+  };
 
   return {
     drawable: pinnable.filter(isDrawable),
+    pin,
     pinnable,
     skewed: fork.personas.refusedGl.length > 0 || verdicts.some(({ kind }) => kind === "skewed"),
   };

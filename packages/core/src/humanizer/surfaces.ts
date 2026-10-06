@@ -1,3 +1,4 @@
+import { invalidOptions } from "../errors.ts";
 import type { ResolvedMode } from "../types.ts";
 import { knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
 import type {
@@ -10,6 +11,7 @@ import type {
   HostCapabilities,
   Insets,
   MediaDeviceCounts,
+  NameRow,
   Seed,
   WindowPin,
   WindowState,
@@ -207,9 +209,10 @@ const keepsDisplay = ({ device }: DeviceRecord, display: DisplayTables): boolean
     (display.windows?.some((pin) => keepsWindow(device.window, pin)) ?? true));
 
 const keepsHardware = ({ device }: DeviceRecord, hardware: HardwareTables): boolean =>
-  holdsHostHardware(device) ||
-  ((hardware.cores?.some(({ value }) => value === device.cores) ?? true) &&
-    (hardware.memoryGb?.some(({ value }) => value === device.memoryGb) ?? true));
+  (holdsHostHardware(device) ||
+    ((hardware.cores?.some(({ value }) => value === device.cores) ?? true) &&
+      (hardware.memoryGb?.some(({ value }) => value === device.memoryGb) ?? true))) &&
+  (hardware.gpu?.some(({ name }) => name === device.gpu.persona?.name) ?? true);
 
 const keepsZone = ({ timezone }: DeviceRecord["policy"], zone: string): boolean =>
   timezone.kind === "pinned" && timezone.zone === canonicalZone(zone);
@@ -400,37 +403,47 @@ const glBackendOf = ({ platform, readableRenderNode }: HostCapabilities): GlBack
 const recordedPersonaOf = (device: DeviceChoice): string | undefined =>
   device.kind === "record" ? device.record.device.gpu.persona?.name : undefined;
 
+const pinnedRow = (lineup: GlLineup, { name, weight }: NameRow) => {
+  const pinned = lineup.pin(name);
+
+  if (pinned.kind === "refused") {
+    throw invalidOptions(
+      `hardware.gpu ${name} is not eligible under the matched policy: ${pinned.reason}.`,
+    );
+  }
+
+  return { choice: pinned.choice, weight };
+};
+
+const personaRows = (lineup: GlLineup, pin: HardwareTables["gpu"]) =>
+  pin === undefined
+    ? lineup.drawable.map((choice) => ({ choice, weight: 1 }))
+    : pin.map((row) => pinnedRow(lineup, row));
+
 const choosePersona = (
-  { drawable, pinnable }: GlLineup,
-  recorded: string | undefined,
+  lineup: GlLineup,
+  { device, pins }: Pick<IdentityContext, "device" | "pins">,
   seed: Seed,
 ): EligiblePersona | null => {
-  const replayed = pinnable.find(({ persona }) => persona.name === recorded);
+  const rows = personaRows(lineup, pins.hardware?.gpu);
+  const recorded = recordedPersonaOf(device);
+  const replayed = lineup.pinnable.find(({ persona }) => persona.name === recorded);
 
   if (replayed !== undefined) {
     return replayed;
   }
 
-  return drawable.length === 0
-    ? null
-    : drawGlPersona(
-        seed,
-        drawable.map((choice) => ({ choice, weight: 1 })),
-      ).choice;
+  return rows.length === 0 ? null : drawGlPersona(seed, rows).choice;
 };
 
 const chooseGl = (
-  { capabilities, device }: Pick<IdentityContext, "capabilities" | "device">,
+  context: Pick<IdentityContext, "capabilities" | "device" | "pins">,
   { seed }: Device,
 ): GlChoice => {
-  const backend = glBackendOf(capabilities);
-  const lineup = glLineupOf(backend.kind, capabilities);
+  const backend = glBackendOf(context.capabilities);
+  const lineup = glLineupOf(backend.kind, context.capabilities);
 
-  return {
-    backend,
-    presented: choosePersona(lineup, recordedPersonaOf(device), seed),
-    skewed: lineup.skewed,
-  };
+  return { backend, presented: choosePersona(lineup, context, seed), skewed: lineup.skewed };
 };
 
 const personaInputs = (persona: GlPersona | null): LaunchInput[] =>

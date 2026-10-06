@@ -909,11 +909,12 @@ describe("hardware option", () => {
       resolveClientOptions({ ...browser, hardware: { cores: 8, memoryGb: 16 } }).identity.hardware,
     ).toStrictEqual({
       cores: [{ value: 8, weight: 1 }],
+      gpu: undefined,
       memoryGb: [{ value: 16, weight: 1 }],
     });
     expect(
       resolveClientOptions({ ...browser, hardware: { memoryGb: 32 } }).identity.hardware,
-    ).toStrictEqual({ cores: undefined, memoryGb: [{ value: 32, weight: 1 }] });
+    ).toStrictEqual({ cores: undefined, gpu: undefined, memoryGb: [{ value: 32, weight: 1 }] });
     expect(resolveClientOptions(browser).identity.hardware).toBeUndefined();
   });
 
@@ -937,6 +938,7 @@ describe("hardware option", () => {
         { value: 8, weight: 3 },
         { value: 12, weight: 1 },
       ],
+      gpu: undefined,
       memoryGb: [
         { value: 8, weight: 1 },
         { value: 32, weight: 2 },
@@ -949,7 +951,11 @@ describe("hardware option", () => {
 
     expect(
       resolveScrapeIntent({ ...page, hardware: { memoryGb: 32 } }, defaults).identity.hardware,
-    ).toStrictEqual({ cores: [{ value: 8, weight: 1 }], memoryGb: [{ value: 32, weight: 1 }] });
+    ).toStrictEqual({
+      cores: [{ value: 8, weight: 1 }],
+      gpu: undefined,
+      memoryGb: [{ value: 32, weight: 1 }],
+    });
     expect(resolveScrapeIntent(page, defaults).identity.hardware).toBe(defaults.identity.hardware);
   });
 
@@ -1027,12 +1033,93 @@ describe("hardware option", () => {
       message:
         "hardware.cores must be a positive whole number of at most 2147483647, or a weighted table of them.",
     },
-    { hardware: { gpu: "x" }, message: "hardware takes cores and memoryGb." },
-    { hardware: null, message: "hardware takes cores and memoryGb." },
+    {
+      hardware: { gpu: [] },
+      message: "hardware.gpu must be a GL persona name, or a non-empty weighted table of them.",
+    },
+    {
+      hardware: { gpu: [{ name: "basharsx4-amd-renoir", weight: 0 }] },
+      message: "hardware.gpu weights must be positive numbers.",
+    },
+    { hardware: { threads: 8 }, message: "hardware takes cores, memoryGb and gpu." },
+    { hardware: null, message: "hardware takes cores, memoryGb and gpu." },
   ])("refuses the malformed hardware $hardware", ({ hardware, message }) => {
     // @ts-expect-error JavaScript callers can pass anything.
     expect(() => resolveClientOptions({ ...browser, hardware })).toThrow(
       expect.objectContaining(refusal(message)),
+    );
+  });
+
+  it("turns a GL persona name into a one-row table and keeps a weighted table in order", () => {
+    expect([
+      resolveClientOptions({ ...browser, hardware: { gpu: "basharsx4-amd-renoir" } }).identity
+        .hardware?.gpu,
+      resolveClientOptions({
+        ...browser,
+        hardware: {
+          gpu: [
+            { name: "basharsx4-swiftshader-hidden", weight: 3 },
+            { name: "Synthetic_GPU.v2", weight: 1 },
+          ],
+        },
+      }).identity.hardware?.gpu,
+      resolveClientOptions({ ...browser, hardware: { gpu: "x".repeat(128) } }).identity.hardware
+        ?.gpu,
+    ]).toStrictEqual([
+      [{ name: "basharsx4-amd-renoir", weight: 1 }],
+      [
+        { name: "basharsx4-swiftshader-hidden", weight: 3 },
+        { name: "Synthetic_GPU.v2", weight: 1 },
+      ],
+      [{ name: "x".repeat(128), weight: 1 }],
+    ]);
+  });
+
+  it("lets a scrape replace the client's GL persona and keeps the client's when it pins none", () => {
+    const defaults = resolveClientOptions({
+      ...browser,
+      hardware: { cores: 8, gpu: "basharsx4-swiftshader-hidden" },
+    });
+
+    expect([
+      resolveScrapeIntent({ ...page, hardware: { gpu: "basharsx4-amd-renoir" } }, defaults).identity
+        .hardware,
+      resolveScrapeIntent({ ...page, hardware: { cores: 12 } }, defaults).identity.hardware,
+    ]).toStrictEqual([
+      {
+        cores: [{ value: 8, weight: 1 }],
+        gpu: [{ name: "basharsx4-amd-renoir", weight: 1 }],
+        memoryGb: undefined,
+      },
+      {
+        cores: [{ value: 12, weight: 1 }],
+        gpu: [{ name: "basharsx4-swiftshader-hidden", weight: 1 }],
+        memoryGb: undefined,
+      },
+    ]);
+  });
+
+  it.each([
+    { gpu: "", name: "an empty name" },
+    { gpu: "x".repeat(129), name: "a name over 128 characters" },
+    { gpu: ".hidden", name: "a leading dot" },
+    { gpu: "..", name: "a parent reference" },
+    { gpu: "personas/basharsx4", name: "a path separator" },
+    { gpu: "amd renoir", name: "a space" },
+    { gpu: "rénoir", name: "a letter outside A to Z" },
+    { gpu: 7, name: "a number" },
+    { gpu: { name: "basharsx4-amd-renoir" }, name: "a bare row" },
+    {
+      gpu: [{ name: "basharsx4-amd-renoir", value: 1, weight: 1 }],
+      name: "a row with another field",
+    },
+    { gpu: [{ name: 7, weight: 1 }], name: "a row whose name is not text" },
+  ])("refuses a GL persona given as $name", ({ gpu }) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, hardware: { gpu } })).toThrow(
+      expect.objectContaining(
+        refusal("hardware.gpu must be a GL persona name, or a non-empty weighted table of them."),
+      ),
     );
   });
 

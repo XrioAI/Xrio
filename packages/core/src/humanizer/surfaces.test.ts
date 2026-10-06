@@ -21,12 +21,13 @@ import type {
   HostCapabilities,
   KnobOrigin,
   KnobRegistry,
+  NameRow,
 } from "./contracts.ts";
 import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
-import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
+import { EMISSION_ORDER, recordOverrides, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
@@ -885,6 +886,208 @@ describe("a replayed record's GL persona", () => {
       recorded: gone,
       tells: ["host-fonts", "replay-host-skew"],
     });
+  });
+});
+
+const pinningGpu = (gpu: readonly NameRow[]): IdentityIntent => ({
+  ...noPins,
+  hardware: { gpu },
+});
+
+const pinnedGpuOf = (capabilities: HostCapabilities, gpu: readonly NameRow[], seed = fixedSeed) =>
+  planIdentity(contextOf({ capabilities, device: { kind: "fresh", seed }, pins: pinningGpu(gpu) }))
+    .chosen.surfaces.gpu;
+
+const notEligible = (message: string) => ({ code: "INVALID_OPTIONS", message, name: "TypeError" });
+
+const HIDDEN_GPU = {
+  backend: "swiftshader",
+  persona: { kind: "hide-only", name: "basharsx4-swiftshader-hidden" },
+} as const;
+
+const scrapePinning = (gpu: readonly NameRow[]) =>
+  ({ mode: "headless", pins: pinningGpu(gpu) }) as const;
+
+describe("a GL persona the caller pins", () => {
+  const capabilities = swiftShaderHost(forkWithGl([HIDE_ONLY, SECOND_HIDE_ONLY, RENOIR]));
+
+  it("presents the one eligible persona it names", () => {
+    expect(
+      pinnedGpuOf(capabilities, [{ name: "basharsx4-swiftshader-hidden", weight: 1 }]),
+    ).toStrictEqual({
+      backend: "swiftshader",
+      persona: { kind: "hide-only", name: "basharsx4-swiftshader-hidden" },
+    });
+  });
+
+  it("presents a hide-only persona only when pinned, expecting its renderer without its hidden extensions", () => {
+    const host = swiftShaderHost(forkWithGl([HIDE_ONLY]));
+
+    const pinned = resolveSurfaces(
+      contextOf({
+        capabilities: host,
+        pins: pinningGpu([{ name: "basharsx4-swiftshader-hidden", weight: 1 }]),
+      }),
+    ).gpu;
+
+    expect({ pinned, unpinned: gpuOf(host).value }).toStrictEqual({
+      pinned: {
+        expected: [
+          webglContext,
+          {
+            compatibility: false,
+            field: "webglRenderer",
+            matcher: { kind: "equals", value: SWIFTSHADER_RENDERER },
+            severity: "fatal",
+          },
+          {
+            compatibility: false,
+            field: "webglExtensions",
+            matcher: {
+              kind: "excludes-all",
+              values: [
+                "WEBGL_compressed_texture_astc",
+                "WEBGL_compressed_texture_etc",
+                "WEBGL_compressed_texture_etc1",
+              ],
+            },
+            severity: "fatal",
+          },
+        ],
+        inputs: [
+          SWIFTSHADER_SWITCH,
+          { name: "--xrio-gl-persona", sink: "switch", value: "basharsx4-swiftshader-hidden" },
+        ],
+        tells: [],
+        value: HIDDEN_GPU,
+      },
+      unpinned: { backend: "swiftshader", persona: null },
+    });
+  });
+
+  it.each([
+    { name: "basharsx4-swiftshader-second", seed: fixedSeed },
+    { name: "basharsx4-swiftshader-hidden", seed: "0000000000000001" },
+  ])("draws $name from a weighted table for the seed $seed", ({ name, seed }) => {
+    expect(
+      pinnedGpuOf(
+        capabilities,
+        [
+          { name: "basharsx4-swiftshader-hidden", weight: 1 },
+          { name: "basharsx4-swiftshader-second", weight: 3 },
+        ],
+        seed,
+      ),
+    ).toStrictEqual({ backend: "swiftshader", persona: { kind: "hide-only", name } });
+  });
+
+  it.each([
+    {
+      capabilities,
+      name: "basharsx4-amd-renoir",
+      reason:
+        "it is a hardware persona, and the matched policy presents one only on a GPU whose own renderer equals it, never over SwiftShader",
+    },
+    {
+      capabilities: gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER),
+      name: "basharsx4-swiftshader-hidden",
+      reason: "it claims SwiftShader, and this launch renders on the host GPU",
+    },
+    {
+      capabilities: gpuHost(forkWithGl([RENOIR])),
+      name: "basharsx4-amd-renoir",
+      reason: "this host's own renderer is unknown",
+    },
+    {
+      capabilities: swiftShaderHost(forkWithGl([{ ...HIDE_ONLY, chromeVersion: OTHER_CHROME }])),
+      name: "basharsx4-swiftshader-hidden",
+      reason: "it was captured on Chrome 153.0.7871.2, and this browser is Chrome 154.0.8037.57",
+    },
+    {
+      capabilities: swiftShaderHost(
+        forkWithGl([HIDE_ONLY], {
+          refusedGl: [{ reason: "lacks a sha256 digest", stem: "basharsx4-swiftshader-old" }],
+        }),
+      ),
+      name: "basharsx4-swiftshader-old",
+      reason: "its artifact lacks a sha256 digest",
+    },
+    {
+      capabilities: swiftShaderHost(forkWithGl([{ ...HIDE_ONLY, maxThreads: 2 }])),
+      name: "basharsx4-swiftshader-hidden",
+      reason: "its max_threads of 2 is below 4, the fewest cores of any machine class Xrio draws",
+    },
+    {
+      capabilities,
+      name: "basharsx4-intel-uhd",
+      reason: "this browser's package has no GL persona named basharsx4-intel-uhd",
+    },
+    {
+      capabilities: { permittedCpus: 32, platform: "linux" } as const,
+      name: "basharsx4-swiftshader-hidden",
+      reason: "this browser is not an Xrio fork package, so it has no GL personas",
+    },
+  ])(
+    "refuses a pin of $name with INVALID_OPTIONS and the reason",
+    ({ capabilities: host, name, reason }) => {
+      expect(() => pinnedGpuOf(host, [{ name, weight: 1 }])).toThrow(
+        expect.objectContaining(
+          notEligible(`hardware.gpu ${name} is not eligible under the matched policy: ${reason}.`),
+        ),
+      );
+    },
+  );
+
+  it("caps the drawn hardware at a pinned hide-only persona's max_threads over SwiftShader", () => {
+    const host = swiftShaderHost(forkWithGl([{ ...HIDE_ONLY, maxThreads: 8 }]));
+
+    const coresDrawn = (pins: IdentityIntent) => {
+      const cores = Array.from(
+        { length: 200 },
+        (_, index) =>
+          planIdentity(
+            contextOf({
+              capabilities: host,
+              device: { kind: "fresh", seed: (index + 1).toString(16).padStart(16, "0") },
+              pins,
+            }),
+          ).chosen.surfaces.hardware.cores,
+      );
+
+      return [...new Set(cores)].toSorted((left, right) => left - right);
+    };
+
+    expect({
+      pinned: coresDrawn(pinningGpu([{ name: "basharsx4-swiftshader-hidden", weight: 1 }])),
+      unpinned: coresDrawn(noPins),
+    }).toStrictEqual({ pinned: [4, 6, 8], unpinned: [4, 6, 8, 12, 16, 24] });
+  });
+
+  it("refuses a table that lists one ineligible persona among eligible ones", () => {
+    expect(() =>
+      pinnedGpuOf(capabilities, [
+        { name: "basharsx4-swiftshader-hidden", weight: 1 },
+        { name: "basharsx4-amd-renoir", weight: 1 },
+      ]),
+    ).toThrow(
+      expect.objectContaining(
+        notEligible(
+          "hardware.gpu basharsx4-amd-renoir is not eligible under the matched policy: it is a hardware persona, and the matched policy presents one only on a GPU whose own renderer equals it, never over SwiftShader.",
+        ),
+      ),
+    );
+  });
+
+  it("counts a pin that leaves out the record's persona as a hardware override", () => {
+    const hidden = recordPresenting(capabilities, HIDDEN_GPU);
+    const none = recordPresenting(capabilities, { backend: "swiftshader", persona: null });
+
+    expect([
+      recordOverrides(hidden, scrapePinning([{ name: "basharsx4-swiftshader-hidden", weight: 1 }])),
+      recordOverrides(hidden, scrapePinning([{ name: "basharsx4-swiftshader-second", weight: 1 }])),
+      recordOverrides(none, scrapePinning([{ name: "basharsx4-swiftshader-hidden", weight: 1 }])),
+      recordOverrides(hidden, { mode: "headless", pins: noPins }),
+    ]).toStrictEqual([[], ["hardware"], ["hardware"], []]);
   });
 });
 

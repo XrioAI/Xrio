@@ -49,6 +49,7 @@ type ReportableMemoryGb = (typeof REPORTABLE_MEMORY_GB)[number];
 export interface HardwareOptions {
   cores?: number | readonly Weighted<{ value: number }>[];
   memoryGb?: ReportableMemoryGb | readonly Weighted<{ value: ReportableMemoryGb }>[];
+  gpu?: string | readonly Weighted<{ name: string }>[];
 }
 
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };

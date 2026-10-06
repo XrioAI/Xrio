@@ -11,6 +11,7 @@ import { displayMisfit } from "./humanizer/draws.ts";
 import {
   chromeAcceptLanguages,
   FORK_MAX_CORES,
+  isGlPersonaName,
   measuredLocalesFor,
   REPORTABLE_MEMORY_GB,
 } from "./humanizer/owned-inputs.ts";
@@ -236,7 +237,7 @@ const WINDOW_FIELDS = new Set(["width", "height", "x", "y", "weight"]);
 
 type DisplayEntry = DisplayOptions | ScreenSize | Taskbar | WindowSize | { maximized: true };
 
-type OptionEntry = DisplayEntry | HardwareOptions | { value: number };
+type OptionEntry = DisplayEntry | HardwareOptions | { value: number } | { name: string };
 
 const isPlainObject = (value: OptionEntry): boolean =>
   Object.getPrototypeOf(value ?? 0) === Object.prototype;
@@ -414,11 +415,13 @@ const resolveDisplay = (
   });
 };
 
-const HARDWARE_FIELDS = new Set(["cores", "memoryGb"]);
+const HARDWARE_FIELDS = new Set(["cores", "memoryGb", "gpu"]);
 
 const HARDWARE_ROW_FIELDS = new Set(["value", "weight"]);
 
-type HardwareField = keyof HardwareOptions;
+const GPU_ROW_FIELDS = new Set(["name", "weight"]);
+
+type HardwareField = "cores" | "memoryGb";
 
 const isCoreCount = (value: number | undefined): boolean =>
   isWhole(value, 1) && value <= FORK_MAX_CORES;
@@ -466,15 +469,39 @@ const parseHardwareField = (
   return rows.map(({ value: entry, weight }) => ({ value: entry, weight }));
 };
 
-const parseHardware = (hardware: HardwareOptions): HardwareTables => {
-  if (!isPlainObject(hardware) || !holdsOnly(hardware, HARDWARE_FIELDS)) {
-    throw invalidOptions("hardware takes cores and memoryGb.");
+const isNameTable = (
+  value: NonNullable<HardwareOptions["gpu"]>,
+): value is readonly Weighted<{ name: string }>[] => Array.isArray(value);
+
+const GPU_PERSONAS_EXPECTED =
+  "hardware.gpu must be a GL persona name, or a non-empty weighted table of them.";
+
+const parseGpu = (gpu: NonNullable<HardwareOptions["gpu"]>): NonNullable<HardwareTables["gpu"]> => {
+  if (isNameTable(gpu) && gpu.length === 0) {
+    throw invalidOptions(GPU_PERSONAS_EXPECTED);
   }
 
-  const { cores, memoryGb } = hardware;
+  const rows = isNameTable(gpu)
+    ? tableOf<{ name: string }>(gpu, "hardware.gpu")
+    : [{ name: gpu, weight: 1 }];
+
+  if (!rows.every((row) => holdsOnly(row, GPU_ROW_FIELDS) && isGlPersonaName(row.name))) {
+    throw invalidOptions(GPU_PERSONAS_EXPECTED);
+  }
+
+  return rows.map(({ name, weight }) => ({ name, weight }));
+};
+
+const parseHardware = (hardware: HardwareOptions): HardwareTables => {
+  if (!isPlainObject(hardware) || !holdsOnly(hardware, HARDWARE_FIELDS)) {
+    throw invalidOptions("hardware takes cores, memoryGb and gpu.");
+  }
+
+  const { cores, gpu, memoryGb } = hardware;
 
   return {
     cores: cores === undefined ? undefined : parseHardwareField("cores", cores),
+    gpu: gpu === undefined ? undefined : parseGpu(gpu),
     memoryGb: memoryGb === undefined ? undefined : parseHardwareField("memoryGb", memoryGb),
   };
 };
@@ -496,9 +523,13 @@ const resolveHardware = (
     return defaults;
   }
 
-  const { cores, memoryGb } = parseHardware(hardware);
+  const { cores, gpu, memoryGb } = parseHardware(hardware);
 
-  return { cores: cores ?? defaults?.cores, memoryGb: memoryGb ?? defaults?.memoryGb };
+  return {
+    cores: cores ?? defaults?.cores,
+    gpu: gpu ?? defaults?.gpu,
+    memoryGb: memoryGb ?? defaults?.memoryGb,
+  };
 };
 
 export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {

@@ -21,6 +21,7 @@ import { startDeadline, untilDeadline } from "./deadline.ts";
 import type { Deadline } from "./deadline.ts";
 import { isXrioError } from "./errors.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
+import type { IdentityIntent } from "./humanizer/intent.ts";
 import { HeldDeadline } from "./lifetime.ts";
 import { anonymousSessions } from "./sessions/session.ts";
 import type { SessionManager } from "./sessions/session.ts";
@@ -257,7 +258,11 @@ describe("browsers on the kit fork", () => {
     return executable;
   };
 
-  const visitOnSwiftShader = async (name: string, browserPath: string) => {
+  const visitOnSwiftShader = async (
+    name: string,
+    browserPath: string,
+    pins: IdentityIntent = noPins,
+  ) => {
     const browsers = plannedVisits(cdpDriver, 1, {
       host: createCapabilityProbe({
         parallelism: () => 32,
@@ -277,7 +282,7 @@ describe("browsers on the kit fork", () => {
         browserPath,
         deadline,
         mode: "headless",
-        pins: noPins,
+        pins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
       }).document;
@@ -309,6 +314,71 @@ describe("browsers on the kit fork", () => {
       shown: COMPRESSED_TEXTURES,
       tells: ["gl-persona-unavailable"],
     });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  const pinHidden: IdentityIntent = {
+    ...noPins,
+    hardware: { gpu: [{ name: "synthetic-swiftshader-hidden", weight: 1 }] },
+  };
+
+  it("presents the package's hide-only persona when a caller pins it, and the page hides its extensions", async () => {
+    const identity = await visitOnSwiftShader(
+      "gl-hidden-pinned",
+      await forkHiding("gl-hidden-pinned", COMPRESSED_TEXTURES),
+      pinHidden,
+    );
+
+    expect({
+      gpu: identity.surfaces.gpu,
+      hidden: COMPRESSED_TEXTURES.filter(
+        (name) => identity.observed.webgl.extensions?.includes(name) === true,
+      ),
+      renderer: identity.observed.webgl.renderer,
+      tells: identity.tells.filter((tell) => tell === "gl-persona-unavailable"),
+    }).toStrictEqual({
+      gpu: {
+        backend: "swiftshader",
+        persona: { kind: "hide-only", name: "synthetic-swiftshader-hidden" },
+      },
+      hidden: [],
+      renderer:
+        "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      tells: [],
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("rejects a launch whose fork dropped the persona it cannot load, as the fork does silently", async () => {
+    await expect(
+      visitOnSwiftShader(
+        "gl-defective",
+        await forkHiding("gl-defective", [...COMPRESSED_TEXTURES, ""]),
+        pinHidden,
+      ),
+    ).rejects.toSatisfy(
+      (error) =>
+        isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
+        error.message ===
+          "Chrome's launch identity does not match Xrio's plan: gpu webglExtensions.",
+    );
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("rejects a pin of the package's hardware persona over SwiftShader with INVALID_OPTIONS", async () => {
+    const browserPath = await fakeForkPath("kit", { root: path.join(root, "gl-pinned") });
+
+    await expect(
+      visitOnSwiftShader("gl-pinned", browserPath, {
+        ...noPins,
+        hardware: { gpu: [{ name: "synthetic-gpu", weight: 1 }] },
+      }),
+    ).rejects.toSatisfy(
+      (error) =>
+        isXrioError(error, "INVALID_OPTIONS") &&
+        error.message ===
+          "hardware.gpu synthetic-gpu is not eligible under the matched policy: it is a hardware persona, and the matched policy presents one only on a GPU whose own renderer equals it, never over SwiftShader.",
+    );
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 

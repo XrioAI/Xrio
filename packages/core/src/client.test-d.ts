@@ -211,6 +211,32 @@ describe("XrioClient types", () => {
     void browser.scrape({ format: "html", hardware: { cores: "8" }, url });
   });
 
+  it("takes a GL persona in hardware as a name or a weighted table of names", () => {
+    const url = "https://example.com";
+
+    const browser = new XrioClient({
+      browserPath: "/browser",
+      hardware: { gpu: "basharsx4-amd-renoir" },
+    });
+
+    expectTypeOf<HardwareOptions["gpu"]>().toEqualTypeOf<
+      string | readonly ({ name: string } & { weight: number })[] | undefined
+    >();
+    void browser.scrape({
+      format: "html",
+      hardware: { gpu: [{ name: "basharsx4-swiftshader-hidden", weight: 1 }] },
+      url,
+    });
+    // @ts-expect-error A GL persona row names a persona, not a value.
+    void browser.scrape({ format: "html", hardware: { gpu: [{ value: 8, weight: 1 }] }, url });
+    void browser.scrape({
+      format: "html",
+      // @ts-expect-error A table row needs a weight.
+      hardware: { gpu: [{ name: "basharsx4-amd-renoir" }] },
+      url,
+    });
+  });
+
   it("takes timezone in browser modes only, as a client default and per scrape", () => {
     const url = "https://example.com";
     const browser = new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });
