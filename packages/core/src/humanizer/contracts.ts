@@ -37,6 +37,8 @@ export interface NameRow extends Weighted {
 
 export type GpuPolicy = "matched" | "announce";
 
+export const DEFAULT_GPU_POLICY: GpuPolicy = "announce";
+
 export interface HardwareTables {
   readonly cores?: readonly ValueRow[];
   readonly memoryGb?: readonly ValueRow[];

@@ -297,10 +297,13 @@ describe("browsers on the kit fork", () => {
     }
   };
 
-  it("presents no persona over SwiftShader though the package ships a hide-only one", async () => {
+  const matchedPins: IdentityIntent = { ...noPins, hardware: { gpuPolicy: "matched" } };
+
+  it("presents no persona over SwiftShader under matched though the package ships a hide-only one", async () => {
     const identity = await visitOnSwiftShader(
       "gl-hidden",
       await forkHiding("gl-hidden", COMPRESSED_TEXTURES),
+      matchedPins,
     );
 
     expect({
@@ -313,6 +316,28 @@ describe("browsers on the kit fork", () => {
       gpu: { backend: "swiftshader", persona: null },
       shown: COMPRESSED_TEXTURES,
       tells: ["gl-persona-unavailable"],
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("announces the package's hardware persona over SwiftShader by default", async () => {
+    const identity = await visitOnSwiftShader(
+      "gl-announced",
+      await fakeForkPath("kit", { root: path.join(root, "gl-announced") }),
+    );
+
+    expect({
+      gpu: identity.surfaces.gpu,
+      tells: identity.tells.filter(
+        (tell) => tell.startsWith("gpu-") || tell === "gl-persona-unavailable",
+      ),
+    }).toStrictEqual({
+      gpu: {
+        backend: "swiftshader",
+        persona: { kind: "hardware", name: "synthetic-gpu" },
+        policy: "announce",
+      },
+      tells: ["gpu-announced-over-software", "gpu-fleet-constant"],
     });
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
@@ -371,7 +396,7 @@ describe("browsers on the kit fork", () => {
     await expect(
       visitOnSwiftShader("gl-pinned", browserPath, {
         ...noPins,
-        hardware: { gpu: [{ name: "synthetic-gpu", weight: 1 }] },
+        hardware: { gpu: [{ name: "synthetic-gpu", weight: 1 }], gpuPolicy: "matched" },
       }),
     ).rejects.toSatisfy(
       (error) =>

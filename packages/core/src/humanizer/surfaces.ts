@@ -1,6 +1,6 @@
 import { invalidOptions } from "../errors.ts";
 import type { ResolvedMode } from "../types.ts";
-import { knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
+import { DEFAULT_GPU_POLICY, knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
 import type {
   DeviceRecord,
   DisplayTables,
@@ -459,7 +459,7 @@ const chooseGl = (
   { seed }: Device,
 ): GlChoice => {
   const backend = glBackendOf(context.capabilities);
-  const policy = context.pins.hardware?.gpuPolicy ?? "matched";
+  const policy = context.pins.hardware?.gpuPolicy ?? DEFAULT_GPU_POLICY;
   const lineup = glLineupOf(backend.kind, context.capabilities, policy);
 
   const replay = recordIsAnnounced(context.device)

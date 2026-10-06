@@ -701,7 +701,10 @@ describe("the announced persona's after-capture tells", () => {
     });
 
     const matched = {
-      ...planFor({ capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])) }),
+      ...planFor({
+        capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
+        pins: { ...noPins, hardware: { gpuPolicy: "matched" } },
+      }),
       expected: [],
     };
 
