@@ -910,11 +910,17 @@ describe("hardware option", () => {
     ).toStrictEqual({
       cores: [{ value: 8, weight: 1 }],
       gpu: undefined,
+      gpuPolicy: undefined,
       memoryGb: [{ value: 16, weight: 1 }],
     });
     expect(
       resolveClientOptions({ ...browser, hardware: { memoryGb: 32 } }).identity.hardware,
-    ).toStrictEqual({ cores: undefined, gpu: undefined, memoryGb: [{ value: 32, weight: 1 }] });
+    ).toStrictEqual({
+      cores: undefined,
+      gpu: undefined,
+      gpuPolicy: undefined,
+      memoryGb: [{ value: 32, weight: 1 }],
+    });
     expect(resolveClientOptions(browser).identity.hardware).toBeUndefined();
   });
 
@@ -939,6 +945,7 @@ describe("hardware option", () => {
         { value: 12, weight: 1 },
       ],
       gpu: undefined,
+      gpuPolicy: undefined,
       memoryGb: [
         { value: 8, weight: 1 },
         { value: 32, weight: 2 },
@@ -954,6 +961,7 @@ describe("hardware option", () => {
     ).toStrictEqual({
       cores: [{ value: 8, weight: 1 }],
       gpu: undefined,
+      gpuPolicy: undefined,
       memoryGb: [{ value: 32, weight: 1 }],
     });
     expect(resolveScrapeIntent(page, defaults).identity.hardware).toBe(defaults.identity.hardware);
@@ -1041,8 +1049,8 @@ describe("hardware option", () => {
       hardware: { gpu: [{ name: "basharsx4-amd-renoir", weight: 0 }] },
       message: "hardware.gpu weights must be positive numbers.",
     },
-    { hardware: { threads: 8 }, message: "hardware takes cores, memoryGb and gpu." },
-    { hardware: null, message: "hardware takes cores, memoryGb and gpu." },
+    { hardware: { threads: 8 }, message: "hardware takes cores, memoryGb, gpu and gpuPolicy." },
+    { hardware: null, message: "hardware takes cores, memoryGb, gpu and gpuPolicy." },
   ])("refuses the malformed hardware $hardware", ({ hardware, message }) => {
     // @ts-expect-error JavaScript callers can pass anything.
     expect(() => resolveClientOptions({ ...browser, hardware })).toThrow(
@@ -1089,14 +1097,48 @@ describe("hardware option", () => {
       {
         cores: [{ value: 8, weight: 1 }],
         gpu: [{ name: "basharsx4-amd-renoir", weight: 1 }],
+        gpuPolicy: undefined,
         memoryGb: undefined,
       },
       {
         cores: [{ value: 12, weight: 1 }],
         gpu: [{ name: "basharsx4-swiftshader-hidden", weight: 1 }],
+        gpuPolicy: undefined,
         memoryGb: undefined,
       },
     ]);
+  });
+
+  it("takes a GPU policy as a client default and replaces it per scrape", () => {
+    const defaults = resolveClientOptions({
+      ...browser,
+      hardware: { cores: 8, gpuPolicy: "announce" },
+    });
+
+    expect([
+      defaults.identity.hardware?.gpuPolicy,
+      resolveScrapeIntent({ ...page, hardware: { gpuPolicy: "matched" } }, defaults).identity
+        .hardware?.gpuPolicy,
+      resolveScrapeIntent({ ...page, hardware: { cores: 12 } }, defaults).identity.hardware
+        ?.gpuPolicy,
+      resolveScrapeIntent(
+        { ...page, hardware: { gpuPolicy: "announce" } },
+        resolveClientOptions(browser),
+      ).identity.hardware?.gpuPolicy,
+      resolveClientOptions({ ...browser, hardware: { cores: 8 } }).identity.hardware?.gpuPolicy,
+    ]).toStrictEqual(["announce", "matched", "announce", "announce", undefined]);
+  });
+
+  it.each([
+    { gpuPolicy: "Announce", name: "another case" },
+    { gpuPolicy: "hide", name: "an unknown policy" },
+    { gpuPolicy: true, name: "a boolean" },
+    { gpuPolicy: null, name: "null" },
+  ])("refuses a GPU policy given as $name", ({ gpuPolicy }) => {
+    // @ts-expect-error JavaScript callers can pass anything.
+    expect(() => resolveClientOptions({ ...browser, hardware: { gpuPolicy } })).toThrow(
+      expect.objectContaining(refusal('hardware.gpuPolicy must be "matched" or "announce".')),
+    );
   });
 
   it.each([

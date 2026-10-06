@@ -2,6 +2,7 @@ import type {
   GlPersona,
   GlPersonaKind,
   GpuChoice,
+  GpuPolicy,
   HostCapabilities,
   HostRenderer,
 } from "./contracts.ts";
@@ -17,6 +18,7 @@ type PinnedPersona =
   | { readonly kind: "refused"; readonly reason: string };
 
 export interface GlLineup {
+  readonly policy: GpuPolicy;
   readonly drawable: readonly EligiblePersona[];
   readonly pinnable: readonly EligiblePersona[];
   readonly skewed: boolean;
@@ -29,6 +31,7 @@ type Verdict =
   | { readonly kind: "ineligible"; readonly persona: GlPersona; readonly reason: string };
 
 interface Launch {
+  readonly policy: GpuPolicy;
   readonly backend: GpuChoice["backend"];
   readonly version: string;
   readonly hostRenderer: HostRenderer | undefined;
@@ -123,17 +126,41 @@ const ineligible = (persona: GlPersona, reason: string): Verdict => ({
   reason,
 });
 
-const backendVerdict = (backend: GpuChoice["backend"], persona: GlPersona): Verdict => {
-  const { kind, name } = persona;
+const swiftshaderVerdict = (persona: GlPersona, policy: GpuPolicy): Verdict => {
+  const { name } = persona;
 
-  if (backend === "swiftshader") {
-    return kind === "hide-only"
-      ? { gpu: { backend, persona: { kind, name } }, kind: "eligible", persona }
-      : ineligible(persona, HARDWARE_OVER_SWIFTSHADER);
+  if (persona.kind === "hide-only") {
+    return {
+      gpu: { backend: "swiftshader", persona: { kind: persona.kind, name } },
+      kind: "eligible",
+      persona,
+    };
   }
 
-  return kind === "hardware"
-    ? { gpu: { backend, persona: { kind, name } }, kind: "eligible", persona }
+  return policy === "announce"
+    ? {
+        gpu: {
+          backend: "swiftshader",
+          persona: { kind: persona.kind, name },
+          policy: "announce",
+        },
+        kind: "eligible",
+        persona,
+      }
+    : ineligible(persona, HARDWARE_OVER_SWIFTSHADER);
+};
+
+const backendVerdict = (launch: Launch, persona: GlPersona): Verdict => {
+  if (launch.backend === "swiftshader") {
+    return swiftshaderVerdict(persona, launch.policy);
+  }
+
+  return persona.kind === "hardware"
+    ? {
+        gpu: { backend: "native", persona: { kind: persona.kind, name: persona.name } },
+        kind: "eligible",
+        persona,
+      }
     : ineligible(persona, HIDE_ONLY_ON_NATIVE);
 };
 
@@ -151,7 +178,7 @@ const adapterMismatch = (
 };
 
 const verdictOf = (persona: GlPersona, launch: Launch): Verdict => {
-  const verdict = backendVerdict(launch.backend, persona);
+  const verdict = backendVerdict(launch, persona);
 
   if (verdict.kind !== "eligible") {
     return verdict;
@@ -192,15 +219,25 @@ const refusalOf = (verdict: Verdict): [string, string][] =>
 
 const refused = (reason: string): PinnedPersona => ({ kind: "refused", reason });
 
+export const hardwareEligibleCount = ({ pinnable }: GlLineup): number =>
+  pinnable.filter(({ persona }) => persona.kind === "hardware").length;
+
 export const glLineupOf = (
   backend: GpuChoice["backend"],
   { fork, hostRenderer }: HostCapabilities,
+  policy: GpuPolicy,
 ): GlLineup => {
   if (fork === undefined) {
-    return { drawable: [], pin: () => refused(NOT_A_FORK), pinnable: [], skewed: false };
+    return {
+      drawable: [],
+      pin: () => refused(NOT_A_FORK),
+      pinnable: [],
+      policy,
+      skewed: false,
+    };
   }
 
-  const launch = { backend, hostRenderer, version: fork.version };
+  const launch = { backend, hostRenderer, policy, version: fork.version };
   const verdicts = fork.personas.gl.map((persona) => verdictOf(persona, launch));
   const pinnable = verdicts.flatMap(eligibleOf);
 
@@ -224,6 +261,7 @@ export const glLineupOf = (
     drawable: pinnable.filter(isDrawable),
     pin,
     pinnable,
+    policy,
     skewed: fork.personas.refusedGl.length > 0 || verdicts.some(({ kind }) => kind === "skewed"),
   };
 };

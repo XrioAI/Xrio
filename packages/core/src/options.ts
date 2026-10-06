@@ -3,6 +3,7 @@ import { invalidOptions, redactUrl } from "./errors.ts";
 import type {
   DeviceRecord,
   DisplayTables,
+  GpuPolicy,
   HardwareTables,
   Insets,
   WindowPin,
@@ -415,7 +416,7 @@ const resolveDisplay = (
   });
 };
 
-const HARDWARE_FIELDS = new Set(["cores", "memoryGb", "gpu"]);
+const HARDWARE_FIELDS = new Set(["cores", "memoryGb", "gpu", "gpuPolicy"]);
 
 const HARDWARE_ROW_FIELDS = new Set(["value", "weight"]);
 
@@ -492,16 +493,33 @@ const parseGpu = (gpu: NonNullable<HardwareOptions["gpu"]>): NonNullable<Hardwar
   return rows.map(({ name, weight }) => ({ name, weight }));
 };
 
-const parseHardware = (hardware: HardwareOptions): HardwareTables => {
-  if (!isPlainObject(hardware) || !holdsOnly(hardware, HARDWARE_FIELDS)) {
-    throw invalidOptions("hardware takes cores, memoryGb and gpu.");
+const GPU_POLICIES: readonly GpuPolicy[] = ["matched", "announce"];
+
+const parseGpuPolicy = (policy: HardwareOptions["gpuPolicy"]): GpuPolicy | undefined => {
+  if (policy === undefined) {
+    return undefined;
   }
 
-  const { cores, gpu, memoryGb } = hardware;
+  const parsed = GPU_POLICIES.find((candidate) => candidate === policy);
+
+  if (parsed === undefined) {
+    throw invalidOptions('hardware.gpuPolicy must be "matched" or "announce".');
+  }
+
+  return parsed;
+};
+
+const parseHardware = (hardware: HardwareOptions): HardwareTables => {
+  if (!isPlainObject(hardware) || !holdsOnly(hardware, HARDWARE_FIELDS)) {
+    throw invalidOptions("hardware takes cores, memoryGb, gpu and gpuPolicy.");
+  }
+
+  const { cores, gpu, gpuPolicy, memoryGb } = hardware;
 
   return {
     cores: cores === undefined ? undefined : parseHardwareField("cores", cores),
     gpu: gpu === undefined ? undefined : parseGpu(gpu),
+    gpuPolicy: parseGpuPolicy(gpuPolicy),
     memoryGb: memoryGb === undefined ? undefined : parseHardwareField("memoryGb", memoryGb),
   };
 };
@@ -523,11 +541,12 @@ const resolveHardware = (
     return defaults;
   }
 
-  const { cores, gpu, memoryGb } = parseHardware(hardware);
+  const { cores, gpu, gpuPolicy, memoryGb } = parseHardware(hardware);
 
   return {
     cores: cores ?? defaults?.cores,
     gpu: gpu ?? defaults?.gpu,
+    gpuPolicy: gpuPolicy ?? defaults?.gpuPolicy,
     memoryGb: memoryGb ?? defaults?.memoryGb,
   };
 };

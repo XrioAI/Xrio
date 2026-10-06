@@ -237,6 +237,24 @@ describe("XrioClient types", () => {
     });
   });
 
+  it("takes a GPU policy in hardware as matched or announce, as a client default and per scrape", () => {
+    const url = "https://example.com";
+
+    const browser = new XrioClient({
+      browserPath: "/browser",
+      hardware: { gpuPolicy: "announce" },
+    });
+
+    expectTypeOf<HardwareOptions["gpuPolicy"]>().toEqualTypeOf<
+      "matched" | "announce" | undefined
+    >();
+    void browser.scrape({ format: "html", hardware: { gpuPolicy: "matched" }, url });
+    // @ts-expect-error A GPU policy is matched or announce.
+    void browser.scrape({ format: "html", hardware: { gpuPolicy: "hide" }, url });
+    // @ts-expect-error An http client has no machine to present.
+    void new XrioClient({ hardware: { gpuPolicy: "announce" }, mode: "http" });
+  });
+
   it("takes timezone in browser modes only, as a client default and per scrape", () => {
     const url = "https://example.com";
     const browser = new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });

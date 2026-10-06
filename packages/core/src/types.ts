@@ -1,4 +1,5 @@
 import type { BlockReport } from "./blocks/classify.ts";
+import type { GpuPolicy } from "./humanizer/contracts.ts";
 import type { REPORTABLE_MEMORY_GB } from "./humanizer/owned-inputs.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
@@ -50,6 +51,7 @@ export interface HardwareOptions {
   cores?: number | readonly Weighted<{ value: number }>[];
   memoryGb?: ReportableMemoryGb | readonly Weighted<{ value: ReportableMemoryGb }>[];
   gpu?: string | readonly Weighted<{ name: string }>[];
+  gpuPolicy?: GpuPolicy;
 }
 
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };

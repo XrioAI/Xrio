@@ -34,4 +34,45 @@ describe("GpuChoice types", () => {
     }>().not.toExtend<GpuChoice>();
     expectTypeOf<{ readonly backend: "native" }>().not.toExtend<GpuChoice>();
   });
+
+  it("holds a hardware persona over SwiftShader only with the announce policy", () => {
+    expectTypeOf<{
+      readonly backend: "swiftshader";
+      readonly persona: { readonly kind: "hardware"; readonly name: string };
+      readonly policy: "announce";
+    }>().toExtend<GpuChoice>();
+    expectTypeOf<{
+      readonly backend: "swiftshader";
+      readonly persona: { readonly kind: "hardware"; readonly name: string };
+      readonly policy: "matched";
+    }>().not.toExtend<GpuChoice>();
+    expectTypeOf<{
+      readonly backend: "swiftshader";
+      readonly persona: { readonly kind: "hardware"; readonly name: string };
+      readonly policy: "announce" | "matched";
+    }>().not.toExtend<GpuChoice>();
+  });
+
+  it("never tags a choice that holds no persona, a hide-only persona or a native GPU with the policy", () => {
+    expectTypeOf<{
+      readonly backend: "swiftshader";
+      readonly persona: null;
+      readonly policy: "announce";
+    }>().not.toExtend<GpuChoice>();
+    expectTypeOf<{
+      readonly backend: "swiftshader";
+      readonly persona: { readonly kind: "hide-only"; readonly name: string };
+      readonly policy: "announce";
+    }>().not.toExtend<GpuChoice>();
+    expectTypeOf<{
+      readonly backend: "native";
+      readonly persona: { readonly kind: "hardware"; readonly name: string };
+      readonly policy: "announce";
+    }>().not.toExtend<GpuChoice>();
+    expectTypeOf<{
+      readonly backend: "native";
+      readonly persona: null;
+      readonly policy: "announce";
+    }>().not.toExtend<GpuChoice>();
+  });
 });

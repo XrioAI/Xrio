@@ -71,6 +71,8 @@ export type FactTell =
   | "speech-persona-skew"
   | "gl-persona-skew"
   | "gl-persona-unavailable"
+  | "gpu-announced-over-software"
+  | "gpu-fleet-constant"
   | "http-profile-skew"
   | "fork-commit-unreadable"
   | "host-fonts"

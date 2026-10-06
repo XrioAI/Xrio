@@ -1091,6 +1091,383 @@ describe("a GL persona the caller pins", () => {
   });
 });
 
+const announcing: IdentityIntent = { ...noPins, hardware: { gpuPolicy: "announce" } };
+
+const announcedGpuOf = (capabilities: HostCapabilities, seed = fixedSeed) =>
+  resolveSurfaces(contextOf({ capabilities, device: { kind: "fresh", seed }, pins: announcing }))
+    .gpu;
+
+const ANNOUNCED_RENOIR = {
+  backend: "swiftshader",
+  persona: { kind: "hardware", name: "basharsx4-amd-renoir" },
+  policy: "announce",
+} as const;
+
+const SECOND_HARDWARE = { ...RENOIR, name: "basharsx4-amd-second" };
+
+const THIRD_HARDWARE = { ...RENOIR, name: "basharsx4-amd-third" };
+
+describe("a GL persona under the announce policy", () => {
+  it("presents a hardware persona over SwiftShader and expects its renderer", () => {
+    expect(announcedGpuOf(swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])))).toStrictEqual({
+      expected: [
+        webglContext,
+        {
+          compatibility: false,
+          field: "webglRenderer",
+          matcher: { kind: "equals", value: RENOIR_RENDERER },
+          severity: "fatal",
+        },
+        {
+          compatibility: false,
+          field: "webglExtensions",
+          matcher: { kind: "excludes-all", values: RENOIR.hiddenExtensions },
+          severity: "fatal",
+        },
+      ],
+      inputs: [
+        SWIFTSHADER_SWITCH,
+        { name: "--xrio-gl-persona", sink: "switch", value: "basharsx4-amd-renoir" },
+      ],
+      tells: ["gpu-announced-over-software", "gpu-fleet-constant"],
+      value: ANNOUNCED_RENOIR,
+    });
+  });
+
+  it.each([
+    "0000000000000001",
+    "0000000000000002",
+    "0000000000000003",
+    "0000000000000004",
+    fixedSeed,
+  ])("prefers the hardware persona to a hide-only one for the seed %s", (seed) => {
+    expect(
+      announcedGpuOf(swiftShaderHost(forkWithGl([HIDE_ONLY, SECOND_HIDE_ONLY, RENOIR])), seed)
+        .value,
+    ).toStrictEqual(ANNOUNCED_RENOIR);
+  });
+
+  it("presents no persona, and never a hide-only one, when no hardware persona is eligible", () => {
+    const skewed = { ...RENOIR, chromeVersion: OTHER_CHROME };
+
+    expect(announcedGpuOf(swiftShaderHost(forkWithGl([HIDE_ONLY, skewed])))).toMatchObject({
+      tells: ["gl-persona-skew", "gl-persona-unavailable"],
+      value: { backend: "swiftshader", persona: null },
+    });
+  });
+
+  it.each(["matched", "announce"] as const)(
+    "presents the host's own GPU on a native GPU that matches under %s, with no announce tell",
+    (gpuPolicy) => {
+      const capabilities = gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER);
+
+      expect(
+        resolveSurfaces(contextOf({ capabilities, pins: { ...noPins, hardware: { gpuPolicy } } }))
+          .gpu,
+      ).toStrictEqual({
+        expected: [
+          webglContext,
+          {
+            compatibility: false,
+            field: "webglRenderer",
+            matcher: { kind: "equals", value: RENOIR_RENDERER },
+            severity: "fatal",
+          },
+          {
+            compatibility: false,
+            field: "webglExtensions",
+            matcher: { kind: "excludes-all", values: RENOIR.hiddenExtensions },
+            severity: "fatal",
+          },
+        ],
+        inputs: [
+          ...NATIVE_SWITCHES,
+          { name: "--xrio-gl-persona", sink: "switch", value: "basharsx4-amd-renoir" },
+        ],
+        tells: [],
+        value: { backend: "native", persona: { kind: "hardware", name: "basharsx4-amd-renoir" } },
+      });
+    },
+  );
+
+  it("gives the same plan under both policies on a native GPU", () => {
+    const capabilities = gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER);
+
+    const planned = (gpuPolicy: "matched" | "announce") =>
+      planIdentity(contextOf({ capabilities, pins: { ...noPins, hardware: { gpuPolicy } } }));
+
+    expect(planned("announce")).toStrictEqual(planned("matched"));
+  });
+
+  it("presents nothing on a native GPU whose renderer differs, as the matched policy does", () => {
+    expect(announcedGpuOf(gpuHost(forkWithGl([HIDE_ONLY, RENOIR])))).toMatchObject({
+      tells: ["gl-persona-unavailable"],
+      value: { backend: "native", persona: null },
+    });
+  });
+
+  it("presents nothing on stock Chrome and tells only gl-persona-unavailable", () => {
+    expect(announcedGpuOf({ permittedCpus: 32, platform: "linux" })).toMatchObject({
+      tells: ["gl-persona-unavailable"],
+      value: { backend: "swiftshader", persona: null },
+    });
+  });
+
+  it.each([
+    { count: 1, fleet: ["gpu-fleet-constant"], hardware: [RENOIR] },
+    { count: 2, fleet: ["gpu-fleet-constant"], hardware: [RENOIR, SECOND_HARDWARE] },
+    { count: 3, fleet: [], hardware: [RENOIR, SECOND_HARDWARE, THIRD_HARDWARE] },
+  ])(
+    "tells gpu-fleet-constant only while fewer than three hardware personas are eligible ($count here)",
+    ({ fleet, hardware }) => {
+      expect(
+        announcedGpuOf(swiftShaderHost(forkWithGl([HIDE_ONLY, ...hardware]))).tells,
+      ).toStrictEqual(["gpu-announced-over-software", ...fleet]);
+    },
+  );
+
+  it("does not count a skewed hardware persona toward the fleet", () => {
+    const skewed = { ...THIRD_HARDWARE, chromeVersion: OTHER_CHROME };
+    const forked = forkWithGl([RENOIR, SECOND_HARDWARE, skewed]);
+
+    expect(announcedGpuOf(swiftShaderHost(forked)).tells).toStrictEqual([
+      "gl-persona-skew",
+      "gpu-announced-over-software",
+      "gpu-fleet-constant",
+    ]);
+  });
+
+  it("changes nothing for the matched policy, named or not", () => {
+    const capabilities = swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR]));
+
+    const named = resolveSurfaces(
+      contextOf({ capabilities, pins: { ...noPins, hardware: { gpuPolicy: "matched" } } }),
+    ).gpu;
+
+    expect(named).toStrictEqual(gpuOf(capabilities));
+    expect(named.value).toStrictEqual({ backend: "swiftshader", persona: null });
+  });
+
+  it("lets a pin name a hardware persona over SwiftShader, and a hide-only one beside it", () => {
+    const capabilities = swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR]));
+
+    const pinned = (name: string) =>
+      resolveSurfaces(
+        contextOf({
+          capabilities,
+          pins: { ...noPins, hardware: { gpu: [{ name, weight: 1 }], gpuPolicy: "announce" } },
+        }),
+      ).gpu.value;
+
+    expect([pinned("basharsx4-amd-renoir"), pinned("basharsx4-swiftshader-hidden")]).toStrictEqual([
+      ANNOUNCED_RENOIR,
+      HIDDEN_GPU,
+    ]);
+  });
+
+  it.each(["announce", "matched"] as const)(
+    "names the %s policy in force when stock Chrome refuses a pin",
+    (gpuPolicy) => {
+      expect(() =>
+        resolveSurfaces(
+          contextOf({
+            capabilities: { permittedCpus: 32, platform: "linux" },
+            pins: {
+              ...noPins,
+              hardware: { gpu: [{ name: "basharsx4-amd-renoir", weight: 1 }], gpuPolicy },
+            },
+          }),
+        ),
+      ).toThrow(
+        expect.objectContaining(
+          notEligible(
+            `hardware.gpu basharsx4-amd-renoir is not eligible under the ${gpuPolicy} policy: this browser is not an Xrio fork package, so it has no GL personas.`,
+          ),
+        ),
+      );
+    },
+  );
+
+  it("names the announce policy when a pin is refused", () => {
+    expect(() =>
+      resolveSurfaces(
+        contextOf({
+          capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
+          pins: {
+            ...noPins,
+            hardware: { gpu: [{ name: "basharsx4-intel-uhd", weight: 1 }], gpuPolicy: "announce" },
+          },
+        }),
+      ),
+    ).toThrow(
+      expect.objectContaining(
+        notEligible(
+          "hardware.gpu basharsx4-intel-uhd is not eligible under the announce policy: this browser's package has no GL persona named basharsx4-intel-uhd.",
+        ),
+      ),
+    );
+  });
+
+  it("records the announcement in the device record", () => {
+    const capabilities = swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR]));
+    const { chosen } = planIdentity(contextOf({ capabilities, pins: announcing }));
+
+    expect(chosen.record?.device.gpu).toStrictEqual(ANNOUNCED_RENOIR);
+  });
+});
+
+describe("a replayed announce record", () => {
+  const forked = forkWithGl([HIDE_ONLY, RENOIR]);
+
+  const replayed = (capabilities: HostCapabilities, pins: IdentityIntent = noPins) => {
+    const record = recordPresenting(swiftShaderHost(forked), ANNOUNCED_RENOIR);
+
+    return planIdentity(contextOf({ capabilities, device: { kind: "record", record }, pins }));
+  };
+
+  it("presents its persona under a matched client and tells it was announced, as the announce policy that drew it would", () => {
+    const plan = replayed(swiftShaderHost(forked));
+
+    expect({ presented: plan.chosen.surfaces.gpu, tells: plan.tells }).toStrictEqual({
+      presented: ANNOUNCED_RENOIR,
+      tells: ["gpu-announced-over-software", "gpu-fleet-constant", "host-fonts"],
+    });
+  });
+
+  it("presents the same persona with the same tells under an announce client", () => {
+    const plan = replayed(swiftShaderHost(forked), announcing);
+
+    expect({ presented: plan.chosen.surfaces.gpu, tells: plan.tells }).toStrictEqual({
+      presented: ANNOUNCED_RENOIR,
+      tells: ["gpu-announced-over-software", "gpu-fleet-constant", "host-fonts"],
+    });
+  });
+
+  it("counts the hardware personas of the announce lineup that replays it, under a matched client", () => {
+    const three = swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR, SECOND_HARDWARE, THIRD_HARDWARE]));
+    const record = recordPresenting(three, ANNOUNCED_RENOIR);
+
+    const plan = planIdentity(
+      contextOf({ capabilities: three, device: { kind: "record", record } }),
+    );
+
+    expect({ presented: plan.chosen.surfaces.gpu, tells: plan.tells }).toStrictEqual({
+      presented: ANNOUNCED_RENOIR,
+      tells: ["gpu-announced-over-software", "host-fonts"],
+    });
+  });
+
+  it("keeps its own value and tells replay-host-skew where the host lacks the persona", () => {
+    const plan = replayed(swiftShaderHost(forkWithGl([HIDE_ONLY])));
+
+    expect({
+      presented: plan.chosen.surfaces.gpu,
+      recorded: plan.chosen.record?.device.gpu,
+      tells: plan.tells,
+    }).toStrictEqual({
+      presented: { backend: "swiftshader", persona: null },
+      recorded: ANNOUNCED_RENOIR,
+      tells: ["gl-persona-unavailable", "host-fonts", "replay-host-skew"],
+    });
+  });
+
+  it("replays a null persona as null under an announce client, never drawing one", () => {
+    const capabilities = swiftShaderHost(forked);
+    const record = recordPresenting(capabilities, { backend: "swiftshader", persona: null });
+
+    const plan = planIdentity(
+      contextOf({ capabilities, device: { kind: "record", record }, pins: announcing }),
+    );
+
+    expect({ presented: plan.chosen.surfaces.gpu, tells: plan.tells }).toStrictEqual({
+      presented: { backend: "swiftshader", persona: null },
+      tells: ["gl-persona-unavailable", "host-fonts"],
+    });
+  });
+
+  it("replays a record that names a persona the host lacks by drawing from the host and telling replay-host-skew, under announce too", () => {
+    const gone = {
+      backend: "swiftshader",
+      persona: { kind: "hardware", name: "basharsx4-amd-gone" },
+      policy: "announce",
+    } as const;
+
+    const record = recordPresenting(swiftShaderHost(forked), gone);
+
+    const plan = planIdentity(
+      contextOf({
+        capabilities: swiftShaderHost(forked),
+        device: { kind: "record", record },
+        pins: announcing,
+      }),
+    );
+
+    expect({ presented: plan.chosen.surfaces.gpu, tells: plan.tells }).toStrictEqual({
+      presented: ANNOUNCED_RENOIR,
+      tells: [
+        "gpu-announced-over-software",
+        "gpu-fleet-constant",
+        "host-fonts",
+        "replay-host-skew",
+      ],
+    });
+  });
+
+  it("lets a matched client that pins the record's own persona replay it", () => {
+    const capabilities = swiftShaderHost(forked);
+    const record = recordPresenting(capabilities, ANNOUNCED_RENOIR);
+    const pins = pinningGpu([{ name: "basharsx4-amd-renoir", weight: 1 }]);
+
+    const plan = planIdentity(
+      contextOf({ capabilities, device: { kind: "record", record }, pins }),
+    );
+
+    expect({
+      overrides: recordOverrides(record, { mode: "headless", pins }),
+      presented: plan.chosen.surfaces.gpu,
+      tells: plan.tells,
+    }).toStrictEqual({
+      overrides: [],
+      presented: ANNOUNCED_RENOIR,
+      tells: ["gpu-announced-over-software", "gpu-fleet-constant", "host-fonts"],
+    });
+  });
+
+  it("still refuses a pin of a persona the record's lineup does not hold", () => {
+    const capabilities = swiftShaderHost(forked);
+    const record = recordPresenting(capabilities, ANNOUNCED_RENOIR);
+    const pins = pinningGpu([{ name: "basharsx4-intel-uhd", weight: 1 }]);
+
+    expect(() =>
+      planIdentity(contextOf({ capabilities, device: { kind: "record", record }, pins })),
+    ).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS" }));
+  });
+
+  it("replays a record from a native GPU on a SwiftShader host by drawing, because only an announce record replays through an announce lineup", () => {
+    const native = {
+      backend: "native",
+      persona: { kind: "hardware", name: "basharsx4-amd-renoir" },
+    } as const;
+
+    const record = recordPresenting(swiftShaderHost(forked), native);
+
+    const plan = planIdentity(
+      contextOf({ capabilities: swiftShaderHost(forked), device: { kind: "record", record } }),
+    );
+
+    expect({ presented: plan.chosen.surfaces.gpu, tells: plan.tells }).toStrictEqual({
+      presented: { backend: "swiftshader", persona: null },
+      tells: ["gl-persona-unavailable", "host-fonts", "replay-host-skew"],
+    });
+  });
+
+  it("does not count the policy as an override of the record", () => {
+    const record = recordPresenting(swiftShaderHost(forked), ANNOUNCED_RENOIR);
+
+    expect(recordOverrides(record, { mode: "headless", pins: announcing })).toStrictEqual([]);
+  });
+});
+
 const fatalEquals = (field: string, value: number) => ({
   compatibility: true,
   field,

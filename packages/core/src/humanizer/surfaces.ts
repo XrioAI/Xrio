@@ -19,7 +19,7 @@ import type {
 import { drawDisplay, drawGlPersona, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
-import { glLineupOf } from "./gl-persona.ts";
+import { glLineupOf, hardwareEligibleCount } from "./gl-persona.ts";
 import type { EligiblePersona, GlLineup } from "./gl-persona.ts";
 import type { IdentityIntent } from "./intent.ts";
 import {
@@ -377,7 +377,7 @@ interface GlBackend {
 interface GlChoice {
   readonly backend: GlBackend;
   readonly presented: EligiblePersona | null;
-  readonly skewed: boolean;
+  readonly lineup: GlLineup;
 }
 
 const glBackendOf = ({ platform, readableRenderNode }: HostCapabilities): GlBackend => {
@@ -403,12 +403,15 @@ const glBackendOf = ({ platform, readableRenderNode }: HostCapabilities): GlBack
 const recordedPersonaOf = (device: DeviceChoice): string | undefined =>
   device.kind === "record" ? device.record.device.gpu.persona?.name : undefined;
 
+const recordIsAnnounced = (device: DeviceChoice): boolean =>
+  device.kind === "record" && "policy" in device.record.device.gpu;
+
 const pinnedRow = (lineup: GlLineup, { name, weight }: NameRow) => {
   const pinned = lineup.pin(name);
 
   if (pinned.kind === "refused") {
     throw invalidOptions(
-      `hardware.gpu ${name} is not eligible under the matched policy: ${pinned.reason}.`,
+      `hardware.gpu ${name} is not eligible under the ${lineup.policy} policy: ${pinned.reason}.`,
     );
   }
 
@@ -420,20 +423,33 @@ const personaRows = (lineup: GlLineup, pin: HardwareTables["gpu"]) =>
     ? lineup.drawable.map((choice) => ({ choice, weight: 1 }))
     : pin.map((row) => pinnedRow(lineup, row));
 
+interface Presentation {
+  readonly presented: EligiblePersona | null;
+  readonly lineup: GlLineup;
+}
+
+const recordHoldsNoPersona = (device: DeviceChoice): boolean =>
+  device.kind === "record" && device.record.device.gpu.persona === null;
+
 const choosePersona = (
   lineup: GlLineup,
+  replay: GlLineup,
   { device, pins }: Pick<IdentityContext, "device" | "pins">,
   seed: Seed,
-): EligiblePersona | null => {
-  const rows = personaRows(lineup, pins.hardware?.gpu);
-  const recorded = recordedPersonaOf(device);
-  const replayed = lineup.pinnable.find(({ persona }) => persona.name === recorded);
-
-  if (replayed !== undefined) {
-    return replayed;
+): Presentation => {
+  if (recordHoldsNoPersona(device)) {
+    return { lineup, presented: null };
   }
 
-  return rows.length === 0 ? null : drawGlPersona(seed, rows).choice;
+  const recorded = recordedPersonaOf(device);
+  const replayed = replay.pinnable.find(({ persona }) => persona.name === recorded);
+  const rows = personaRows(replayed === undefined ? lineup : replay, pins.hardware?.gpu);
+
+  if (replayed !== undefined) {
+    return { lineup: replay, presented: replayed };
+  }
+
+  return { lineup, presented: rows.length === 0 ? null : drawGlPersona(seed, rows).choice };
 };
 
 const chooseGl = (
@@ -441,9 +457,16 @@ const chooseGl = (
   { seed }: Device,
 ): GlChoice => {
   const backend = glBackendOf(context.capabilities);
-  const lineup = glLineupOf(backend.kind, context.capabilities);
+  const policy = context.pins.hardware?.gpuPolicy ?? "matched";
+  const lineup = glLineupOf(backend.kind, context.capabilities, policy);
 
-  return { backend, presented: choosePersona(lineup, context, seed), skewed: lineup.skewed };
+  const replay = recordIsAnnounced(context.device)
+    ? glLineupOf(backend.kind, context.capabilities, "announce")
+    : lineup;
+
+  const { lineup: governing, presented } = choosePersona(lineup, replay, context, seed);
+
+  return { backend, lineup: governing, presented };
 };
 
 const personaInputs = (persona: GlPersona | null): LaunchInput[] =>
@@ -467,10 +490,23 @@ const personaExpectations = (persona: GlPersona | null): Expectation[] =>
         },
       ];
 
-const glTells = ({ presented, skewed }: GlChoice): FactTell[] => [
-  ...(skewed ? ["gl-persona-skew" as const] : []),
-  ...(presented === null ? ["gl-persona-unavailable" as const] : []),
+const MIN_FLEET_HARDWARE_PERSONAS = 3;
+
+const announcedOverSoftware = ({ presented }: GlChoice): boolean =>
+  presented !== null && "policy" in presented.gpu;
+
+const fleetConstant = (gl: GlChoice): boolean =>
+  announcedOverSoftware(gl) && hardwareEligibleCount(gl.lineup) < MIN_FLEET_HARDWARE_PERSONAS;
+
+const glTells = (gl: GlChoice): FactTell[] => [
+  ...(gl.lineup.skewed ? ["gl-persona-skew" as const] : []),
+  ...(gl.presented === null ? ["gl-persona-unavailable" as const] : []),
+  ...(announcedOverSoftware(gl) ? ["gpu-announced-over-software" as const] : []),
+  ...(fleetConstant(gl) ? ["gpu-fleet-constant" as const] : []),
 ];
+
+const withoutPersona = (backend: GpuChoice["backend"]): GpuChoice =>
+  backend === "native" ? { backend, persona: null } : { backend, persona: null };
 
 const resolveGpu = (gl: GlChoice): Resolutions["gpu"] => {
   const persona = gl.presented?.persona ?? null;
@@ -479,7 +515,7 @@ const resolveGpu = (gl: GlChoice): Resolutions["gpu"] => {
     expected: [WEBGL_CONTEXT, ...personaExpectations(persona)],
     inputs: [...gl.backend.switches, ...personaInputs(persona)],
     tells: glTells(gl),
-    value: gl.presented?.gpu ?? { backend: gl.backend.kind, persona: null },
+    value: gl.presented?.gpu ?? withoutPersona(gl.backend.kind),
   };
 };
 

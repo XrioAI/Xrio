@@ -35,10 +35,13 @@ export interface NameRow extends Weighted {
   readonly name: string;
 }
 
+export type GpuPolicy = "matched" | "announce";
+
 export interface HardwareTables {
   readonly cores?: readonly ValueRow[];
   readonly memoryGb?: readonly ValueRow[];
   readonly gpu?: readonly NameRow[];
+  readonly gpuPolicy?: GpuPolicy;
 }
 
 export type WindowPin =
@@ -73,8 +76,21 @@ interface PresentedPersona<Kind extends GlPersonaKind> {
 }
 
 export type GpuChoice =
-  | { readonly backend: "native"; readonly persona: PresentedPersona<"hardware"> | null }
-  | { readonly backend: "swiftshader"; readonly persona: PresentedPersona<"hide-only"> | null };
+  | {
+      readonly backend: "native";
+      readonly persona: PresentedPersona<"hardware"> | null;
+      readonly policy?: never;
+    }
+  | {
+      readonly backend: "swiftshader";
+      readonly persona: PresentedPersona<"hide-only"> | null;
+      readonly policy?: never;
+    }
+  | {
+      readonly backend: "swiftshader";
+      readonly persona: PresentedPersona<"hardware">;
+      readonly policy: "announce";
+    };
 
 export interface PresentedDevice {
   readonly screen: { readonly width: number; readonly height: number; readonly workArea: Insets };
