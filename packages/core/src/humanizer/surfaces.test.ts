@@ -61,6 +61,8 @@ const forkWith = (
     },
     packageDir: "/opt/xrio-chrome",
     personas: {
+      gl: [],
+      refusedGl: [],
       speech: artifactVersions.map((chromeVersion) => ({
         chromeVersion,
         digest: `sha256:${"0".repeat(64)}`,

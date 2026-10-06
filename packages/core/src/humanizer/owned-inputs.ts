@@ -249,6 +249,16 @@ export const FORK_SWITCH_PREFIXES = ["--pxr-", "--xrio-"] as const;
 
 export const FORK_DUMP_SWITCH = "--xrio-dump-config";
 
+export const GL_PERSONA_MAX_NAME = 128;
+
+const GL_PERSONA_NAME = /^(?!\.)[\w.-]+$/u;
+
+export const isGlPersonaName = (
+  name: unknown,
+  maxLength: number = GL_PERSONA_MAX_NAME,
+): name is string =>
+  typeof name === "string" && name.length <= maxLength && GL_PERSONA_NAME.test(name);
+
 const RESERVED_IDENTITY_SWITCHES = [
   "--force-device-scale-factor",
   "--device-scale-factor",

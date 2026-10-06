@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
 import { once } from "node:events";
@@ -8,6 +8,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   realpath,
@@ -61,6 +62,31 @@ const FAILED_PROBE_TTL_MS = 60_000;
 const PARALLELISM = 12;
 
 const KIT_PERSONAS = {
+  gl: [
+    {
+      chromeVersion: "154.0.8037.57",
+      digest: "sha256:6819059b04a8e00c0dfd89c5e126ec5e729750d967656784b4a22a2170a7c6c3",
+      formFactor: "laptop",
+      hiddenExtensions: ["WEBGL_synthetic_a"],
+      kind: "hardware",
+      maxThreads: 12,
+      name: "synthetic-gpu",
+      renderer: "ANGLE (Synthetic, Synthetic GPU)",
+      vendor: "Synthetic Inc.",
+    },
+    {
+      chromeVersion: "154.0.8037.57",
+      digest: "sha256:ce60cf8e5d741d9396b26631c12bc4d81c7cae56c122aabf53823bd842ec9c3e",
+      formFactor: "desktop",
+      hiddenExtensions: ["WEBGL_synthetic_a", "WEBGL_synthetic_b"],
+      kind: "hide-only",
+      maxThreads: 16,
+      name: "synthetic-swiftshader-hidden",
+      renderer: "ANGLE (Synthetic, SwiftShader Device)",
+      vendor: "Synthetic Inc.",
+    },
+  ],
+  refusedGl: [],
   speech: [
     {
       chromeVersion: "154.0.8037.57",
@@ -126,6 +152,33 @@ const writeRenderNode = async (
     ? writeFile(node, "")
     : symlink(path.join(directory, "missing-device"), node));
 };
+
+const GL_SUFFIX = ".xrio-gl.json";
+
+const GL_DIGEST = `sha256:${"a".repeat(64)}`;
+
+const hardwareGl = (name: string) => ({
+  chrome_version: "154.0.8037.57",
+  digest: GL_DIGEST,
+  float_arrays: [],
+  floats: [],
+  form_factor: "desktop",
+  hidden_extensions: ["WEBGL_synthetic_a"],
+  int_arrays: [],
+  ints: [[3379, 16_384]],
+  max_threads: 8,
+  name,
+  not_added: [],
+  renderer: "ANGLE (Synthetic, Synthetic GPU)",
+  schema: "xrio-gl-table/v2",
+  vendor: "Synthetic Inc.",
+});
+
+const hideOnlyGl = (name: string) => ({
+  ...hardwareGl(name),
+  ints: [],
+  renderer: "ANGLE (Synthetic, SwiftShader Device)",
+});
 
 const driWith = async (
   directory: string,
@@ -427,7 +480,30 @@ describe("hostCapabilities", () => {
       });
     });
 
-    it("never reads a GL artifact, so a misnamed one leaves the probe intact", async () => {
+    it("fails the probe on a speech artifact it cannot read, and keeps no failure", async () => {
+      const executable = await forkAt("kit");
+      const directory = await packageOf(executable);
+      const probe = probeWith();
+
+      await chmod(path.join(directory, "personas", SPEECH_FILE), 0o000);
+
+      const failures = [await failureOf(probe(executable)), await failureOf(probe(executable))];
+
+      expect({
+        dumps: await dumpsRun(executable),
+        failures,
+        stored: await factsFiles(),
+      }).toStrictEqual({
+        dumps: 2,
+        failures: Array.from({ length: 2 }, () => ({
+          code: "BROWSER_LAUNCH_FAILED",
+          message: `The Xrio fork package at ${directory} failed its probe: EACCES: permission denied, open '${path.join(directory, "personas", SPEECH_FILE)}'.`,
+        })),
+        stored: [],
+      });
+    });
+
+    it("refuses a misnamed GL artifact by its stem and leaves the probe intact", async () => {
       const executable = await forkAt("kit");
       const personas = path.join(path.dirname(executable), "personas");
 
@@ -438,7 +514,16 @@ describe("hostCapabilities", () => {
 
       const { fork } = await probeWith()(executable);
 
-      expect(fork?.personas).toStrictEqual(KIT_PERSONAS);
+      expect(fork?.personas).toStrictEqual({
+        gl: [KIT_PERSONAS.gl[1]],
+        refusedGl: [
+          {
+            reason: 'is named "synthetic-gpu", not its file stem renamed-gpu',
+            stem: "renamed-gpu",
+          },
+        ],
+        speech: KIT_PERSONAS.speech,
+      });
     });
 
     it("detects the kit by a VERSIONS file that declares FORK_VERSION, with no knob file", async () => {
@@ -447,7 +532,7 @@ describe("hostCapabilities", () => {
       expect([fork?.dialect, fork?.knobs["speech-persona"], fork?.personas]).toStrictEqual([
         "xrio",
         { origin: "def", value: null },
-        { speech: [] },
+        { gl: [], refusedGl: [], speech: [] },
       ]);
     });
 
@@ -617,7 +702,7 @@ describe("hostCapabilities", () => {
         entries.filter((entry) => entry.startsWith("host-facts-") || entry.endsWith(".tmp")),
       ).toStrictEqual([file]);
       expect(file).toMatch(/^host-facts-[\da-f]{64}\.json$/u);
-      expect(stored).toMatchObject({ format: 1, kind: "probed" });
+      expect(stored).toMatchObject({ format: 2, kind: "probed" });
       await expect(probeWith()(executable)).resolves.toStrictEqual(first);
       expect(probed).toHaveLength(1);
     });
@@ -940,6 +1025,459 @@ const useFontStack = () => {
 
 const refusalOf = (facts: { readonly kind: string; readonly reason?: string } | undefined) =>
   facts?.kind === "refused" ? facts.reason : undefined;
+
+const glProbeIn = (root: string) =>
+  createCapabilityProbe({
+    parallelism: () => PARALLELISM,
+    processStatusFile: path.join(root, "no-status"),
+    renderNodeDirectory: path.join(root, "dri"),
+    root: path.join(root, "scratch"),
+  });
+
+const glPersonasIn = async (root: string, files: Readonly<Record<string, string>>) => {
+  const executable = await fakeForkPath("kit", { root });
+  const directory = path.join(path.dirname(executable), "personas");
+
+  await Promise.all(
+    Object.entries(files).map(async ([file, contents]) => {
+      await writeFile(path.join(directory, file), contents);
+    }),
+  );
+
+  const { fork } = await glProbeIn(root)(executable);
+
+  return fork?.personas;
+};
+
+const glOnly = (personas: Awaited<ReturnType<typeof glPersonasIn>>, stem: string) => ({
+  kind: personas?.gl.find(({ name }) => name === stem)?.kind,
+  refusal: personas?.refusedGl.find((refused) => refused.stem === stem)?.reason,
+});
+
+describe("hostCapabilities GL personas", () => {
+  let root = "";
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-capabilities-gl-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  const probeWith = () => glProbeIn(root);
+
+  const personasOf = async (files: Readonly<Record<string, string>>) =>
+    await glPersonasIn(root, files);
+
+  it("parses both synthetic artifacts with every field and derives each one's kind", async () => {
+    const { fork } = await probeWith()(await fakeForkPath("kit", { root }));
+
+    expect(fork?.personas.gl).toStrictEqual(KIT_PERSONAS.gl);
+    expect(fork?.personas.refusedGl).toStrictEqual([]);
+  });
+
+  it.each([
+    [
+      "a renderer naming Swift Shader with a space",
+      { renderer: "ANGLE (Swift Shader)" },
+      "hide-only",
+    ],
+    ["a non-empty ints list", { ints: [[1, 2]] }, "hardware"],
+    ["a non-empty floats list", { floats: [[1, 2]] }, "hardware"],
+    ["a non-empty float_arrays list", { float_arrays: [[1, [2]]] }, "hardware"],
+    ["a non-empty int_arrays list", { int_arrays: [[1, [2]]] }, "hardware"],
+    ["a missing not_added list", { not_added: undefined }, "hardware"],
+    ["a non-empty not_added list", { not_added: ["WEBGL_synthetic_c"] }, "hardware"],
+    ["an empty hidden_extensions list", { hidden_extensions: [] }, "hardware"],
+    ["a renderer without the SwiftShader marker", { renderer: "ANGLE (llvmpipe)" }, "hardware"],
+    ["an empty string in hidden_extensions", { hidden_extensions: [""] }, "hide-only"],
+  ] as const)("derives the kind of an artifact with %s", async (_label, changes, kind) => {
+    const personas = await personasOf({
+      [`small${GL_SUFFIX}`]: JSON.stringify({ ...hideOnlyGl("small"), ...changes }),
+    });
+
+    expect(glOnly(personas, "small")).toStrictEqual({ kind, refusal: undefined });
+  });
+
+  it.each([
+    ["is not JSON", "not json", "is not JSON"],
+    ["is a JSON array", "[]", "is not a JSON object"],
+    ["is JSON null", "null", "is not a JSON object"],
+    [
+      "has another schema",
+      JSON.stringify({ ...hardwareGl("bad"), schema: "xrio-gl-table/v1" }),
+      'has schema "xrio-gl-table/v1", not xrio-gl-table/v2',
+    ],
+    [
+      "has a name other than its stem",
+      JSON.stringify({ ...hardwareGl("other") }),
+      'is named "other", not its file stem bad',
+    ],
+    [
+      "has a malformed digest",
+      JSON.stringify({ ...hardwareGl("bad"), digest: "sha256:abc" }),
+      "lacks a sha256 digest",
+    ],
+    [
+      "has a numeric vendor",
+      JSON.stringify({ ...hardwareGl("bad"), vendor: 3 }),
+      "lacks a non-empty chrome_version, vendor or renderer",
+    ],
+    [
+      "has no renderer",
+      JSON.stringify({ ...hardwareGl("bad"), renderer: undefined }),
+      "lacks a non-empty chrome_version, vendor or renderer",
+    ],
+    [
+      "has an empty vendor",
+      JSON.stringify({ ...hideOnlyGl("bad"), vendor: "" }),
+      "lacks a non-empty chrome_version, vendor or renderer",
+    ],
+    [
+      "has an empty renderer",
+      JSON.stringify({ ...hardwareGl("bad"), renderer: "" }),
+      "lacks a non-empty chrome_version, vendor or renderer",
+    ],
+    [
+      "has an empty chrome_version",
+      JSON.stringify({ ...hardwareGl("bad"), chrome_version: "" }),
+      "lacks a non-empty chrome_version, vendor or renderer",
+    ],
+    [
+      "has an unknown form factor",
+      JSON.stringify({ ...hardwareGl("bad"), form_factor: "tablet" }),
+      "has a form_factor that is not laptop or desktop",
+    ],
+    [
+      "has zero max_threads",
+      JSON.stringify({ ...hardwareGl("bad"), max_threads: 0 }),
+      "has a max_threads that is not an integer of at least 1",
+    ],
+    [
+      "has fractional max_threads",
+      JSON.stringify({ ...hardwareGl("bad"), max_threads: 1.5 }),
+      "has a max_threads that is not an integer of at least 1",
+    ],
+    [
+      "has a max_threads past the fork's integers",
+      JSON.stringify({ ...hardwareGl("bad"), max_threads: 2_147_483_648 }),
+      "has a max_threads that is not an integer of at least 1",
+    ],
+    [
+      "has no int_arrays list",
+      JSON.stringify({ ...hardwareGl("bad"), int_arrays: undefined }),
+      "has no int_arrays list",
+    ],
+    [
+      "has a floats field that is not a list",
+      JSON.stringify({ ...hardwareGl("bad"), floats: {} }),
+      "has no floats list",
+    ],
+    [
+      "has an ints entry that is not a pair",
+      JSON.stringify({ ...hardwareGl("bad"), ints: [[3379, 16_384, 1]] }),
+      "has a malformed ints entry",
+    ],
+    [
+      "has a negative pname",
+      JSON.stringify({ ...hardwareGl("bad"), ints: [[-1, 16_384]] }),
+      "has a malformed ints entry",
+    ],
+    [
+      "has a fractional ints value",
+      JSON.stringify({ ...hardwareGl("bad"), ints: [[3379, 0.5]] }),
+      "has a malformed ints entry",
+    ],
+    [
+      "has a floats value that is not a number",
+      JSON.stringify({ ...hardwareGl("bad"), floats: [[36_444, "2"]] }),
+      "has a malformed floats entry",
+    ],
+    [
+      "has a float array of five components",
+      JSON.stringify({ ...hardwareGl("bad"), float_arrays: [[33_902, [1, 2, 3, 4, 5]]] }),
+      "has a malformed float_arrays entry",
+    ],
+    [
+      "has an empty int array",
+      JSON.stringify({ ...hardwareGl("bad"), int_arrays: [[33_902, []]] }),
+      "has a malformed int_arrays entry",
+    ],
+    [
+      "has a fractional int array component",
+      JSON.stringify({ ...hardwareGl("bad"), int_arrays: [[33_902, [1, 2.5]]] }),
+      "has a malformed int_arrays entry",
+    ],
+    [
+      "repeats a pname in ints",
+      JSON.stringify({
+        ...hardwareGl("bad"),
+        ints: [
+          [3379, 16_384],
+          [3379, 8192],
+        ],
+      }),
+      "repeats a pname in ints",
+    ],
+    [
+      "has a non-string hidden extension",
+      JSON.stringify({ ...hardwareGl("bad"), hidden_extensions: ["a", 1] }),
+      "has hidden_extensions that is not an array of strings",
+    ],
+  ])("refuses an artifact that %s and still resolves the probe", async (_label, text, reason) => {
+    const personas = await personasOf({ [`bad${GL_SUFFIX}`]: text });
+
+    expect(personas?.refusedGl).toStrictEqual([{ reason, stem: "bad" }]);
+    expect(personas?.gl).toStrictEqual(KIT_PERSONAS.gl);
+    expect(personas?.speech).toStrictEqual(KIT_PERSONAS.speech);
+  });
+});
+
+describe("hostCapabilities GL artifacts the fork's loader refuses", () => {
+  let root = "";
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-capabilities-gl-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  const scratch = () => path.join(root, "scratch");
+
+  const probeWith = () => glProbeIn(root);
+
+  const personasOf = async (files: Readonly<Record<string, string>>) =>
+    await glPersonasIn(root, files);
+
+  it.each([
+    ["a space", "amd renoir"],
+    ["a leading dot", ".renoir"],
+    ["129 characters", "r".repeat(129)],
+    ["a letter outside A to Z", "rénoir"],
+  ])(
+    "refuses an artifact whose name holds %s, which the fork cannot select",
+    async (_label, stem) => {
+      const personas = await personasOf({
+        [`${stem}${GL_SUFFIX}`]: JSON.stringify(hideOnlyGl(stem)),
+      });
+
+      expect(personas?.refusedGl).toStrictEqual([
+        { reason: "has a name the fork cannot select", stem },
+      ]);
+      expect(personas?.gl).toStrictEqual(KIT_PERSONAS.gl);
+    },
+  );
+
+  it("keeps an artifact of 262,144 bytes and refuses one a byte longer, as the fork reads", async () => {
+    const personas = await personasOf({
+      [`fits${GL_SUFFIX}`]: JSON.stringify(hideOnlyGl("fits")).padEnd(262_144),
+      [`over${GL_SUFFIX}`]: JSON.stringify(hideOnlyGl("over")).padEnd(262_145),
+    });
+
+    expect([glOnly(personas, "fits"), glOnly(personas, "over")]).toStrictEqual([
+      { kind: "hide-only", refusal: undefined },
+      { kind: undefined, refusal: "is over the 262144 bytes the fork reads" },
+    ]);
+  });
+
+  it("reads an artifact no further than a byte past the cap, and keeps none of an oversized one", async () => {
+    const executable = await fakeForkPath("kit", { root });
+    const directory = path.join(path.dirname(executable), "personas");
+    const endless = path.join(directory, `endless${GL_SUFFIX}`);
+
+    execFileSync("/usr/bin/mkfifo", [endless]);
+    await writeFile(path.join(directory, `large${GL_SUFFIX}`), " ".repeat(1_048_576));
+
+    const feeding = (async () => {
+      const writer = await open(endless, "w");
+
+      await writer.write(Buffer.alloc(262_145, " "));
+
+      return writer;
+    })();
+
+    const { fork } = await probeWith()(executable);
+    const writer = await feeding;
+
+    await writer.close();
+
+    const entries = await readdir(scratch());
+    const facts = entries.find((entry) => entry.startsWith("host-facts-")) ?? "";
+
+    const stored = await readFile(path.join(scratch(), facts));
+
+    expect(fork?.personas.refusedGl).toStrictEqual([
+      { reason: "is over the 262144 bytes the fork reads", stem: "endless" },
+      { reason: "is over the 262144 bytes the fork reads", stem: "large" },
+    ]);
+    expect(stored.length).toBeLessThan(16_384);
+  });
+
+  it("caps an artifact's bytes and name at the gl-table-max-bytes and gl-persona-max-name the dump sets", async () => {
+    const executable = await fakeForkPath("kit", { root });
+    const kitDump = await readFile(KIT_DUMP, "utf-8");
+    const directory = path.join(path.dirname(executable), "personas");
+
+    await replaceDump(
+      executable,
+      kitDump
+        .replace("[def] synthetic-knob-01 = 3", "[set] gl-table-max-bytes = 1024")
+        .replace("[def] synthetic-knob-02 = 6", "[set] gl-persona-max-name = 16"),
+    );
+
+    const files = {
+      fits: JSON.stringify(hideOnlyGl("fits")).padEnd(1024),
+      over: JSON.stringify(hideOnlyGl("over")).padEnd(1025),
+      "seventeen-letters": JSON.stringify(hideOnlyGl("seventeen-letters")),
+      "sixteen-letters1": JSON.stringify(hideOnlyGl("sixteen-letters1")),
+      wide: JSON.stringify({ ...hideOnlyGl("wide"), vendor: "é".repeat(300) }).padEnd(1024),
+    };
+
+    await Promise.all(
+      Object.entries(files).map(async ([stem, contents]) => {
+        await writeFile(path.join(directory, `${stem}${GL_SUFFIX}`), contents);
+      }),
+    );
+
+    const { fork } = await probeWith()(executable);
+
+    expect({
+      gl: fork?.personas.gl.map(({ name }) => name),
+      refusedGl: fork?.personas.refusedGl,
+      wide: [files.wide.length, Buffer.byteLength(files.wide)],
+    }).toStrictEqual({
+      gl: ["fits", "sixteen-letters1", "synthetic-gpu"],
+      refusedGl: [
+        { reason: "is over the 1024 bytes the fork reads", stem: "over" },
+        { reason: "has a name the fork cannot select", stem: "seventeen-letters" },
+        { reason: "has a name the fork cannot select", stem: "synthetic-swiftshader-hidden" },
+        { reason: "is over the 1024 bytes the fork reads", stem: "wide" },
+      ],
+      wide: [1024, 1324],
+    });
+  });
+
+  it("keeps facts that list an unreadable artifact for the next process, and probes again after a chmod either way", async () => {
+    const executable = await fakeForkPath("kit", { root });
+    const locked = path.join(path.dirname(executable), "personas", `locked${GL_SUFFIX}`);
+
+    const lockedNow = async () => {
+      const { fork } = await probeWith()(executable);
+
+      return {
+        dumps: await dumpsRun(executable),
+        locked: glOnly(fork?.personas, "locked"),
+      };
+    };
+
+    await writeFile(locked, JSON.stringify(hideOnlyGl("locked")));
+    await chmod(locked, 0o000);
+
+    const unreadable = [await lockedNow(), await lockedNow()];
+
+    await chmod(locked, 0o644);
+
+    const readable = await lockedNow();
+
+    await chmod(locked, 0o000);
+
+    expect([...unreadable, readable, await lockedNow()]).toStrictEqual([
+      { dumps: 1, locked: { kind: undefined, refusal: "could not be read (EACCES)" } },
+      { dumps: 1, locked: { kind: undefined, refusal: "could not be read (EACCES)" } },
+      { dumps: 2, locked: { kind: "hide-only", refusal: undefined } },
+      { dumps: 3, locked: { kind: undefined, refusal: "could not be read (EACCES)" } },
+    ]);
+  });
+
+  it("refuses an artifact it cannot read and still resolves the probe", async () => {
+    const executable = await fakeForkPath("kit", { root });
+    const directory = path.join(path.dirname(executable), "personas");
+    const locked = path.join(directory, `locked${GL_SUFFIX}`);
+
+    await writeFile(locked, JSON.stringify(hideOnlyGl("locked")));
+    await chmod(locked, 0o000);
+    await mkdir(path.join(directory, `folder${GL_SUFFIX}`));
+
+    const { fork } = await probeWith()(executable);
+
+    expect(fork?.personas.refusedGl).toStrictEqual([
+      { reason: "could not be read (EISDIR)", stem: "folder" },
+      { reason: "could not be read (EACCES)", stem: "locked" },
+    ]);
+    expect(fork?.personas.gl).toStrictEqual(KIT_PERSONAS.gl);
+  });
+
+  it("rejects a package whose config sets gl-persona, naming the knob", async () => {
+    const executable = await fakeForkPath("kit", { root });
+    const kitDump = await readFile(KIT_DUMP, "utf-8");
+
+    await replaceDump(
+      executable,
+      kitDump.replace("[def] gl-persona = <unset>", "[set] gl-persona = basharsx4-amd-renoir"),
+    );
+
+    await expect(failureOf(probeWith()(executable))).resolves.toStrictEqual({
+      code: "BROWSER_LAUNCH_FAILED",
+      message: `The Xrio fork package at ${await packageOf(executable)} failed its probe: its config sets gl-persona to "basharsx4-amd-renoir", and Xrio chooses the GL persona itself, so gl-persona must be unset.`,
+    });
+  });
+
+  it("probes a package whose config sets gl-persona to nothing", async () => {
+    const executable = await fakeForkPath("kit", { root });
+    const kitDump = await readFile(KIT_DUMP, "utf-8");
+
+    await replaceDump(
+      executable,
+      kitDump.replace("[def] gl-persona = <unset>", "[set] gl-persona ="),
+    );
+
+    await expect(probeWith()(executable)).resolves.toMatchObject({
+      fork: { knobs: { "gl-persona": { origin: "set", value: "" } } },
+    });
+  });
+
+  it("accepts an artifact whose hidden_extensions holds an empty string as hide-only", async () => {
+    const personas = await personasOf({
+      [`blank${GL_SUFFIX}`]: JSON.stringify({
+        ...hideOnlyGl("blank"),
+        hidden_extensions: ["", "WEBGL_synthetic_a"],
+      }),
+    });
+
+    expect(personas?.gl.find(({ name }) => name === "blank")).toStrictEqual({
+      chromeVersion: "154.0.8037.57",
+      digest: GL_DIGEST,
+      formFactor: "desktop",
+      hiddenExtensions: ["", "WEBGL_synthetic_a"],
+      kind: "hide-only",
+      maxThreads: 8,
+      name: "blank",
+      renderer: "ANGLE (Synthetic, SwiftShader Device)",
+      vendor: "Synthetic Inc.",
+    });
+    expect(personas?.refusedGl).toStrictEqual([]);
+  });
+
+  it("ignores a facts file of format 1 and probes the package again", async () => {
+    const executable = await fakeForkPath("kit", { root });
+
+    await probeWith()(executable);
+
+    const entries = await readdir(scratch());
+    const file = entries.find((entry) => entry.startsWith("host-facts-")) ?? "";
+    const stored = await readFile(path.join(scratch(), file), "utf-8");
+
+    await writeFile(path.join(scratch(), file), stored.replace('"format":2', '"format":1'));
+
+    const { fork } = await probeWith()(executable);
+
+    expect(fork?.personas.gl).toStrictEqual(KIT_PERSONAS.gl);
+    await expect(dumpsRun(executable)).resolves.toBe(2);
+  });
+});
 
 describe("hostCapabilities font stack", () => {
   const { checks, factsOf, fixture, probeOn, scratch, stackDirectory, stackFiles } = useFontStack();

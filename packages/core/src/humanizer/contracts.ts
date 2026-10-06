@@ -113,6 +113,25 @@ interface PersonaArtifact {
 
 export type SpeechPersona = PersonaArtifact;
 
+export type GlPersonaKind = "hide-only" | "hardware";
+
+export interface GlPersona {
+  readonly name: string;
+  readonly digest: string;
+  readonly chromeVersion: string;
+  readonly vendor: string;
+  readonly renderer: string;
+  readonly formFactor: "laptop" | "desktop";
+  readonly maxThreads: number;
+  readonly hiddenExtensions: readonly string[];
+  readonly kind: GlPersonaKind;
+}
+
+export interface RefusedGlArtifact {
+  readonly stem: string;
+  readonly reason: string;
+}
+
 export interface ForkFacts {
   readonly dialect: "xrio";
   readonly packageDir: string;
@@ -123,6 +142,8 @@ export interface ForkFacts {
   readonly knobs: KnobRegistry;
   readonly personas: {
     readonly speech: readonly SpeechPersona[];
+    readonly gl: readonly GlPersona[];
+    readonly refusedGl: readonly RefusedGlArtifact[];
   };
 }
 

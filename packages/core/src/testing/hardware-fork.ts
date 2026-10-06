@@ -17,7 +17,7 @@ export const forkWithKnobs = (
     dirty: null,
     knobs,
     packageDir: "/opt/xrio-chrome",
-    personas: { speech: [] },
+    personas: { gl: [], refusedGl: [], speech: [] },
     version: "154.0.8037.57",
   },
   permittedCpus,

@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import type { ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { createReadStream } from "node:fs";
 import { access, constants, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import { text } from "node:stream/consumers";
+import { buffer, text } from "node:stream/consumers";
 
 import { hostCacheRoot } from "../../cache-dir.ts";
 import { untilDeadline } from "../../deadline.ts";
@@ -29,7 +30,10 @@ import {
   scratchRoot,
   writeAtomically,
 } from "./browser-process.ts";
+import { fileIdentityOf } from "./file-identity.ts";
 import { createFontStackCheck, fontStackBeside } from "./font-stack.ts";
+import { GL_ARTIFACT_SCHEMA, glArtifactLimitsOf, parseGlArtifact } from "./gl-artifacts.ts";
+import type { GlArtifactLimits, GlArtifactReading } from "./gl-artifacts.ts";
 import { killProcessGroup, retireProcessGroup } from "./group-lifetime.ts";
 import { TEARDOWN_BUDGET_MS } from "./port.ts";
 
@@ -61,7 +65,7 @@ const FAILED_PROBE_TTL_MS = 60_000;
 
 const STDERR_TAIL_CHARS = 2048;
 
-const FACTS_FORMAT = 1;
+const FACTS_FORMAT = 2;
 
 const RENDER_NODE_DIRECTORY = "/dev/dri";
 
@@ -88,10 +92,11 @@ const VERSION = /\b(?<version>\d+\.\d+\.\d+\.\d+)\b/u;
 const DIGEST = /^sha256:[\da-f]{64}$/u;
 
 const ARTIFACT_KINDS = {
+  gl: { schema: GL_ARTIFACT_SCHEMA, suffixKnob: "gl-table-suffix" },
   speech: { schema: "xrio-speech-table/v1", suffixKnob: "speech-table-suffix" },
 } as const;
 
-const ARTIFACT_KIND_NAMES = ["speech"] as const;
+const ARTIFACT_KIND_NAMES = ["speech", "gl"] as const;
 
 type ArtifactKind = (typeof ARTIFACT_KIND_NAMES)[number];
 
@@ -103,10 +108,10 @@ interface ForkPackage {
 
 type ForkBuild = Pick<ForkFacts, "buildUnreadable" | "commit" | "dirty">;
 
-interface ArtifactText {
-  readonly file: string;
-  readonly text: string;
-}
+type ArtifactText =
+  | { readonly file: string; readonly text: string }
+  | { readonly file: string; readonly unreadable: string }
+  | { readonly file: string; readonly oversized: true };
 
 interface ProbeOutputs {
   readonly dump: string;
@@ -209,7 +214,12 @@ const isRawArtifact = (value: unknown): value is RawArtifact =>
   isText(value.chrome_version);
 
 const isArtifactText = (value: unknown): value is ArtifactText =>
-  isObject(value) && "file" in value && isText(value.file) && "text" in value && isText(value.text);
+  isObject(value) &&
+  "file" in value &&
+  isText(value.file) &&
+  (("text" in value && isText(value.text)) ||
+    ("unreadable" in value && isText(value.unreadable)) ||
+    ("oversized" in value && value.oversized === true));
 
 const isProbeOutputs = (value: unknown): value is ProbeOutputs =>
   isObject(value) &&
@@ -386,18 +396,8 @@ const forkPackageOf = async (browserPath: string): Promise<ForkPackage | undefin
     : undefined;
 };
 
-const statOf = async (file: string) => {
-  try {
-    const { dev, ino, mtimeMs, size } = await stat(file);
-
-    return [file, dev, ino, size, mtimeMs];
-  } catch {
-    return [file, null];
-  }
-};
-
 const statsSignature = async (files: readonly string[]): Promise<string> => {
-  const stats = await Promise.all(files.map(statOf));
+  const stats = await Promise.all(files.map(fileIdentityOf));
 
   return createHash("sha256").update(JSON.stringify(stats)).digest("hex");
 };
@@ -475,21 +475,30 @@ const kindOf = (file: string, knobs: KnobRegistry): ArtifactKind | undefined =>
     return suffix !== null && suffix !== "" && file.endsWith(suffix);
   });
 
+const stemOf = (file: string, kind: ArtifactKind, knobs: KnobRegistry): string =>
+  file.slice(0, file.length - (suffixOf(kind, knobs) ?? "").length);
+
 const auditArtifact = (
-  { file, text: contents }: ArtifactText,
+  read: ArtifactText,
   kind: ArtifactKind,
   knobs: KnobRegistry,
 ): RawArtifact => {
+  const { file } = read;
+
+  if (!("text" in read)) {
+    throw new ForkProbeError(`persona ${file} could not be read`);
+  }
+
   let artifact: unknown;
 
   try {
-    artifact = JSON.parse(contents);
+    artifact = JSON.parse(read.text);
   } catch {
     throw new ForkProbeError(`persona ${file} is not JSON`);
   }
 
   const { schema } = ARTIFACT_KINDS[kind];
-  const stem = file.slice(0, file.length - (suffixOf(kind, knobs) ?? "").length);
+  const stem = stemOf(file, kind, knobs);
 
   if (!isRawArtifact(artifact)) {
     throw new ForkProbeError(
@@ -519,6 +528,58 @@ const personaOf = ({ chrome_version: chromeVersion, digest, name, schema }: RawA
 
 const speechPersonaOf = (artifact: ArtifactText, knobs: KnobRegistry): SpeechPersona =>
   personaOf(auditArtifact(artifact, "speech", knobs));
+
+const glReadingOf = (
+  artifact: ArtifactText,
+  stem: string,
+  { maxBytes, maxNameLength }: GlArtifactLimits,
+): GlArtifactReading => {
+  if ("text" in artifact) {
+    return parseGlArtifact(stem, artifact.text, maxNameLength);
+  }
+
+  const reason =
+    "unreadable" in artifact
+      ? `could not be read (${artifact.unreadable})`
+      : `is over the ${maxBytes} bytes the fork reads`;
+
+  return { refused: { reason, stem } };
+};
+
+const artifactsOfKind = (
+  artifacts: readonly ArtifactText[],
+  knobs: KnobRegistry,
+  kind: ArtifactKind,
+): ArtifactText[] => artifacts.filter(({ file }) => kindOf(file, knobs) === kind);
+
+const personasOf = (
+  artifacts: readonly ArtifactText[],
+  knobs: KnobRegistry,
+): ForkFacts["personas"] => {
+  const limits = glArtifactLimitsOf(knobs);
+
+  const gl = artifactsOfKind(artifacts, knobs, "gl").map((artifact) =>
+    glReadingOf(artifact, stemOf(artifact.file, "gl", knobs), limits),
+  );
+
+  return {
+    gl: gl.flatMap((reading) => ("persona" in reading ? [reading.persona] : [])),
+    refusedGl: gl.flatMap((reading) => ("refused" in reading ? [reading.refused] : [])),
+    speech: artifactsOfKind(artifacts, knobs, "speech").map((artifact) =>
+      speechPersonaOf(artifact, knobs),
+    ),
+  };
+};
+
+const requireGlPersonaUnset = (knobs: KnobRegistry): void => {
+  const pinned = knobs["gl-persona"];
+
+  if (pinned?.origin === "set" && pinned.value !== null && pinned.value !== "") {
+    throw new ForkProbeError(
+      `its config sets gl-persona to ${JSON.stringify(pinned.value)}, and Xrio chooses the GL persona itself, so gl-persona must be unset`,
+    );
+  }
+};
 
 const lineValues = (line: RegExp, versions: string): string[] =>
   [...versions.matchAll(line)].map((match) => match.groups?.value ?? "");
@@ -556,22 +617,15 @@ const buildOf = (versions: string | null): ForkBuild => {
 
 const factsOf = ({ artifacts, dump, version }: ProbeOutputs, fork: ForkPackage): ForkFacts => {
   const knobs = parseDump(dump);
-  const speech: SpeechPersona[] = [];
 
-  for (const artifact of artifacts) {
-    const kind = kindOf(artifact.file, knobs);
-
-    if (kind === "speech") {
-      speech.push(speechPersonaOf(artifact, knobs));
-    }
-  }
+  requireGlPersonaUnset(knobs);
 
   return {
     ...buildOf(fork.versions),
     dialect: "xrio",
     knobs,
     packageDir: fork.directory,
-    personas: { speech },
+    personas: personasOf(artifacts, knobs),
     version: parseVersion(version),
   };
 };
@@ -582,16 +636,39 @@ const personaDirOf = ({ directory }: ForkPackage, knobs: KnobRegistry): string =
     knobs["persona-dir"]?.value ?? knobs["persona-dir-name"]?.value ?? PERSONA_MARKER,
   );
 
+const readGlArtifact = async (
+  directory: string,
+  file: string,
+  maxBytes: number,
+): Promise<ArtifactText> => {
+  try {
+    const bytes = await buffer(createReadStream(path.join(directory, file), { end: maxBytes }));
+
+    return bytes.length > maxBytes
+      ? { file, oversized: true }
+      : { file, text: bytes.toString("utf-8") };
+  } catch (error) {
+    return {
+      file,
+      unreadable: error instanceof Error && "code" in error ? String(error.code) : messageOf(error),
+    };
+  }
+};
+
+const readArtifact = async (
+  directory: string,
+  file: string,
+  knobs: KnobRegistry,
+): Promise<ArtifactText> =>
+  kindOf(file, knobs) === "gl"
+    ? await readGlArtifact(directory, file, glArtifactLimitsOf(knobs).maxBytes)
+    : { file, text: await readFile(path.join(directory, file), "utf-8") };
+
 const readArtifacts = async (directory: string, knobs: KnobRegistry): Promise<ArtifactText[]> => {
   const names = await namesIn(directory);
   const files = names.filter((file) => kindOf(file, knobs) !== undefined);
 
-  return await Promise.all(
-    files.map(async (file) => ({
-      file,
-      text: await readFile(path.join(directory, file), "utf-8"),
-    })),
-  );
+  return await Promise.all(files.map(async (file) => await readArtifact(directory, file, knobs)));
 };
 
 interface ForkStops {

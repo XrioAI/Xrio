@@ -71,7 +71,7 @@ const FORK: ForkFacts = {
   dirty: null,
   knobs: {},
   packageDir: "/opt/xrio-chrome",
-  personas: { speech: [] },
+  personas: { gl: [], refusedGl: [], speech: [] },
   version: "154.0.8037.57",
 };
 
@@ -116,11 +116,11 @@ describe(hostDigest, () => {
     ].map((fork) => hostDigest({ fork, permittedCpus: 32, platform: "linux" }));
 
     expect(hosts).toStrictEqual([
-      "cd2978d6ab4db4a257ee232d8d2b7fd6543b7702a09bf972691354600f33f78f",
-      "bcb7b6a17c82dbb2998924e123ac25ec30016ef576d5980614501fdc96ba0db9",
-      "c763a12297711f8436a3bd74f02b386da7af556b25d668b3c820320ca40411c9",
-      "b07cb85ae1e5da77f3f626dff7dfbcc6dbb2aa263c8505d7caaa7a41476e4f19",
-      "b13c969f40a474cca7dbd3f2e243337596f677da1c51cbc0b050c4fc7150e81a",
+      "14cfc7acb3f102161c434eea597611d734fca18b42eb25499f188cf695206fde",
+      "d2aeaffdbf3c81bef36910e6bd08d1847610a49b9d41f46943f7aefb08fa577b",
+      "3c8b4dc7bad0be375ea1eca95b7ca4931f00d1787fe33c3378fc3bcb7a063342",
+      "ebe96ca0f521b6963d7a70688c63350cba5316cb813d125985fd4903d41d6550",
+      "d4c78faee493ad3729627ab47d4f197d5da8a1ba8074c1f91d10a27ecf736495",
     ]);
   });
 

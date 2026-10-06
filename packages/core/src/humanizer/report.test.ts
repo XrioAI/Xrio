@@ -145,7 +145,7 @@ const forkAt = (version: string, build: RecordedBuild = NO_BUILD): HostCapabilit
     dialect: "xrio",
     knobs: {},
     packageDir: "/opt/xrio-chrome",
-    personas: { speech: [] },
+    personas: { gl: [], refusedGl: [], speech: [] },
     version,
   },
   permittedCpus: 32,
@@ -297,7 +297,7 @@ describe("the identity report", () => {
           dirty: null,
           knobs: { "speech-persona": { origin: "set", value: "basharsx4-google-linux-154" } },
           packageDir: "/opt/xrio-chrome",
-          personas: { speech: [] },
+          personas: { gl: [], refusedGl: [], speech: [] },
           version: "154.0.8037.57",
         },
         permittedCpus: 32,
@@ -385,9 +385,9 @@ describe("the identity report", () => {
       ].map((report) => report.digests);
 
       expect(digests.map(({ host }) => host)).toStrictEqual([
-        "cd2978d6ab4db4a257ee232d8d2b7fd6543b7702a09bf972691354600f33f78f",
-        "bcb7b6a17c82dbb2998924e123ac25ec30016ef576d5980614501fdc96ba0db9",
-        "006d43d8bf963dc75c9de54ef6fc705dfc9eea6382470fb8933851a9ef625d88",
+        "14cfc7acb3f102161c434eea597611d734fca18b42eb25499f188cf695206fde",
+        "d2aeaffdbf3c81bef36910e6bd08d1847610a49b9d41f46943f7aefb08fa577b",
+        "82fddf92f789f08551828ac56c1ed19a816f23580c1a50ec7c6b080a029d42d4",
       ]);
       expect(digests.map(({ device }) => device)).toStrictEqual([
         DEVICE_DIGEST,
