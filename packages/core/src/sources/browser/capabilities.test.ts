@@ -1319,50 +1319,6 @@ describe("hostCapabilities GL artifacts the fork's loader refuses", () => {
     expect(stored.length).toBeLessThan(16_384);
   });
 
-  it("caps an artifact's bytes and name at the gl-table-max-bytes and gl-persona-max-name the dump sets", async () => {
-    const executable = await fakeForkPath("kit", { root });
-    const kitDump = await readFile(KIT_DUMP, "utf-8");
-    const directory = path.join(path.dirname(executable), "personas");
-
-    await replaceDump(
-      executable,
-      kitDump
-        .replace("[def] synthetic-knob-01 = 3", "[set] gl-table-max-bytes = 1024")
-        .replace("[def] synthetic-knob-02 = 6", "[set] gl-persona-max-name = 16"),
-    );
-
-    const files = {
-      fits: JSON.stringify(hideOnlyGl("fits")).padEnd(1024),
-      over: JSON.stringify(hideOnlyGl("over")).padEnd(1025),
-      "seventeen-letters": JSON.stringify(hideOnlyGl("seventeen-letters")),
-      "sixteen-letters1": JSON.stringify(hideOnlyGl("sixteen-letters1")),
-      wide: JSON.stringify({ ...hideOnlyGl("wide"), vendor: "é".repeat(300) }).padEnd(1024),
-    };
-
-    await Promise.all(
-      Object.entries(files).map(async ([stem, contents]) => {
-        await writeFile(path.join(directory, `${stem}${GL_SUFFIX}`), contents);
-      }),
-    );
-
-    const { fork } = await probeWith()(executable);
-
-    expect({
-      gl: fork?.personas.gl.map(({ name }) => name),
-      refusedGl: fork?.personas.refusedGl,
-      wide: [files.wide.length, Buffer.byteLength(files.wide)],
-    }).toStrictEqual({
-      gl: ["fits", "sixteen-letters1", "synthetic-gpu"],
-      refusedGl: [
-        { reason: "is over the 1024 bytes the fork reads", stem: "over" },
-        { reason: "has a name the fork cannot select", stem: "seventeen-letters" },
-        { reason: "has a name the fork cannot select", stem: "synthetic-swiftshader-hidden" },
-        { reason: "is over the 1024 bytes the fork reads", stem: "wide" },
-      ],
-      wide: [1024, 1324],
-    });
-  });
-
   it("keeps facts that list an unreadable artifact for the next process, and probes again after a chmod either way", async () => {
     const executable = await fakeForkPath("kit", { root });
     const locked = path.join(path.dirname(executable), "personas", `locked${GL_SUFFIX}`);
@@ -1558,6 +1514,166 @@ const storedRendererIn = async (root: string): Promise<string> => {
 
   return await readFile(path.join(root, "scratch", file), "utf-8");
 };
+
+const cappedFork = async (root: string, maxBytes: string, maxName: string, origin = "set") => {
+  const executable = await fakeForkPath("kit", { root });
+  const kitDump = await readFile(KIT_DUMP, "utf-8");
+
+  await replaceDump(
+    executable,
+    kitDump
+      .replace("[def] synthetic-knob-01 = 3", `[${origin}] gl-table-max-bytes = ${maxBytes}`)
+      .replace("[def] synthetic-knob-02 = 6", `[${origin}] gl-persona-max-name = ${maxName}`),
+  );
+
+  return executable;
+};
+
+const personasBeside = async (
+  root: string,
+  executable: string,
+  files: Readonly<Record<string, string>>,
+) => {
+  const directory = path.join(path.dirname(executable), "personas");
+
+  await Promise.all(
+    Object.entries(files).map(async ([stem, contents]) => {
+      await writeFile(path.join(directory, `${stem}${GL_SUFFIX}`), contents);
+    }),
+  );
+
+  const { fork } = await glProbeIn(root)(executable);
+
+  return fork?.personas;
+};
+
+describe("hostCapabilities GL caps the dump sets", () => {
+  let root = "";
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-capabilities-gl-caps-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it.each([
+    ["1024", "16"],
+    ["+1024", "+16"],
+    ["01024", "016"],
+    ["+001024", "+0016"],
+  ])(
+    "caps an artifact's bytes and name at a gl-table-max-bytes of %s and a gl-persona-max-name of %s, as the fork reads them",
+    async (maxBytes, maxName) => {
+      const files = {
+        fits: JSON.stringify(hideOnlyGl("fits")).padEnd(1024),
+        over: JSON.stringify(hideOnlyGl("over")).padEnd(1025),
+        "seventeen-letters": JSON.stringify(hideOnlyGl("seventeen-letters")),
+        "sixteen-letters1": JSON.stringify(hideOnlyGl("sixteen-letters1")),
+        wide: JSON.stringify({ ...hideOnlyGl("wide"), vendor: "é".repeat(300) }).padEnd(1024),
+      };
+
+      const personas = await personasBeside(root, await cappedFork(root, maxBytes, maxName), files);
+
+      expect({
+        gl: personas?.gl.map(({ name }) => name),
+        refusedGl: personas?.refusedGl,
+        wide: [files.wide.length, Buffer.byteLength(files.wide)],
+      }).toStrictEqual({
+        gl: ["fits", "sixteen-letters1", "synthetic-gpu"],
+        refusedGl: [
+          { reason: "is over the 1024 bytes the fork reads", stem: "over" },
+          { reason: "has a name the fork cannot select", stem: "seventeen-letters" },
+          { reason: "has a name the fork cannot select", stem: "synthetic-swiftshader-hidden" },
+          { reason: "is over the 1024 bytes the fork reads", stem: "wide" },
+        ],
+        wide: [1024, 1324],
+      });
+    },
+  );
+
+  it("caps nothing a file can reach at the largest gl-table-max-bytes and gl-persona-max-name the fork reads", async () => {
+    const executable = await cappedFork(root, "9223372036854775807", "9223372036854775807");
+    const longName = "r".repeat(129);
+
+    const personas = await personasBeside(root, executable, {
+      big: JSON.stringify(hideOnlyGl("big")).padEnd(262_145),
+      [longName]: JSON.stringify(hideOnlyGl(longName)),
+    });
+
+    expect([glOnly(personas, "big"), glOnly(personas, longName)]).toStrictEqual([
+      { kind: "hide-only", refusal: undefined },
+      { kind: "hide-only", refusal: undefined },
+    ]);
+  });
+
+  it("caps an artifact at 262,144 bytes and a name at 128 characters when the dump prints both caps unset", async () => {
+    const executable = await cappedFork(root, "<unset>", "<unset>", "def");
+    const [fitting, overlong] = ["r".repeat(128), "r".repeat(129)];
+
+    const personas = await personasBeside(root, executable, {
+      fits: JSON.stringify(hideOnlyGl("fits")).padEnd(262_144),
+      over: JSON.stringify(hideOnlyGl("over")).padEnd(262_145),
+      [fitting]: JSON.stringify(hideOnlyGl(fitting)),
+      [overlong]: JSON.stringify(hideOnlyGl(overlong)),
+    });
+
+    expect([
+      glOnly(personas, "fits"),
+      glOnly(personas, "over"),
+      glOnly(personas, fitting),
+      glOnly(personas, overlong),
+    ]).toStrictEqual([
+      { kind: "hide-only", refusal: undefined },
+      { kind: undefined, refusal: "is over the 262144 bytes the fork reads" },
+      { kind: "hide-only", refusal: undefined },
+      { kind: undefined, refusal: "has a name the fork cannot select" },
+    ]);
+  });
+
+  it.each([
+    ["gl-table-max-bytes", "0", '"0"'],
+    ["gl-table-max-bytes", "-0", '"-0"'],
+    ["gl-table-max-bytes", "+0", '"+0"'],
+    ["gl-table-max-bytes", "-1024", '"-1024"'],
+    ["gl-table-max-bytes", " 1024", '" 1024"'],
+    ["gl-table-max-bytes", "\t1024", '"\\t1024"'],
+    ["gl-table-max-bytes", "1024 ", '"1024 "'],
+    ["gl-table-max-bytes", "9223372036854775808", '"9223372036854775808"'],
+    ["gl-table-max-bytes", "-9223372036854775809", '"-9223372036854775809"'],
+    ["gl-table-max-bytes", "", '""'],
+    ["gl-table-max-bytes", "+", '"+"'],
+    ["gl-table-max-bytes", "++1024", '"++1024"'],
+    ["gl-table-max-bytes", "0x400", '"0x400"'],
+    ["gl-table-max-bytes", "1e3", '"1e3"'],
+    ["gl-table-max-bytes", "1024.0", '"1024.0"'],
+    ["gl-table-max-bytes", "1_024", '"1_024"'],
+    ["gl-table-max-bytes", "１０２４", '"１０２４"'],
+    ["gl-table-max-bytes", "abc", '"abc"'],
+    ["gl-persona-max-name", "0", '"0"'],
+    ["gl-persona-max-name", "+0", '"+0"'],
+    ["gl-persona-max-name", " 16", '" 16"'],
+    ["gl-persona-max-name", "9223372036854775808", '"9223372036854775808"'],
+    ["gl-persona-max-name", "", '""'],
+  ])(
+    "fails the probe when the dump sets %s to %j, which the fork refuses at launch",
+    async (knob, value, shown) => {
+      const capped = { "gl-persona-max-name": "16", "gl-table-max-bytes": "1024", [knob]: value };
+
+      const executable = await cappedFork(
+        root,
+        capped["gl-table-max-bytes"],
+        capped["gl-persona-max-name"],
+      );
+
+      await expect(failureOf(glProbeIn(root)(executable))).resolves.toStrictEqual({
+        code: "BROWSER_LAUNCH_FAILED",
+        message: `The Xrio fork package at ${await packageOf(executable)} failed its probe: the dump sets ${knob} to ${shown}, which the fork does not read as an integer of at least 1, so it would refuse to launch.`,
+      });
+    },
+  );
+});
 
 describe("hostCapabilities host renderer", () => {
   let root = "";

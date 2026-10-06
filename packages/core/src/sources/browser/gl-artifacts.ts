@@ -1,10 +1,5 @@
-import type {
-  GlPersona,
-  GlPersonaKind,
-  KnobRegistry,
-  RefusedGlArtifact,
-} from "../../humanizer/contracts.ts";
-import { GL_PERSONA_MAX_NAME, isGlPersonaName } from "../../humanizer/owned-inputs.ts";
+import type { GlPersona, GlPersonaKind, RefusedGlArtifact } from "../../humanizer/contracts.ts";
+import { isGlPersonaName } from "../../humanizer/owned-inputs.ts";
 
 export const GL_ARTIFACT_SCHEMA = "xrio-gl-table/v2";
 
@@ -16,10 +11,6 @@ export interface GlArtifactLimits {
   readonly maxBytes: number;
   readonly maxNameLength: number;
 }
-
-const GL_TABLE_MAX_BYTES = 262_144;
-
-const POSITIVE_INTEGER = /^[1-9]\d*$/u;
 
 const INT_MIN = -2_147_483_648;
 
@@ -220,19 +211,6 @@ const readingOf = (body: GlBody, stem: string, maxNameLength: number): GlArtifac
     },
   };
 };
-
-const knobLimitOf = (knobs: KnobRegistry, knob: string, unset: number): number => {
-  const value = knobs[knob]?.value ?? "";
-
-  return POSITIVE_INTEGER.test(value) && Number.isSafeInteger(Number(value))
-    ? Number(value)
-    : unset;
-};
-
-export const glArtifactLimitsOf = (knobs: KnobRegistry): GlArtifactLimits => ({
-  maxBytes: knobLimitOf(knobs, "gl-table-max-bytes", GL_TABLE_MAX_BYTES),
-  maxNameLength: knobLimitOf(knobs, "gl-persona-max-name", GL_PERSONA_MAX_NAME),
-});
 
 export const parseGlArtifact = (
   stem: string,

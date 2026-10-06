@@ -22,7 +22,7 @@ import type {
   KnobRegistry,
   SpeechPersona,
 } from "../../humanizer/contracts.ts";
-import { FORK_DUMP_SWITCH } from "../../humanizer/owned-inputs.ts";
+import { FORK_DUMP_SWITCH, GL_PERSONA_MAX_NAME } from "../../humanizer/owned-inputs.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
   createScratchDir,
@@ -33,7 +33,7 @@ import {
 } from "./browser-process.ts";
 import { fileIdentityOf } from "./file-identity.ts";
 import { createFontStackCheck, fontStackBeside } from "./font-stack.ts";
-import { GL_ARTIFACT_SCHEMA, glArtifactLimitsOf, parseGlArtifact } from "./gl-artifacts.ts";
+import { GL_ARTIFACT_SCHEMA, parseGlArtifact } from "./gl-artifacts.ts";
 import type { GlArtifactLimits, GlArtifactReading } from "./gl-artifacts.ts";
 import { killProcessGroup, retireProcessGroup } from "./group-lifetime.ts";
 import { createHostRendererReader } from "./host-renderer.ts";
@@ -94,6 +94,14 @@ const DUMP_ROW = /^\[(?<origin>set|def|umb|der)\] (?<key>[\da-z-]+) =(?: (?<valu
 const VERSION = /\b(?<version>\d+\.\d+\.\d+\.\d+)\b/u;
 
 const DIGEST = /^sha256:[\da-f]{64}$/u;
+
+const GL_TABLE_MAX_BYTES = 262_144;
+
+const FORK_INTEGER = /^[+-]?\d+$/u;
+
+const FORK_INTEGER_MAX = 9_223_372_036_854_775_807n;
+
+const SAFE_INTEGER_MAX = BigInt(Number.MAX_SAFE_INTEGER);
 
 const ARTIFACT_KINDS = {
   gl: { schema: GL_ARTIFACT_SCHEMA, suffixKnob: "gl-table-suffix" },
@@ -469,6 +477,29 @@ const parseVersion = (output: string): string => {
 
   return version;
 };
+
+const knobLimitOf = (knobs: KnobRegistry, knob: string, unset: number): number => {
+  const value = knobs[knob]?.value ?? null;
+
+  if (value === null) {
+    return unset;
+  }
+
+  const limit = FORK_INTEGER.test(value) ? BigInt(value) : undefined;
+
+  if (limit === undefined || limit < 1n || limit > FORK_INTEGER_MAX) {
+    throw new ForkProbeError(
+      `the dump sets ${knob} to ${JSON.stringify(value)}, which the fork does not read as an integer of at least 1, so it would refuse to launch`,
+    );
+  }
+
+  return Number(limit < SAFE_INTEGER_MAX ? limit : SAFE_INTEGER_MAX);
+};
+
+const glArtifactLimitsOf = (knobs: KnobRegistry): GlArtifactLimits => ({
+  maxBytes: knobLimitOf(knobs, "gl-table-max-bytes", GL_TABLE_MAX_BYTES),
+  maxNameLength: knobLimitOf(knobs, "gl-persona-max-name", GL_PERSONA_MAX_NAME),
+});
 
 const suffixOf = (kind: ArtifactKind, knobs: KnobRegistry): string | null =>
   knobs[ARTIFACT_KINDS[kind].suffixKnob]?.value ?? null;
