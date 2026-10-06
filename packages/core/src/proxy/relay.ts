@@ -13,6 +13,12 @@ import type { Deadline } from "../deadline.ts";
 import { XrioError } from "../errors.ts";
 import type { ProxyEndpoint } from "../types.ts";
 
+declare module "node:tls" {
+  interface ConnectionOptions {
+    readonly allowHalfOpen?: boolean;
+  }
+}
+
 const DIAL_TIMEOUT_MS = 10_000;
 
 const CONNECT_REPLY_TIMEOUT_MS = 10_000;
@@ -453,6 +459,7 @@ class ProxyRelay {
     const socket = this.track(
       useTls
         ? connectTls({
+            allowHalfOpen: true,
             host,
             port,
             servername: isIP(host) === 0 ? host : undefined,

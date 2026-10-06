@@ -1,6 +1,8 @@
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { connect, createServer as createTcpServer } from "node:net";
 import type { Server, Socket } from "node:net";
 
@@ -16,7 +18,10 @@ export interface FakeProxyBehaviour {
   readonly connectStatus?: number;
   readonly requireCredentials?: string;
   readonly silent?: boolean;
+  readonly secure?: boolean;
 }
+
+export const TEST_ONLY_CERT = readFileSync(new URL("test-only-cert.pem", import.meta.url));
 
 const SOCKS_VERSION = 5;
 
@@ -64,7 +69,15 @@ const pipeBothWays = (left: Socket, right: Socket) => {
 
 export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise<FakeProxy> => {
   const requests: FakeProxy["requests"] = [];
-  const server = createServer();
+
+  const server =
+    behaviour.secure === true
+      ? createHttpsServer({
+          cert: TEST_ONLY_CERT,
+          key: readFileSync(new URL("test-only-key.pem", import.meta.url)),
+        })
+      : createServer();
+
   const sockets = trackSockets(server);
 
   const isAuthorized = (request: IncomingMessage) =>
@@ -90,11 +103,14 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
       return;
     }
 
-    const upstream = connect(behaviour.tunnelTo, "127.0.0.1", () => {
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      upstream.write(head);
-      pipeBothWays(socket, upstream);
-    });
+    const upstream = connect(
+      { allowHalfOpen: true, host: "127.0.0.1", port: behaviour.tunnelTo },
+      () => {
+        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        upstream.write(head);
+        pipeBothWays(socket, upstream);
+      },
+    );
 
     upstream.on("error", () => {
       socket.destroy();
@@ -140,7 +156,7 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
   return {
     [Symbol.asyncDispose]: disposeServer(server, sockets),
     requests,
-    url: `http://127.0.0.1:${port}`,
+    url: `${behaviour.secure === true ? "https" : "http"}://127.0.0.1:${port}`,
   };
 };
 
