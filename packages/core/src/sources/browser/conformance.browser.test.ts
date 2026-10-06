@@ -30,6 +30,7 @@ import { noPins } from "../../testing/no-pins.ts";
 import { plannedScrapes } from "../../testing/planned-scrapes.ts";
 import type { PlannedScrapes } from "../../testing/planned-scrapes.ts";
 import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../testing/processes.ts";
+import { expectSentHardware } from "../../testing/sent-hardware.ts";
 import type { SourceDocument } from "../../types.ts";
 import {
   createScratchDir,
@@ -744,6 +745,39 @@ describe.each(MODES)("the hardware reads on the conformance pages, %s", (mode) =
     const realms = IDENTITY_REALMS.exec(html)?.groups?.realms ?? "";
 
     expect(realms.match(REALM_HARDWARE_ROW)).toHaveLength(REALM_COUNT);
+  });
+
+  it("reads the drawn cores and memory on /identity wherever the launch sent them", async () => {
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const sent = expectSentHardware(identity);
+    const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+    expect(report).toMatchObject(
+      sent === undefined ? {} : { deviceMemory: sent.memoryGb, hardwareConcurrency: sent.cores },
+    );
+  });
+
+  it("sends the drawn memory as the Device-Memory hints wherever the launch sent it", async () => {
+    const { html, identity } = await load(mode, "/client-hints");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const sent = expectSentHardware(identity);
+    const echoed = CLIENT_HINTS_ECHO.exec(html)?.groups?.headers ?? "";
+
+    const wanted =
+      sent === undefined
+        ? DEVICE_MEMORY_HEADER
+        : new RegExp(`"device-memory":"${sent.memoryGb}"`, "u");
+
+    expect(echoed).toMatch(wanted);
   });
 
   it("echoes the Device-Memory hints that /client-hints asked for", async () => {
