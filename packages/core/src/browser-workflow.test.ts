@@ -21,7 +21,6 @@ import { startDeadline, untilDeadline } from "./deadline.ts";
 import type { Deadline } from "./deadline.ts";
 import { isXrioError } from "./errors.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
-import { AFTER_CAPTURE_READ } from "./humanizer/verify.ts";
 import { HeldDeadline } from "./lifetime.ts";
 import { anonymousSessions } from "./sessions/session.ts";
 import type { SessionManager } from "./sessions/session.ts";
@@ -1401,6 +1400,7 @@ describe("the launch identity check", () => {
         screen: { state: "observed" },
         timezone: { state: "observed" },
         webglStrings: { state: "observed" },
+        webgpu: { state: "observed" },
       },
       exit: { facts: { kind: "unknown" }, route: "direct" },
       mode: "headless",
@@ -1415,6 +1415,7 @@ describe("the launch identity check", () => {
             "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
           vendor: "Google Inc. (Google)",
         },
+        webgpuAdapter: null,
         window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
       },
       seed: fixedSeed,
@@ -1861,6 +1862,8 @@ describe("the identity-chosen event", () => {
   );
 });
 
+const isAfterCaptureRead = (expression: string): boolean => expression.includes("isSecureContext");
+
 const readingAfterCaptureWith = (read: (deadline: Deadline) => Promise<string>): BrowserDriver => ({
   launch: async (plan, deadline, owned, deferCleanup) => {
     const browser = await cdpDriver.launch(plan, deadline, owned, deferCleanup);
@@ -1868,7 +1871,7 @@ const readingAfterCaptureWith = (read: (deadline: Deadline) => Promise<string>):
     return {
       ...browser,
       evaluateIsolated: async (expression, isResult, readDeadline) => {
-        if (expression !== AFTER_CAPTURE_READ) {
+        if (!isAfterCaptureRead(expression)) {
           return await browser.evaluateIsolated(expression, isResult, readDeadline);
         }
 
@@ -1900,6 +1903,7 @@ const SECURE_READING = JSON.stringify({
   deviceMemory: 8,
   kind: "secure",
   webgpu: false,
+  webgpuAdapter: { kind: "none" },
 });
 
 const secureContextUnchecked = (reason: string) => ({
@@ -1956,7 +1960,7 @@ describe("the after-capture read", () => {
           return {
             ...browser,
             evaluateIsolated: async (expression, isResult, readDeadline) => {
-              afterCaptureReads += expression === AFTER_CAPTURE_READ ? 1 : 0;
+              afterCaptureReads += isAfterCaptureRead(expression) ? 1 : 0;
 
               const value = await browser.evaluateIsolated(expression, isResult, readDeadline);
 

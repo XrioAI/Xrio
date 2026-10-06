@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
-import type { HostCapabilities, Observation } from "./contracts.ts";
+import type { HostCapabilities, Observation, WebGpuAdapterReading } from "./contracts.ts";
 import { httpIdentity, planIdentity } from "./humanizer.ts";
 import type { IdentityReport } from "./report.ts";
 import { evaluate } from "./verify.ts";
@@ -32,6 +32,7 @@ const headlessLinux: Observation = {
     deviceMemory: 8,
     kind: "secure",
     webgpu: false,
+    webgpuAdapter: { kind: "none" },
   },
   anyPointer: "fine",
   availHeight: 1018,
@@ -269,6 +270,7 @@ describe("the identity report", () => {
             vendor: "Google Inc. (Google)",
           },
           webgpu: false,
+          webgpuAdapter: null,
           window: { outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
         },
         record: plan.chosen.record,
@@ -465,6 +467,7 @@ describe("the identity report", () => {
             vendor: "Google Inc. (Google)",
           },
           webgpu: null,
+          webgpuAdapter: null,
           window: { outerHeight: 900, outerWidth: 1600, screenX: 22, screenY: 22 },
         },
         record: {
@@ -538,6 +541,88 @@ describe("the secure-context surfaces' coverage", () => {
   );
 });
 
+const secureWith = (webgpuAdapter: WebGpuAdapterReading): Observation["afterCapture"] => ({
+  battery: true,
+  clientHints: linuxClientHints,
+  deviceMemory: 8,
+  kind: "secure",
+  webgpu: true,
+  webgpuAdapter,
+});
+
+describe("the WebGPU adapter's report", () => {
+  const plan = planIdentity({
+    capabilities: { permittedCpus: 32, platform: "linux" },
+    device: fixedDevice,
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: "UTC",
+    mode: "headless",
+    pins: noPins,
+  });
+
+  it.each([
+    { adapter: { kind: "none" } as const, observed: null },
+    {
+      adapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" } as const,
+      observed: { architecture: "swiftshader", vendor: "google" },
+    },
+  ])("is observed for a $adapter.kind reading", ({ adapter, observed }) => {
+    const { report } = evaluate(plan, { ...headlessLinux, afterCapture: secureWith(adapter) });
+
+    expect({
+      battery: report.coverage.battery,
+      clientHints: report.coverage.clientHints,
+      deviceMemory: report.coverage.deviceMemory,
+      webgpu: report.coverage.webgpu,
+      webgpuAdapter: report.observed.webgpuAdapter,
+    }).toStrictEqual({
+      battery: { state: "observed" },
+      clientHints: { state: "observed" },
+      deviceMemory: { state: "observed" },
+      webgpu: { state: "observed" },
+      webgpuAdapter: observed,
+    });
+  });
+
+  it.each([
+    { adapter: { kind: "timed-out" } as const, reason: "no-time" },
+    { adapter: { kind: "failed" } as const, reason: "read-failed" },
+  ])(
+    "is unchecked with $reason for a $adapter.kind reading, and costs nothing else",
+    ({ adapter, reason }) => {
+      const { report } = evaluate(plan, { ...headlessLinux, afterCapture: secureWith(adapter) });
+
+      expect({
+        battery: report.coverage.battery,
+        clientHints: report.coverage.clientHints,
+        deviceMemory: report.coverage.deviceMemory,
+        observed: [report.observed.deviceMemory, report.observed.battery],
+        webgpu: report.coverage.webgpu,
+        webgpuAdapter: report.observed.webgpuAdapter,
+      }).toStrictEqual({
+        battery: { state: "observed" },
+        clientHints: { state: "observed" },
+        deviceMemory: { state: "observed" },
+        observed: [8, true],
+        webgpu: { reason, state: "unchecked" },
+        webgpuAdapter: null,
+      });
+    },
+  );
+
+  it("reports no adapter for a page that was not a secure context", () => {
+    const { coverage, observed } = evaluate(plan, {
+      ...headlessLinux,
+      afterCapture: { kind: "insecure" },
+    }).report;
+
+    expect({ coverage: coverage.webgpu, observed: observed.webgpuAdapter }).toStrictEqual({
+      coverage: { reason: "insecure-origin", state: "unchecked" },
+      observed: null,
+    });
+  });
+});
+
 describe("the WebGL strings' coverage", () => {
   const plan = planIdentity({
     capabilities: { permittedCpus: 32, platform: "linux" },
@@ -592,6 +677,7 @@ describe("a secure origin whose individual reads gave nothing", () => {
         deviceMemory: null,
         kind: "secure",
         webgpu: false,
+        webgpuAdapter: { kind: "none" },
       },
     }).report;
 

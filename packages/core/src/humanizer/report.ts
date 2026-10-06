@@ -90,6 +90,7 @@ export interface ObservedIdentity {
   readonly clientHints: ClientHints | null;
   readonly battery: boolean | null;
   readonly webgpu: boolean | null;
+  readonly webgpuAdapter: { readonly vendor: string; readonly architecture: string } | null;
   readonly webgl: {
     readonly vendor: string | null;
     readonly renderer: string | null;
@@ -154,6 +155,31 @@ const secureContextOf = (afterCapture: AfterCapture) =>
     ? afterCapture
     : { battery: null, clientHints: null, deviceMemory: null, webgpu: null };
 
+const ADAPTER_UNREAD_REASON: Readonly<Record<"timed-out" | "failed", CoverageReason>> = {
+  failed: "read-failed",
+  "timed-out": "no-time",
+};
+
+const webgpuCoverage = (afterCapture: AfterCapture): Coverage => {
+  if (afterCapture.kind !== "secure") {
+    return afterCaptureCoverage(afterCapture);
+  }
+
+  const { webgpuAdapter } = afterCapture;
+
+  return webgpuAdapter.kind === "timed-out" || webgpuAdapter.kind === "failed"
+    ? unchecked(ADAPTER_UNREAD_REASON[webgpuAdapter.kind])
+    : observedCoverage();
+};
+
+const webgpuAdapterOf = (afterCapture: AfterCapture): ObservedIdentity["webgpuAdapter"] =>
+  afterCapture.kind === "secure" && afterCapture.webgpuAdapter.kind === "adapter"
+    ? {
+        architecture: afterCapture.webgpuAdapter.architecture,
+        vendor: afterCapture.webgpuAdapter.vendor,
+      }
+    : null;
+
 const readCoverage = (afterCapture: AfterCapture, gotValue: boolean): Coverage =>
   afterCapture.kind === "secure" && !gotValue
     ? unchecked("read-failed")
@@ -211,7 +237,7 @@ export const coverageOf = (
     voices: unchecked("not-observed"),
     webglPixels: unchecked("lanes-only"),
     webglStrings: observedCoverage(),
-    webgpu: afterCaptureCoverage(afterCapture),
+    webgpu: webgpuCoverage(afterCapture),
     webrtc: unchecked("not-observed"),
     window: observedCoverage(),
     workArea: observedCoverage(),
@@ -258,6 +284,7 @@ export const observedOf = (
       vendor: observation.webglVendor,
     },
     webgpu,
+    webgpuAdapter: webgpuAdapterOf(observation.afterCapture),
     window: {
       outerHeight: observation.outerHeight,
       outerWidth: observation.outerWidth,

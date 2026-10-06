@@ -8,6 +8,7 @@ import type {
   FontEvidence,
   Observation,
   SecureContextReading,
+  WebGpuAdapterReading,
 } from "./contracts.ts";
 import { FONT_PROBE_FAMILIES, FONT_SENTINEL_FAMILIES } from "./fonts.ts";
 import type { FontRead } from "./fonts.ts";
@@ -28,6 +29,8 @@ const PLAUSIBLE_COLOR_DEPTH = 24;
 const UNRESOLVED_ZONE = "Etc/Unknown";
 
 const HEADLESS_TOKEN = "HeadlessChrome/";
+
+const WEBGPU_ADAPTER_CAP_MS = 100;
 
 type ReadField = Exclude<keyof Observation, "product" | "afterCapture">;
 
@@ -213,12 +216,40 @@ const CLIENT_HINTS = {
 const isClientHintsOrNull = (value: unknown): value is ClientHints | null =>
   value === null || (isObject(value) && fieldsHold(CLIENT_HINTS, new Map(Object.entries(value))));
 
+const hasText = (fields: ReadonlyMap<string, unknown>, key: string): boolean =>
+  isText(fields.get(key));
+
+const isWebGpuAdapterReading = (value: unknown): value is WebGpuAdapterReading => {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  const fields = new Map(Object.entries(value));
+
+  switch (fields.get("kind")) {
+    case "adapter": {
+      return hasText(fields, "vendor") && hasText(fields, "architecture");
+    }
+
+    case "none":
+    case "timed-out":
+    case "failed": {
+      return true;
+    }
+
+    default: {
+      return false;
+    }
+  }
+};
+
 const SECURE_CONTEXT_READING = {
   battery: isFlag,
   clientHints: isClientHintsOrNull,
   deviceMemory: isNumberOrNull,
   kind: (value: unknown): value is "secure" => value === "secure",
   webgpu: isFlag,
+  webgpuAdapter: isWebGpuAdapterReading,
 } satisfies Guards<SecureContextReading>;
 
 const isSecureContextReading = (value: unknown): value is SecureContextReading =>
@@ -573,7 +604,7 @@ const READ_SOURCE = `(requested, fonts) => {
   });
 }`;
 
-const AFTER_CAPTURE_SOURCE = `async () => {
+const AFTER_CAPTURE_SOURCE = `async (adapterBoundMs) => {
   if (!isSecureContext) {
     return JSON.stringify({ kind: "insecure" });
   }
@@ -591,7 +622,7 @@ const AFTER_CAPTURE_SOURCE = `async () => {
     Array.isArray(value)
       ? value.map(({ brand, version }) => ({ brand: String(brand), version: String(version) }))
       : null;
-  const clientHints = await settled(async () => {
+  const readClientHints = () => settled(async () => {
     const hints = await navigator.userAgentData.getHighEntropyValues([
       "architecture",
       "bitness",
@@ -613,6 +644,38 @@ const AFTER_CAPTURE_SOURCE = `async () => {
       wow64: flag(hints.wow64),
     };
   });
+  const adapterRead = async () => {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+
+      return adapter === null
+        ? { kind: "none" }
+        : {
+            kind: "adapter",
+            vendor: String(adapter.info.vendor),
+            architecture: String(adapter.info.architecture),
+          };
+    } catch {
+      return { kind: "failed" };
+    }
+  };
+  const readWebgpuAdapter = async () => {
+    if (!navigator.gpu) {
+      return { kind: "none" };
+    }
+
+    let timer;
+    const timedOut = new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ kind: "timed-out" }), adapterBoundMs);
+    });
+
+    try {
+      return await Promise.race([adapterRead(), timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const [clientHints, webgpuAdapter] = await Promise.all([readClientHints(), readWebgpuAdapter()]);
 
   return JSON.stringify({
     kind: "secure",
@@ -620,10 +683,12 @@ const AFTER_CAPTURE_SOURCE = `async () => {
     clientHints,
     battery: typeof navigator.getBattery === "function",
     webgpu: "gpu" in navigator,
+    webgpuAdapter,
   });
 }`;
 
-export const AFTER_CAPTURE_READ = `(${AFTER_CAPTURE_SOURCE})()`;
+export const afterCaptureRead = (budgetMs: number): string =>
+  `(${AFTER_CAPTURE_SOURCE})(${Math.min(WEBGPU_ADAPTER_CAP_MS, Math.floor(budgetMs / 2))})`;
 
 export const identityRead = (requestedZone: string, fonts: FontRead): string =>
   `(${READ_SOURCE})(${JSON.stringify(requestedZone)}, ${JSON.stringify(fonts)})`;

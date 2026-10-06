@@ -201,12 +201,19 @@ export interface ClientHints {
   readonly wow64: boolean | null;
 }
 
+export type WebGpuAdapterReading =
+  | { readonly kind: "adapter"; readonly vendor: string; readonly architecture: string }
+  | { readonly kind: "none" }
+  | { readonly kind: "timed-out" }
+  | { readonly kind: "failed" };
+
 export interface SecureContextReading {
   readonly kind: "secure";
   readonly deviceMemory: number | null;
   readonly clientHints: ClientHints | null;
   readonly battery: boolean;
   readonly webgpu: boolean;
+  readonly webgpuAdapter: WebGpuAdapterReading;
 }
 
 export type AfterCapture =

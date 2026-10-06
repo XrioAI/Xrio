@@ -18,7 +18,7 @@ import type {
   Resolutions,
   SurfaceChoices,
 } from "./surfaces.ts";
-import { AFTER_CAPTURE_READ, identityRead } from "./verify.ts";
+import { afterCaptureRead, identityRead } from "./verify.ts";
 import type { FactTell, SurfaceExpectation } from "./verify.ts";
 
 interface ChosenIdentity {
@@ -38,7 +38,10 @@ interface ChosenIdentity {
 export interface IdentityPlan {
   readonly inputs: BrowserInputs;
   readonly expected: readonly SurfaceExpectation[];
-  readonly read: { readonly beforeNavigation: string; readonly afterCapture: string };
+  readonly read: {
+    readonly beforeNavigation: string;
+    readonly afterCapture: (budgetMs: number) => string;
+  };
   readonly tells: readonly FactTell[];
   readonly chosen: ChosenIdentity;
   readonly fontEvidence: FontEvidence | undefined;
@@ -116,7 +119,7 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
     fontEvidence: context.capabilities.fontEvidence,
     inputs: mergeBrowserInputs(resolutions),
     read: {
-      afterCapture: AFTER_CAPTURE_READ,
+      afterCapture: afterCaptureRead,
       beforeNavigation: identityRead(
         resolutions.timezone.value.zone,
         context.capabilities.fontEvidence === undefined ? "full" : "sentinel",

@@ -379,6 +379,7 @@ const SECURE_CONTEXT_READING = {
   deviceMemory: knobNumber("--xrio-device-memory", HOST_MEMORY_GB),
   kind: "secure",
   webgpu: false,
+  webgpuAdapter: { kind: "none" },
 };
 
 const AFTER_CAPTURE_READ: Json = {

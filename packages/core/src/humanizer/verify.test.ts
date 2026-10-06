@@ -10,7 +10,7 @@ import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import {
-  AFTER_CAPTURE_READ,
+  afterCaptureRead,
   describeMismatch,
   evaluate,
   identityRead,
@@ -357,6 +357,7 @@ const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
   deviceMemory,
   kind: "secure",
   webgpu: false,
+  webgpuAdapter: { kind: "none" },
 });
 
 describe("the hardware expectations", () => {
@@ -1039,9 +1040,13 @@ describe("the zone check run against the host's Intl", () => {
   });
 });
 
+const SWIFTSHADER_ADAPTER = { info: { architecture: "swiftshader", vendor: "google" } };
+
+const gpuOffering = (requestAdapter: () => Promise<object | null>) => ({ requestAdapter });
+
 const securePage = {
   getBattery: async () => await Promise.resolve({}),
-  gpu: {},
+  gpu: gpuOffering(async () => await Promise.resolve(null)),
   userAgentData: {
     getHighEntropyValues: async () =>
       await Promise.resolve({
@@ -1058,14 +1063,49 @@ const securePage = {
   },
 };
 
+type TimerHandle = number | ReturnType<typeof setTimeout>;
+
+interface Timers {
+  readonly clearTimeout: (timer: TimerHandle) => void;
+  readonly setTimeout: (fire: () => void, ms: number) => TimerHandle;
+}
+
+const realTimers: Timers = { clearTimeout, setTimeout };
+
 const readAfterCaptureIn = async (
   isSecureContext: boolean,
   navigator: Partial<typeof securePage> & { readonly deviceMemory?: number },
+  { budgetMs = 250, timers = realTimers }: { budgetMs?: number; timers?: Timers } = {},
 ): Promise<string> => {
-  const read: unknown = await runInNewContext(AFTER_CAPTURE_READ, { isSecureContext, navigator });
+  const read: unknown = await runInNewContext(afterCaptureRead(budgetMs), {
+    clearTimeout: timers.clearTimeout,
+    isSecureContext,
+    navigator,
+    setTimeout: timers.setTimeout,
+  });
 
   return String(read);
 };
+
+const neverSettles = async (): Promise<null> => await Promise.withResolvers<null>().promise;
+
+const firesAtOnce: Timers = {
+  clearTimeout: () => {},
+  setTimeout: (fire) => {
+    queueMicrotask(fire);
+
+    return 0;
+  },
+};
+
+const recordingTimers = (delays: number[]): Timers => ({
+  clearTimeout: () => {},
+  setTimeout: (_fire, ms) => {
+    delays.push(ms);
+
+    return 0;
+  },
+});
 
 describe("the after-capture read", () => {
   it("reads the secure-context surfaces on a secure origin", async () => {
@@ -1087,16 +1127,18 @@ describe("the after-capture read", () => {
       deviceMemory: 8,
       kind: "secure",
       webgpu: true,
+      webgpuAdapter: { kind: "none" },
     });
   });
 
-  it("reports what a page without the APIs exposes as null or false", async () => {
+  it("reports what a page without the APIs exposes as null, false or none", async () => {
     expect(readAfterCapture(await readAfterCaptureIn(true, {}))).toStrictEqual({
       battery: false,
       clientHints: null,
       deviceMemory: null,
       kind: "secure",
       webgpu: false,
+      webgpuAdapter: { kind: "none" },
     });
   });
 
@@ -1104,6 +1146,93 @@ describe("the after-capture read", () => {
     expect(readAfterCapture(await readAfterCaptureIn(false, securePage))).toStrictEqual({
       kind: "insecure",
     });
+  });
+
+  it.each([
+    {
+      expected: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+      gpu: gpuOffering(async () => await Promise.resolve(SWIFTSHADER_ADAPTER)),
+      kind: "adapter",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "none" },
+      gpu: gpuOffering(async () => await Promise.resolve(null)),
+      kind: "none",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      gpu: gpuOffering(async () => await Promise.reject(new Error("no adapter"))),
+      kind: "rejecting",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      gpu: gpuOffering(() => {
+        throw new Error("no adapter");
+      }),
+      kind: "throwing",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      gpu: gpuOffering(async () => await Promise.resolve({})),
+      kind: "adapter without info",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "timed-out" },
+      gpu: gpuOffering(neverSettles),
+      kind: "pending",
+      timers: firesAtOnce,
+    },
+  ])("reads the WebGPU adapter of a $kind request", async ({ expected, gpu, timers }) => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(true, { ...securePage, gpu }, { timers }),
+    );
+
+    expect(reading).toMatchObject({ kind: "secure", webgpu: true, webgpuAdapter: expected });
+  });
+
+  it("still reads the client hints when the adapter request never settles", async () => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(
+        true,
+        { ...securePage, deviceMemory: 4, gpu: gpuOffering(neverSettles) },
+        { timers: firesAtOnce },
+      ),
+    );
+
+    expect(reading).toMatchObject({
+      battery: true,
+      clientHints: { architecture: "x86", platform: "Linux" },
+      deviceMemory: 4,
+      webgpuAdapter: { kind: "timed-out" },
+    });
+  });
+
+  it.each([
+    { bound: 30, budgetMs: 60, call: ")(30)" },
+    { bound: 100, budgetMs: 250, call: ")(100)" },
+    { bound: 100, budgetMs: 200, call: ")(100)" },
+    { bound: 25, budgetMs: 50, call: ")(25)" },
+  ])(
+    "bounds the adapter request at $bound ms under a $budgetMs ms budget",
+    async ({ bound, budgetMs, call }) => {
+      const delays: number[] = [];
+
+      await readAfterCaptureIn(true, securePage, { budgetMs, timers: recordingTimers(delays) });
+      expect(delays).toStrictEqual([bound]);
+      expect(afterCaptureRead(budgetMs).slice(-call.length)).toBe(call);
+    },
+  );
+
+  it("starts no timer on a page without WebGPU", async () => {
+    const delays: number[] = [];
+
+    await readAfterCaptureIn(true, {}, { timers: recordingTimers(delays) });
+    expect(delays).toStrictEqual([]);
   });
 
   it.each([
@@ -1116,8 +1245,52 @@ describe("the after-capture read", () => {
         deviceMemory: 8,
         kind: "secure",
         webgpu: true,
+        webgpuAdapter: { kind: "none" },
       }),
       why: "a malformed client hint",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+      }),
+      why: "no adapter reading",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "adapter", vendor: "google" },
+      }),
+      why: "an adapter with no architecture",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: 7 },
+      }),
+      why: "an adapter with a numeric vendor",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "slow" },
+      }),
+      why: "an unknown adapter kind",
     },
   ])("refuses a reading with $why", ({ reading }) => {
     expect(() => readAfterCapture(reading)).toThrow(

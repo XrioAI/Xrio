@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { AFTER_CAPTURE_READ } from "../humanizer/verify.ts";
+import { afterCaptureRead } from "../humanizer/verify.ts";
 import { closedLoopbackPort } from "./fixture-server.ts";
 import type { FixtureHandler, FixtureOrigins } from "./fixture-server.ts";
 
@@ -658,7 +658,12 @@ const routes = new Map<
     "/watch-control",
     (response) => {
       requestedPaths.delete("/watch-seen");
-      sendPage(response, "watch-control", `<script>${AFTER_CAPTURE_READ}</script>`, WATCH_SCRIPT);
+      sendPage(
+        response,
+        "watch-control",
+        `<script>${afterCaptureRead(250)}</script>`,
+        WATCH_SCRIPT,
+      );
     },
   ],
   [

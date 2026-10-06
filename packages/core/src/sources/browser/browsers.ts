@@ -171,7 +171,7 @@ const verifyLaunch = async (
 
 const observeAfterCapture = async (
   browser: DriverBrowser,
-  read: string,
+  read: (budgetMs: number) => string,
   deadline: Deadline,
 ): Promise<AfterCapture> => {
   const budgetMs = Math.min(AFTER_CAPTURE_CAP_MS, Math.floor(deadline.remainingMs() / 2));
@@ -184,7 +184,7 @@ const observeAfterCapture = async (
     using stage = deadline.startStage(budgetMs);
 
     return readAfterCapture(
-      await browser.evaluateIsolated(read, isText, deadline.boundTo(stage.signal)),
+      await browser.evaluateIsolated(read(budgetMs), isText, deadline.boundTo(stage.signal)),
     );
   } catch {
     return { kind: "failed" };
