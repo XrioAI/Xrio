@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const FAKE_CHROME = fileURLToPath(new URL("fake-chrome.ts", import.meta.url));
 
+const PIPE_TEE_CHROME = fileURLToPath(new URL("pipe-tee-chrome.ts", import.meta.url));
+
 const CHECKOUT = createHash("sha256").update(FAKE_CHROME).digest("hex").slice(0, 16);
 
 export const fakeChromePath = async (scenario: string): Promise<string> => {
@@ -22,4 +24,20 @@ export const fakeChromePath = async (scenario: string): Promise<string> => {
   await rename(staged, executable);
 
   return executable;
+};
+
+export const pipeTeeChromePath = async (
+  chrome: string,
+  directory: string,
+): Promise<{ executable: string; log: string }> => {
+  const executable = path.join(directory, "chrome-pipe-tee");
+  const log = path.join(directory, "pipe-frames.jsonl");
+
+  await writeFile(
+    executable,
+    `#!/bin/sh\nexec env XRIO_TEE_CHROME=${JSON.stringify(chrome)} XRIO_TEE_LOG=${JSON.stringify(log)} "${process.execPath}" "${PIPE_TEE_CHROME}" "$@"\n`,
+  );
+  await chmod(executable, 0o755);
+
+  return { executable, log };
 };

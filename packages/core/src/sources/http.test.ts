@@ -326,7 +326,9 @@ describe("http mode", () => {
         url: "http://origin.test/",
       }),
     ).resolves.toMatchObject({ status: 200 });
-    expect(proxy.requests).toStrictEqual([{ authority: "origin.test", authorization: undefined }]);
+    expect(proxy.requests).toStrictEqual([
+      { authority: "origin.test", authorization: "user:secret" },
+    ]);
   });
 
   it.each([

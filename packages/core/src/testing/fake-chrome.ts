@@ -9,6 +9,7 @@ const SCENARIOS = [
   "normal",
   "fragmented",
   "no-start",
+  "argv-on-stderr",
   "old",
   "crash-on-navigate",
   "ignore-close",
@@ -741,6 +742,11 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
   }
 };
+
+if (scenario === "argv-on-stderr") {
+  process.stderr.write(`${process.argv.slice(2).join("\n")}\n`);
+  process.exit(1);
+}
 
 if (scenario === "no-start") {
   process.stderr.write("fatal: fake chrome cannot start\n");

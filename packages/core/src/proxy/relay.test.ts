@@ -170,7 +170,9 @@ describe(startRelay, () => {
     socket.end();
 
     await expect(received).resolves.toMatch(/hellobye$/u);
-    expect(fake.requests).toStrictEqual([{ authority: "origin.test", authorization: undefined }]);
+    expect(fake.requests).toStrictEqual([
+      { authority: "origin.test", authorization: "user:secret" },
+    ]);
   });
 
   it.each([
