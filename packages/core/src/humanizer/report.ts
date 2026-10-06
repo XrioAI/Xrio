@@ -1,10 +1,13 @@
 import type {
   AfterCapture,
+  BatteryReading,
   ClientHints,
   FontEvidence,
   HostCapabilities,
   DeviceRecord,
   Observation,
+  SecureContextReading,
+  WebGpuAdapterReading,
 } from "./contracts.ts";
 import type { ExitChoice, IdentityContext, SurfaceChoices } from "./surfaces.ts";
 import type { IdentityMismatch, IdentityTell } from "./verify.ts";
@@ -89,6 +92,7 @@ export interface ObservedIdentity {
   readonly deviceMemory: number | null;
   readonly clientHints: ClientHints | null;
   readonly battery: boolean | null;
+  readonly batteryState: { readonly charging: boolean; readonly level: number } | null;
   readonly webgpu: boolean | null;
   readonly webgpuAdapter: { readonly vendor: string; readonly architecture: string } | null;
   readonly webgl: {
@@ -155,22 +159,30 @@ const secureContextOf = (afterCapture: AfterCapture) =>
     ? afterCapture
     : { battery: null, clientHints: null, deviceMemory: null, webgpu: null };
 
-const ADAPTER_UNREAD_REASON: Readonly<Record<"timed-out" | "failed", CoverageReason>> = {
+const BOUNDED_UNREAD_REASON: Readonly<Record<"timed-out" | "failed", CoverageReason>> = {
   failed: "read-failed",
   "timed-out": "no-time",
 };
 
-const webgpuCoverage = (afterCapture: AfterCapture): Coverage => {
+const boundedCoverage = (
+  afterCapture: AfterCapture,
+  readingOf: (secure: SecureContextReading) => WebGpuAdapterReading | BatteryReading,
+): Coverage => {
   if (afterCapture.kind !== "secure") {
     return afterCaptureCoverage(afterCapture);
   }
 
-  const { webgpuAdapter } = afterCapture;
+  const reading = readingOf(afterCapture);
 
-  return webgpuAdapter.kind === "timed-out" || webgpuAdapter.kind === "failed"
-    ? unchecked(ADAPTER_UNREAD_REASON[webgpuAdapter.kind])
+  return reading.kind === "timed-out" || reading.kind === "failed"
+    ? unchecked(BOUNDED_UNREAD_REASON[reading.kind])
     : observedCoverage();
 };
+
+const batteryStateOf = (afterCapture: AfterCapture): ObservedIdentity["batteryState"] =>
+  afterCapture.kind === "secure" && afterCapture.batteryState.kind === "state"
+    ? { charging: afterCapture.batteryState.charging, level: afterCapture.batteryState.level }
+    : null;
 
 const webgpuAdapterOf = (afterCapture: AfterCapture): ObservedIdentity["webgpuAdapter"] =>
   afterCapture.kind === "secure" && afterCapture.webgpuAdapter.kind === "adapter"
@@ -214,7 +226,7 @@ export const coverageOf = (
 
   return {
     automation: observedCoverage(),
-    battery: afterCaptureCoverage(afterCapture),
+    battery: boundedCoverage(afterCapture, ({ batteryState }) => batteryState),
     clientHints: readCoverage(afterCapture, clientHints !== null),
     colorDepth: observedCoverage(),
     colorScheme: observedCoverage(),
@@ -237,7 +249,7 @@ export const coverageOf = (
     voices: unchecked("not-observed"),
     webglPixels: unchecked("lanes-only"),
     webglStrings: observedCoverage(),
-    webgpu: webgpuCoverage(afterCapture),
+    webgpu: boundedCoverage(afterCapture, ({ webgpuAdapter }) => webgpuAdapter),
     webrtc: unchecked("not-observed"),
     window: observedCoverage(),
     workArea: observedCoverage(),
@@ -253,6 +265,7 @@ export const observedOf = (
   return {
     anyPointer: observation.anyPointer,
     battery,
+    batteryState: batteryStateOf(observation.afterCapture),
     clientHints,
     colorScheme: observation.colorScheme,
     deviceMemory,

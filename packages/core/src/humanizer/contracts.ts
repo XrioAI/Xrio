@@ -233,11 +233,18 @@ export type WebGpuAdapterReading =
   | { readonly kind: "timed-out" }
   | { readonly kind: "failed" };
 
+export type BatteryReading =
+  | { readonly kind: "state"; readonly charging: boolean; readonly level: number }
+  | { readonly kind: "none" }
+  | { readonly kind: "timed-out" }
+  | { readonly kind: "failed" };
+
 export interface SecureContextReading {
   readonly kind: "secure";
   readonly deviceMemory: number | null;
   readonly clientHints: ClientHints | null;
   readonly battery: boolean;
+  readonly batteryState: BatteryReading;
   readonly webgpu: boolean;
   readonly webgpuAdapter: WebGpuAdapterReading;
 }

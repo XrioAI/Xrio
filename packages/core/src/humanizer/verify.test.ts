@@ -468,6 +468,7 @@ const hardwarePlan = () =>
 
 const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
   battery: true,
+  batteryState: { charging: true, kind: "state", level: 1 },
   clientHints: null,
   deviceMemory,
   kind: "secure",
@@ -1165,10 +1166,14 @@ describe("the zone check run against the host's Intl", () => {
 
 const SWIFTSHADER_ADAPTER = { info: { architecture: "swiftshader", vendor: "google" } };
 
+const BATTERYLESS = { charging: true, level: 1 };
+
+const batteryOffering = (getBattery: () => Promise<object | null>) => getBattery;
+
 const gpuOffering = (requestAdapter: () => Promise<object | null>) => ({ requestAdapter });
 
 const securePage = {
-  getBattery: async () => await Promise.resolve({}),
+  getBattery: batteryOffering(async () => await Promise.resolve(BATTERYLESS)),
   gpu: gpuOffering(async () => await Promise.resolve(null)),
   userAgentData: {
     getHighEntropyValues: async () =>
@@ -1236,6 +1241,7 @@ describe("the after-capture read", () => {
       readAfterCapture(await readAfterCaptureIn(true, { ...securePage, deviceMemory: 8 })),
     ).toStrictEqual({
       battery: true,
+      batteryState: { charging: true, kind: "state", level: 1 },
       clientHints: {
         architecture: "x86",
         bitness: "64",
@@ -1257,6 +1263,7 @@ describe("the after-capture read", () => {
   it("reports what a page without the APIs exposes as null, false or none", async () => {
     expect(readAfterCapture(await readAfterCaptureIn(true, {}))).toStrictEqual({
       battery: false,
+      batteryState: { kind: "none" },
       clientHints: null,
       deviceMemory: null,
       kind: "secure",
@@ -1341,12 +1348,12 @@ describe("the after-capture read", () => {
     { bound: 100, budgetMs: 200, call: ")(100)" },
     { bound: 25, budgetMs: 50, call: ")(25)" },
   ])(
-    "bounds the adapter request at $bound ms under a $budgetMs ms budget",
+    "bounds the adapter and battery reads at $bound ms under a $budgetMs ms budget",
     async ({ bound, budgetMs, call }) => {
       const delays: number[] = [];
 
       await readAfterCaptureIn(true, securePage, { budgetMs, timers: recordingTimers(delays) });
-      expect(delays).toStrictEqual([bound]);
+      expect(delays).toStrictEqual([bound, bound]);
       expect(afterCaptureRead(budgetMs).slice(-call.length)).toBe(call);
     },
   );
@@ -1364,6 +1371,7 @@ describe("the after-capture read", () => {
     {
       reading: JSON.stringify({
         battery: true,
+        batteryState: { kind: "none" },
         clientHints: { architecture: 64 },
         deviceMemory: 8,
         kind: "secure",
@@ -1375,6 +1383,7 @@ describe("the after-capture read", () => {
     {
       reading: JSON.stringify({
         battery: true,
+        batteryState: { kind: "none" },
         clientHints: null,
         deviceMemory: 8,
         kind: "secure",
@@ -1385,6 +1394,7 @@ describe("the after-capture read", () => {
     {
       reading: JSON.stringify({
         battery: true,
+        batteryState: { kind: "none" },
         clientHints: null,
         deviceMemory: 8,
         kind: "secure",
@@ -1396,6 +1406,7 @@ describe("the after-capture read", () => {
     {
       reading: JSON.stringify({
         battery: true,
+        batteryState: { kind: "none" },
         clientHints: null,
         deviceMemory: 8,
         kind: "secure",
@@ -1407,6 +1418,7 @@ describe("the after-capture read", () => {
     {
       reading: JSON.stringify({
         battery: true,
+        batteryState: { kind: "none" },
         clientHints: null,
         deviceMemory: 8,
         kind: "secure",
@@ -1414,6 +1426,138 @@ describe("the after-capture read", () => {
         webgpuAdapter: { kind: "slow" },
       }),
       why: "an unknown adapter kind",
+    },
+  ])("refuses a reading with $why", ({ reading }) => {
+    expect(() => readAfterCapture(reading)).toThrow(
+      "The after-capture read returned a malformed reading.",
+    );
+  });
+});
+
+describe("the after-capture battery read", () => {
+  it.each([
+    {
+      expected: { charging: false, kind: "state", level: 0.42 },
+      getBattery: batteryOffering(
+        async () => await Promise.resolve({ charging: false, level: 0.42 }),
+      ),
+      kind: "discharging",
+      timers: realTimers,
+    },
+    {
+      expected: { charging: true, kind: "state", level: 1 },
+      getBattery: batteryOffering(async () => await Promise.resolve(BATTERYLESS)),
+      kind: "batteryless",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(async () => await Promise.reject(new Error("blocked"))),
+      kind: "rejecting",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(() => {
+        throw new Error("blocked");
+      }),
+      kind: "throwing",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(async () => await Promise.resolve({ charging: "yes", level: 1 })),
+      kind: "malformed",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "timed-out" },
+      getBattery: batteryOffering(neverSettles),
+      kind: "pending",
+      timers: firesAtOnce,
+    },
+  ])("reads the battery state of a $kind page", async ({ expected, getBattery, timers }) => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(true, { ...securePage, getBattery }, { timers }),
+    );
+
+    expect(reading).toMatchObject({ battery: true, batteryState: expected, kind: "secure" });
+  });
+
+  it("asks only getBattery, never the battery-status permission", () => {
+    expect(afterCaptureRead(250)).not.toContain("battery-status");
+    expect(afterCaptureRead(250)).not.toContain("permissions");
+  });
+
+  it("reads no battery state on a page without getBattery", async () => {
+    const { getBattery: _getBattery, ...withoutBattery } = securePage;
+    const reading = readAfterCapture(await readAfterCaptureIn(true, withoutBattery));
+
+    expect(reading).toMatchObject({ battery: false, batteryState: { kind: "none" } });
+  });
+
+  it("still reads the client hints when the battery never settles", async () => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(
+        true,
+        { ...securePage, getBattery: batteryOffering(neverSettles) },
+        { timers: firesAtOnce },
+      ),
+    );
+
+    expect(reading).toMatchObject({
+      batteryState: { kind: "timed-out" },
+      clientHints: { platform: "Linux" },
+    });
+  });
+
+  it.each([
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "no battery reading",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { charging: true, kind: "state", level: "full" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "a battery level that is not a number",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { charging: "yes", kind: "state", level: 1 },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "a battery charging flag that is not a boolean",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "charged" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "an unknown battery kind",
     },
   ])("refuses a reading with $why", ({ reading }) => {
     expect(() => readAfterCapture(reading)).toThrow(

@@ -1316,6 +1316,27 @@ describe("a GL persona under the announce policy", () => {
   });
 });
 
+describe("the battery's launch inputs", () => {
+  it.each([
+    swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
+    gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER),
+  ])("sends no battery-status switch or knob under either policy", (capabilities) => {
+    const names = (gpuPolicy: "matched" | "announce") => {
+      const resolutions = resolveSurfaces(
+        contextOf({ capabilities, pins: { ...noPins, hardware: { gpuPolicy } } }),
+      );
+
+      return EMISSION_ORDER.flatMap((surface) =>
+        resolutions[surface].inputs.map(({ name }) => name),
+      );
+    };
+
+    expect(
+      [names("matched"), names("announce")].flat().filter((name) => /battery/iu.test(name)),
+    ).toStrictEqual([]);
+  });
+});
+
 describe("a replayed announce record", () => {
   const forked = forkWithGl([HIDE_ONLY, RENOIR]);
 

@@ -2053,6 +2053,7 @@ const readingAfterCaptureWith = (read: (deadline: Deadline) => Promise<string>):
 
 const SECURE_READING = JSON.stringify({
   battery: true,
+  batteryState: { charging: true, kind: "state", level: 1 },
   clientHints: {
     architecture: "x86",
     bitness: "64",

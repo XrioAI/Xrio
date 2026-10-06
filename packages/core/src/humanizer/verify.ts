@@ -4,6 +4,7 @@ import type { ChromeProduct } from "../sources/browser/port.ts";
 import { deviceDigest } from "./contracts.ts";
 import type {
   AfterCapture,
+  BatteryReading,
   ClientHints,
   FontEvidence,
   Observation,
@@ -30,7 +31,7 @@ const UNRESOLVED_ZONE = "Etc/Unknown";
 
 const HEADLESS_TOKEN = "HeadlessChrome/";
 
-const WEBGPU_ADAPTER_CAP_MS = 100;
+const AFTER_CAPTURE_READ_CAP_MS = 100;
 
 type ReadField = Exclude<keyof Observation, "product" | "afterCapture">;
 
@@ -247,8 +248,33 @@ const isWebGpuAdapterReading = (value: unknown): value is WebGpuAdapterReading =
   }
 };
 
+const isBatteryReading = (value: unknown): value is BatteryReading => {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  const fields = new Map(Object.entries(value));
+
+  switch (fields.get("kind")) {
+    case "state": {
+      return isFlag(fields.get("charging")) && isNumber(fields.get("level"));
+    }
+
+    case "none":
+    case "timed-out":
+    case "failed": {
+      return true;
+    }
+
+    default: {
+      return false;
+    }
+  }
+};
+
 const SECURE_CONTEXT_READING = {
   battery: isFlag,
+  batteryState: isBatteryReading,
   clientHints: isClientHintsOrNull,
   deviceMemory: isNumberOrNull,
   kind: (value: unknown): value is "secure" => value === "secure",
@@ -608,7 +634,7 @@ const READ_SOURCE = `(requested, fonts) => {
   });
 }`;
 
-const AFTER_CAPTURE_SOURCE = `async (adapterBoundMs) => {
+const AFTER_CAPTURE_SOURCE = `async (boundMs) => {
   if (!isSecureContext) {
     return JSON.stringify({ kind: "insecure" });
   }
@@ -663,36 +689,52 @@ const AFTER_CAPTURE_SOURCE = `async (adapterBoundMs) => {
       return { kind: "failed" };
     }
   };
-  const readWebgpuAdapter = async () => {
-    if (!navigator.gpu) {
-      return { kind: "none" };
-    }
+  const batteryRead = async () => {
+    try {
+      const { charging, level } = await navigator.getBattery();
 
+      return typeof charging === "boolean" && typeof level === "number"
+        ? { kind: "state", charging, level }
+        : { kind: "failed" };
+    } catch {
+      return { kind: "failed" };
+    }
+  };
+  const bounded = async (read) => {
     let timer;
     const timedOut = new Promise((resolve) => {
-      timer = setTimeout(() => resolve({ kind: "timed-out" }), adapterBoundMs);
+      timer = setTimeout(() => resolve({ kind: "timed-out" }), boundMs);
     });
 
     try {
-      return await Promise.race([adapterRead(), timedOut]);
+      return await Promise.race([read(), timedOut]);
     } finally {
       clearTimeout(timer);
     }
   };
-  const [clientHints, webgpuAdapter] = await Promise.all([readClientHints(), readWebgpuAdapter()]);
+  const readWebgpuAdapter = async () =>
+    navigator.gpu ? await bounded(adapterRead) : { kind: "none" };
+  const readBatteryState = async () =>
+    typeof navigator.getBattery === "function" ? await bounded(batteryRead) : { kind: "none" };
+  const [clientHints, webgpuAdapter, batteryState] = await Promise.all([
+    readClientHints(),
+    readWebgpuAdapter(),
+    readBatteryState(),
+  ]);
 
   return JSON.stringify({
     kind: "secure",
     deviceMemory: typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null,
     clientHints,
     battery: typeof navigator.getBattery === "function",
+    batteryState,
     webgpu: "gpu" in navigator,
     webgpuAdapter,
   });
 }`;
 
 export const afterCaptureRead = (budgetMs: number): string =>
-  `(${AFTER_CAPTURE_SOURCE})(${Math.min(WEBGPU_ADAPTER_CAP_MS, Math.floor(budgetMs / 2))})`;
+  `(${AFTER_CAPTURE_SOURCE})(${Math.min(AFTER_CAPTURE_READ_CAP_MS, Math.floor(budgetMs / 2))})`;
 
 export const identityRead = (requestedZone: string, fonts: FontRead): string =>
   `(${READ_SOURCE})(${JSON.stringify(requestedZone)}, ${JSON.stringify(fonts)})`;

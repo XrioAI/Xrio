@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import { noPins } from "../testing/no-pins.ts";
-import type { HostCapabilities, Observation, WebGpuAdapterReading } from "./contracts.ts";
+import type {
+  BatteryReading,
+  HostCapabilities,
+  Observation,
+  WebGpuAdapterReading,
+} from "./contracts.ts";
 import { httpIdentity, planIdentity } from "./humanizer.ts";
 import type { IdentityReport } from "./report.ts";
 import { evaluate } from "./verify.ts";
@@ -28,6 +33,7 @@ const linuxClientHints = {
 const headlessLinux: Observation = {
   afterCapture: {
     battery: true,
+    batteryState: { charging: true, kind: "state", level: 1 },
     clientHints: linuxClientHints,
     deviceMemory: 8,
     kind: "secure",
@@ -238,6 +244,7 @@ describe("the identity report", () => {
         observed: {
           anyPointer: "fine",
           battery: true,
+          batteryState: { charging: true, level: 1 },
           clientHints: linuxClientHints,
           colorScheme: "light",
           deviceMemory: 8,
@@ -455,6 +462,7 @@ describe("the identity report", () => {
         observed: {
           anyPointer: "fine",
           battery: null,
+          batteryState: null,
           clientHints: null,
           colorScheme: "dark",
           deviceMemory: null,
@@ -563,6 +571,7 @@ describe("the secure-context surfaces' coverage", () => {
 
 const secureWith = (webgpuAdapter: WebGpuAdapterReading): Observation["afterCapture"] => ({
   battery: true,
+  batteryState: { charging: true, kind: "state", level: 1 },
   clientHints: linuxClientHints,
   deviceMemory: 8,
   kind: "secure",
@@ -643,6 +652,82 @@ describe("the WebGPU adapter's report", () => {
   });
 });
 
+const secureWithBattery = (batteryState: BatteryReading): Observation["afterCapture"] => ({
+  battery: true,
+  batteryState,
+  clientHints: linuxClientHints,
+  deviceMemory: 8,
+  kind: "secure",
+  webgpu: false,
+  webgpuAdapter: { kind: "none" },
+});
+
+describe("the battery state's report", () => {
+  const plan = planIdentity({
+    capabilities: { permittedCpus: 32, platform: "linux" },
+    device: fixedDevice,
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: "UTC",
+    mode: "headless",
+    pins: noPins,
+  });
+
+  it.each([
+    {
+      battery: { charging: false, kind: "state", level: 0.5 } as const,
+      observed: { charging: false, level: 0.5 },
+    },
+    { battery: { kind: "none" } as const, observed: null },
+  ])("is observed for a $battery.kind reading", ({ battery, observed }) => {
+    const { report } = evaluate(plan, {
+      ...headlessLinux,
+      afterCapture: secureWithBattery(battery),
+    });
+
+    expect({
+      coverage: report.coverage.battery,
+      observed: report.observed.batteryState,
+    }).toStrictEqual({ coverage: { state: "observed" }, observed });
+  });
+
+  it.each([
+    { battery: { kind: "timed-out" } as const, reason: "no-time" },
+    { battery: { kind: "failed" } as const, reason: "read-failed" },
+  ])(
+    "is unchecked with $reason for a $battery.kind reading, and costs nothing else",
+    ({ battery, reason }) => {
+      const { report } = evaluate(plan, {
+        ...headlessLinux,
+        afterCapture: secureWithBattery(battery),
+      });
+
+      expect({
+        battery: report.coverage.battery,
+        clientHints: report.coverage.clientHints,
+        observed: [report.observed.battery, report.observed.batteryState],
+        webgpu: report.coverage.webgpu,
+      }).toStrictEqual({
+        battery: { reason, state: "unchecked" },
+        clientHints: { state: "observed" },
+        observed: [true, null],
+        webgpu: { state: "observed" },
+      });
+    },
+  );
+
+  it("reports no state for a page that was not a secure context", () => {
+    const { coverage, observed } = evaluate(plan, {
+      ...headlessLinux,
+      afterCapture: { kind: "insecure" },
+    }).report;
+
+    expect({ coverage: coverage.battery, observed: observed.batteryState }).toStrictEqual({
+      coverage: { reason: "insecure-origin", state: "unchecked" },
+      observed: null,
+    });
+  });
+});
+
 describe("the WebGL strings' coverage", () => {
   const plan = planIdentity({
     capabilities: { permittedCpus: 32, platform: "linux" },
@@ -693,6 +778,7 @@ describe("a secure origin whose individual reads gave nothing", () => {
       ...headlessLinux,
       afterCapture: {
         battery: true,
+        batteryState: { charging: true, kind: "state", level: 1 },
         clientHints: null,
         deviceMemory: null,
         kind: "secure",
