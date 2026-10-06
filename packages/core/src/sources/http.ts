@@ -4,8 +4,8 @@ import type { CreateSessionOptions, Response as ClientResponse, Session } from "
 import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
-import { startRelay } from "../proxy/relay.ts";
-import type { Relay } from "../proxy/relay.ts";
+import { startRelay } from "../relay/relay.ts";
+import type { Relay } from "../relay/relay.ts";
 import type { DocumentRequest, SourceDocument } from "../types.ts";
 import { decodeBody } from "./decode.ts";
 import { responseDetailsFrom } from "./response.ts";

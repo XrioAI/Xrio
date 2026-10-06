@@ -44,6 +44,53 @@ The default mode is `headed`, so a client needs `browserPath` unless it picks an
 
 Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client.
 
+### Standalone proxy manager
+
+`ProxyManager` manages one proxy and its optional provider session. It is not yet connected to `XrioClient.scrape()` or browser modes. Browser integration is tracked in [XRI-40](https://linear.app/proxidize/issue/XRI-40/integrate-proxy-manager-with-headed-and-headless-browser-modes). The caller owns scrape retries and translates results into `success`, `blocked`, `transient_connection_failure`, or `other_failure`. Authentication failures, invalid options, cancellation, exhausted scrape deadlines, and content-conversion errors belong to `other_failure`.
+
+The manager discovers one `xrio.config.ts`, `.mts`, `.js`, or `.mjs` in the working directory. It does not search parents; multiple matching files or invalid configuration fail with `INVALID_OPTIONS`. Config files default-export a synchronous object. TypeScript uses Node's native type stripping: use erasable types, explicit relative import extensions, and no top-level `await` or tsconfig path aliases. Use `.mts` or `.mjs` for an ESM config inside a CommonJS project. Config modules follow Node's module cache; there is no hot reload.
+
+```ts
+// xrio.config.ts
+import type { XrioConfig } from "@xrio/core";
+
+export default {
+  proxy: {
+    url: "http://customer-session-{session}:password@proxy.example:8080",
+    session: { format: "numeric", length: 8 },
+  },
+} satisfies XrioConfig;
+```
+
+Exactly one literal `{session}` in the username or password enables rotation. The manager generates the initial ID and never writes it back to the config. `session` options are optional, defaulting to eight numeric characters; `alphanumeric` and integer lengths from 1 to 256 are supported. A URL without the placeholder is preserved unchanged, even if its credentials contain a provider-style session suffix. Format rules must fit the proxy provider. Generating a new session requests a new association; it cannot guarantee a different IP.
+
+Construct `new ProxyManager()` to use discovery, or `new ProxyManager(config)` with a complete `ProxyConfig` to replace discovery, without merging. Management configuration is separate from `XrioClient` constructor/scrape options. `loadXrioConfig()` exposes the same loader and preserves other managers' sections for their own validation.
+
+| Method                                       | Behavior                                                                                                                                            |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_proxy_connection_string()`              | Returns the current connection string without rotating or making a network request.                                                                 |
+| `get_proxy_info(connection, signal?)`        | Looks up complete `{ exit_ip, country, timezone, locale }` information through an issued connection.                                                |
+| `should_rotate_session(connection, outcome)` | Returns `true` for a current managed session's `blocked` or `transient_connection_failure` outcome, otherwise `false`. Does not change the session. |
+| `change_session()`                           | Rotates immediately and returns the new connection string; throws when rotation is not configured.                                                  |
+
+Keep the exact connection used by a scrape and pass it back with its outcome. Results for previous connections return `false`. The caller applies the recommendation explicitly:
+
+```ts
+if (manager.should_rotate_session(connection, outcome)) {
+  manager.change_session();
+}
+```
+
+Previously issued connections remain valid for in-flight work. Issued sessions are retained for the manager's lifetime to prevent reuse; exhausting a small session space fails explicitly rather than resurrecting an old session.
+
+The four methods above are public. Configuration, the current connection, and previously issued connections are runtime-private `#` fields. The future consuming module will obtain a connection, perform the scrape, check whether rotation is warranted, and call `change_session()` when needed; it does not supply a transport to the manager.
+
+`info.ts` owns the metadata HTTP requests, using the existing HTTP client and relay to route through the exact proxy, including DNS. These requests reject redirects and never fall back to a direct connection. The manager does not perform scrape requests.
+
+Information lookups try [ipwho.is](https://ipwhois.io/documentation), then [anonymous ipapi.is](https://ipapi.is/free-tier.html), without keys. Each service has a five-second budget; caller cancellation stops both. Responses must contain a valid IP, recognized country, and valid named timezone. Anonymous ipapi country names are matched against normalized English `Intl.DisplayNames` values; unrecognized names fail. Locale is the likely country default inferred through `Intl.Locale`, not a measured language preference. Each lookup returns one provider's complete observation, without mixing fields or caching it as a guarantee about later requests.
+
+If both providers fail, the method throws `PROXY_INFO_UNAVAILABLE` without exposing transport credentials or changing the session. It never substitutes local IP or fingerprint values. Free service quotas still apply, especially for shared exit IPs.
+
 ### Browser modes
 
 `headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright), navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once.
@@ -152,7 +199,8 @@ The client resolves options, loads the document with `sources/http.ts` in http m
 - `errors.ts` owns the error codes, `XrioError`, `isXrioError`, and URL redaction for messages.
 - `deadline.ts` owns the per-scrape deadline and the one `AbortSignal` every stage observes.
 - `sources/http.ts` is the only production module that imports `wreq-js` (`sources/http.test.ts` also imports `resolveProfile` to check that the pinned profile is the newest the binding offers); `sources/decode.ts` owns charset decoding.
-- `proxy/relay.ts` owns proxy dialing, refusals, and failure attribution.
+- `relay/relay.ts` owns proxy dialing, refusals, and failure attribution.
+- `proxy/` owns standalone proxy configuration, session state, and metadata lookup contracts.
 - `blocks/rules.ts` is the ruleset as typed data; `blocks/classify.ts` turns a response into a block report.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
 - `sources/browser/` owns browser modes: `launch-plan.ts` plans Chrome's argv, environment, and profile files; `browser-process.ts` owns scratch directories, teardown, and the startup sweep; `port.ts` is the driver interface, implemented by `patchright/driver.ts`, the only code lint lets import Patchright; `render.ts` navigates and captures; `browsers.ts` limits concurrency.

@@ -59,7 +59,7 @@ const normalizedHostname = (url: URL): string | undefined =>
     ? url.hostname
     : URL.parse(`http://${url.host}`)?.hostname;
 
-const parseProxy = (value: string): ProxyEndpoint => {
+export const parseProxy = (value: string): ProxyEndpoint => {
   const url = URL.parse(value);
 
   if (url === null) {

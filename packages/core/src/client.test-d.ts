@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from "vite-plus/test";
 
-import { isXrioError, XrioClient, XrioError } from "./client.ts";
+import { isXrioError, ProxyManager, XrioClient, XrioError } from "./client.ts";
 import type {
   BlockEvidence,
   BlockReport,
@@ -11,15 +11,50 @@ import type {
   ClientOptions,
   ErrorCode,
   InvalidOptionsError,
+  ProxyConfig,
+  ProxyInfo,
   ScrapeFormat,
   ScrapeResult,
   StructuredContent,
   XrioErrorCode,
+  XrioConfig,
 } from "./client.ts";
 
 declare const error: unknown;
 
 describe("XrioClient types", () => {
+  it("exports the standalone proxy contract and typed configuration", () => {
+    const config = {
+      proxy: {
+        session: { format: "numeric", length: 8 },
+        url: "http://user-{session}:password@proxy.test",
+      },
+    } satisfies XrioConfig;
+
+    const manager = new ProxyManager(config.proxy);
+
+    expectTypeOf<keyof ProxyManager>().toEqualTypeOf<
+      "get_proxy_connection_string" | "get_proxy_info" | "should_rotate_session" | "change_session"
+    >();
+
+    expectTypeOf(manager.get_proxy_connection_string()).toEqualTypeOf<string>();
+    expectTypeOf(manager.change_session()).toEqualTypeOf<string>();
+    expectTypeOf(manager.get_proxy_info("connection")).toEqualTypeOf<Promise<ProxyInfo>>();
+    expectTypeOf(manager.should_rotate_session("connection", "blocked")).toEqualTypeOf<boolean>();
+
+    // @ts-expect-error Explicit session settings require a literal placeholder.
+    const missingPlaceholder: ProxyConfig = { session: { length: 8 }, url: "http://proxy.test" };
+
+    const suppliedId: ProxyConfig = {
+      // @ts-expect-error Replacement session IDs are generated, not configured.
+      session: { id: "12345678" },
+      url: "http://user-{session}@proxy.test",
+    };
+
+    void missingPlaceholder;
+    void suppliedId;
+  });
+
   it("the public API requires explicit formats and complete browser-mode overrides", () => {
     const client = new XrioClient({ mode: "http" });
     const browser = new XrioClient({ browserPath: "/browser" });

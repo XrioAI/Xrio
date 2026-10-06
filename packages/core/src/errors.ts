@@ -8,6 +8,7 @@ interface XrioErrorDetails {
   NETWORK_ERROR: { netError: string } | undefined;
   PROXY_AUTH_FAILED: undefined;
   PROXY_CONNECT_FAILED: { status: number };
+  PROXY_INFO_UNAVAILABLE: undefined;
   PROXY_UNREACHABLE: undefined;
   RESPONSE_TOO_LARGE: undefined;
   TIMEOUT: undefined;
@@ -55,6 +56,7 @@ const errorClasses = {
   NETWORK_ERROR: XrioError,
   PROXY_AUTH_FAILED: XrioError,
   PROXY_CONNECT_FAILED: XrioError,
+  PROXY_INFO_UNAVAILABLE: XrioError,
   PROXY_UNREACHABLE: XrioError,
   RESPONSE_TOO_LARGE: XrioError,
   TIMEOUT: XrioError,
