@@ -394,6 +394,17 @@ const policyProblem = ({ locale, timezone }: DeviceRecord["policy"]) => {
 const unreplayable = (field: "device" | "policy", reason: string): DeviceRecordRefusedError =>
   new DeviceRecordRefusedError({ field, kind: "unreplayable", reason });
 
+export const withoutPersona = (backend: GpuChoice["backend"]): GpuChoice =>
+  backend === "native" ? { backend, persona: null } : { backend, persona: null };
+
+const holdingPersona = (record: DeviceRecord): DeviceRecord => {
+  const { gpu } = record.device;
+
+  return Object.hasOwn(gpu, "persona")
+    ? record
+    : { ...record, device: { ...record.device, gpu: withoutPersona(gpu.backend) } };
+};
+
 export const refuseUnreplayable = (record: DeviceRecord): DeviceRecord => {
   const deviceProblem =
     screenProblem(record.device.screen) ??
@@ -410,7 +421,7 @@ export const refuseUnreplayable = (record: DeviceRecord): DeviceRecord => {
     throw unreplayable("policy", problem);
   }
 
-  return record;
+  return holdingPersona(record);
 };
 
 export const headlessWindowOf = ({

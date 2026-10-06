@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 
-import { deviceDigest, hostDigest } from "./contracts.ts";
+import { deviceDigest, hostDigest, refuseUnreplayable } from "./contracts.ts";
 import type {
   DeviceRecord,
   FontEvidence,
@@ -93,7 +93,13 @@ const recordFor = (
   return display === null ? null : recordOf(seed, display, surfaces);
 };
 
-export const planIdentity = (context: IdentityContext): IdentityPlan => {
+const replayable = (context: IdentityContext): IdentityContext =>
+  context.device.kind === "record"
+    ? { ...context, device: { kind: "record", record: refuseUnreplayable(context.device.record) } }
+    : context;
+
+export const planIdentity = (requested: IdentityContext): IdentityPlan => {
+  const context = replayable(requested);
   const resolutions = resolveSurfaces(context);
   const device = deviceOf(context);
   const surfaces = choicesOf(resolutions);

@@ -1,6 +1,6 @@
 import { invalidOptions } from "../errors.ts";
 import type { ResolvedMode } from "../types.ts";
-import { DEFAULT_GPU_POLICY, knobOf, headlessWindowOf, refuseUnreplayable } from "./contracts.ts";
+import { DEFAULT_GPU_POLICY, knobOf, headlessWindowOf, withoutPersona } from "./contracts.ts";
 import type {
   DeviceRecord,
   DisplayTables,
@@ -154,7 +154,7 @@ export const deviceOf = ({
     return { display, seed: device.seed, source: "fresh" };
   }
 
-  const record = refuseUnreplayable(device.record);
+  const { record } = device;
   const display = mode === "headed" ? null : recordedDisplay(record);
 
   return { display, seed: record.seed, source: "record" };
@@ -506,9 +506,6 @@ const glTells = (gl: GlChoice): FactTell[] => [
   ...(announcedOverSoftware(gl) ? ["gpu-announced-over-software" as const] : []),
   ...(fleetConstant(gl) ? ["gpu-fleet-constant" as const] : []),
 ];
-
-const withoutPersona = (backend: GpuChoice["backend"]): GpuChoice =>
-  backend === "native" ? { backend, persona: null } : { backend, persona: null };
 
 const claimsOf = (gl: GlChoice): { claims?: PersonaClaims } =>
   announcedOverSoftware(gl) && gl.presented !== null

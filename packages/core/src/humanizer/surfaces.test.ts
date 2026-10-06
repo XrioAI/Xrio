@@ -906,6 +906,78 @@ describe("a replayed record's GL persona", () => {
   });
 });
 
+const storedBeforePersonas = (capabilities: HostCapabilities): DeviceRecord => {
+  const record = recordPresenting(capabilities, { backend: "native", persona: null });
+
+  return {
+    ...record,
+    // @ts-expect-error A record stored before GL personas holds a gpu with no persona key.
+    device: { ...record.device, gpu: { backend: "native" } },
+  };
+};
+
+describe("a replayed record written before GL personas, whose gpu holds no persona key", () => {
+  const kit = forkWithGl([HIDE_ONLY, RENOIR]);
+  const nativeRenoir = gpuHost(kit, RENOIR_RENDERER);
+  const swiftShaderKit = swiftShaderHost(kit);
+
+  it.each([
+    {
+      capabilities: nativeRenoir,
+      host: "a native host whose GPU matches the kit's hardware persona",
+      pins: noPins,
+      policy: "the default policy",
+      presented: { backend: "native", persona: null },
+      tells: ["gl-persona-unavailable", "host-fonts"],
+    },
+    {
+      capabilities: nativeRenoir,
+      host: "a native host whose GPU matches the kit's hardware persona",
+      pins: matching,
+      policy: "the matched policy",
+      presented: { backend: "native", persona: null },
+      tells: ["gl-persona-unavailable", "host-fonts"],
+    },
+    {
+      capabilities: swiftShaderKit,
+      host: "a SwiftShader host with the kit",
+      pins: noPins,
+      policy: "the default policy",
+      presented: { backend: "swiftshader", persona: null },
+      tells: ["gl-persona-unavailable", "host-fonts", "replay-host-skew"],
+    },
+    {
+      capabilities: swiftShaderKit,
+      host: "a SwiftShader host with the kit",
+      pins: matching,
+      policy: "the matched policy",
+      presented: { backend: "swiftshader", persona: null },
+      tells: ["gl-persona-unavailable", "host-fonts", "replay-host-skew"],
+    },
+  ])(
+    "replays with no persona on $host under $policy",
+    ({ capabilities, pins, presented, tells }) => {
+      const record = storedBeforePersonas(capabilities);
+
+      const plan = planIdentity(
+        contextOf({ capabilities, device: { kind: "record", record }, pins }),
+      );
+
+      expect({
+        personaSwitches: plan.inputs.switches.filter((entry) => entry.startsWith("--xrio-gl-")),
+        presented: plan.chosen.surfaces.gpu,
+        recorded: plan.chosen.record?.device.gpu,
+        tells: plan.tells,
+      }).toStrictEqual({
+        personaSwitches: [],
+        presented,
+        recorded: { backend: "native", persona: null },
+        tells,
+      });
+    },
+  );
+});
+
 const pinningGpu = (gpu: readonly NameRow[]): IdentityIntent => ({
   ...noPins,
   hardware: { gpu, gpuPolicy: "matched" },
