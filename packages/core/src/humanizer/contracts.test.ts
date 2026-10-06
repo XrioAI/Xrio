@@ -3,13 +3,16 @@ import { describe, expect, it } from "vite-plus/test";
 import { deviceDigest, hostDigest, refuseUnreplayable } from "./contracts.ts";
 import type { DeviceRecord, ForkFacts, FontStackFacts, PresentedDevice } from "./contracts.ts";
 
-const DEVICE_DIGEST = "1f6fdd787bc7b99c54582d49976c95d3011f4f912126968816c30dc7c6946ed6";
+const DEVICE_DIGEST = "481661e753e232c33d73208af7de4ef56fa92758fe95f2ceee4888227518049c";
 
 const record: DeviceRecord = {
   device: {
     cores: 8,
     fonts: { digest: "c41f09a2", kind: "stack" },
-    gpu: { backend: "swiftshader", persona: "basharsx4-swiftshader-hidden" },
+    gpu: {
+      backend: "swiftshader",
+      persona: { kind: "hide-only", name: "basharsx4-swiftshader-hidden" },
+    },
     memoryGb: 8,
     screen: { height: 1080, width: 1920, workArea: { bottom: 0, left: 64, right: 0, top: 32 } },
     voices: { kind: "persona", name: "basharsx4-google-linux-154" },

@@ -62,9 +62,14 @@ export type WindowState =
       readonly y: number;
     };
 
+interface PresentedPersona<Kind extends GlPersonaKind> {
+  readonly name: string;
+  readonly kind: Kind;
+}
+
 export type GpuChoice =
-  | { readonly backend: "native" }
-  | { readonly backend: "swiftshader"; readonly persona: string | null };
+  | { readonly backend: "native"; readonly persona: PresentedPersona<"hardware"> | null }
+  | { readonly backend: "swiftshader"; readonly persona: PresentedPersona<"hide-only"> | null };
 
 export interface PresentedDevice {
   readonly screen: { readonly width: number; readonly height: number; readonly workArea: Insets };

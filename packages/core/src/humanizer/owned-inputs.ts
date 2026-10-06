@@ -15,7 +15,11 @@ export const NATIVE_GL_SWITCHES = [
   { name: "--use-angle", value: "vulkan" },
 ] as const;
 
-const FORK_HARDWARE_SWITCHES = ["--xrio-hardware-concurrency", "--xrio-device-memory"] as const;
+const FORK_SWITCHES = [
+  "--xrio-hardware-concurrency",
+  "--xrio-device-memory",
+  "--xrio-gl-persona",
+] as const;
 
 export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE", "TZ", "FONTCONFIG_PATH"] as const;
 
@@ -316,7 +320,7 @@ export const isOwnedSwitch = (name: string): boolean =>
 export type LaunchInput =
   | {
       readonly sink: "switch";
-      readonly name: (typeof OWNED_SWITCHES)[number] | (typeof FORK_HARDWARE_SWITCHES)[number];
+      readonly name: (typeof OWNED_SWITCHES)[number] | (typeof FORK_SWITCHES)[number];
       readonly value?: string;
     }
   | {

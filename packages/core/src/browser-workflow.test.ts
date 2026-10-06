@@ -218,10 +218,98 @@ describe("browsers on the kit fork", () => {
         record: { device: { cores: 6, memoryGb: 16 } },
         surfaces: { hardware: { cores: 6, memoryGb: 16, source: "drawn" } },
       });
-      expect(identity.tells).toStrictEqual([]);
+      expect(identity.tells).toStrictEqual(["gl-persona-unavailable"]);
     } finally {
       await browsers.close();
     }
+  });
+
+  const COMPRESSED_TEXTURES = [
+    "WEBGL_compressed_texture_astc",
+    "WEBGL_compressed_texture_etc",
+    "WEBGL_compressed_texture_etc1",
+  ];
+
+  const forkHiding = async (name: string, hidden: readonly string[]): Promise<string> => {
+    const executable = await fakeForkPath("kit", { root: path.join(root, name) });
+
+    await writeFile(
+      path.join(path.dirname(executable), "personas", "synthetic-swiftshader-hidden.xrio-gl.json"),
+      JSON.stringify({
+        chrome_version: "154.0.8037.57",
+        digest: `sha256:${"3".repeat(64)}`,
+        float_arrays: [],
+        floats: [],
+        form_factor: "desktop",
+        hidden_extensions: hidden,
+        int_arrays: [],
+        ints: [],
+        max_threads: 16,
+        name: "synthetic-swiftshader-hidden",
+        not_added: [],
+        renderer:
+          "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        schema: "xrio-gl-table/v2",
+        vendor: "Google Inc. (Google)",
+      }),
+    );
+
+    return executable;
+  };
+
+  const visitOnSwiftShader = async (name: string, browserPath: string) => {
+    const browsers = plannedVisits(cdpDriver, 1, {
+      host: createCapabilityProbe({
+        parallelism: () => 32,
+        platform: "linux",
+        processStatusFile: path.join(root, "no-status"),
+        renderNodeDirectory: path.join(root, "no-render-nodes"),
+        root: path.join(root, name, "scratch"),
+      }),
+      random: fixedRandom,
+    });
+
+    using deadline = startDeadline(10_000);
+
+    try {
+      const { identity } = await browsers.visit({
+        browserArgs: [],
+        browserPath,
+        deadline,
+        mode: "headless",
+        pins: noPins,
+        proxy: undefined,
+        url: new URL("https://fake.test/page"),
+      }).document;
+
+      if (identity === undefined || identity.mode === "http") {
+        throw new Error("The visit reported no browser identity.");
+      }
+
+      return identity;
+    } finally {
+      await browsers.close();
+    }
+  };
+
+  it("presents no persona over SwiftShader though the package ships a hide-only one", async () => {
+    const identity = await visitOnSwiftShader(
+      "gl-hidden",
+      await forkHiding("gl-hidden", COMPRESSED_TEXTURES),
+    );
+
+    expect({
+      gpu: identity.surfaces.gpu,
+      shown: COMPRESSED_TEXTURES.filter(
+        (name) => identity.observed.webgl.extensions?.includes(name) === true,
+      ),
+      tells: identity.tells.filter((tell) => tell === "gl-persona-unavailable"),
+    }).toStrictEqual({
+      gpu: { backend: "swiftshader", persona: null },
+      shown: COMPRESSED_TEXTURES,
+      tells: ["gl-persona-unavailable"],
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
   it("refuses a launched Chrome whose version differs from the probed version", async () => {
@@ -1423,7 +1511,13 @@ describe("the launch identity check", () => {
         fonts: { reason: "no fontstack/ beside the binary", source: "host" },
         timezone: { source: "host", zone: "UTC" },
       },
-      tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
+      tells: [
+        "headless-token",
+        "host-zone-utc",
+        "gl-persona-unavailable",
+        "hardware-unhonored",
+        "host-fonts",
+      ],
     });
   });
 
@@ -1444,7 +1538,7 @@ describe("the launch identity check", () => {
     await browsers.close();
     expect(document.identity).toMatchObject({
       surfaces: { timezone: { source: "pin", zone: "UTC" } },
-      tells: ["headless-token", "hardware-unhonored", "host-fonts"],
+      tells: ["headless-token", "gl-persona-unavailable", "hardware-unhonored", "host-fonts"],
     });
   });
 

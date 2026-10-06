@@ -4,6 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { fixedDevice } from "../testing/fixed-seed.ts";
+import {
+  forkWithGl,
+  gpuHost,
+  HIDE_ONLY,
+  RENOIR,
+  RENOIR_RENDERER,
+  SWIFTSHADER_RENDERER,
+  swiftShaderHost,
+} from "../testing/gl-fork.ts";
 import { forkWithKnobs } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
@@ -227,6 +236,109 @@ describe("the excludes-all matcher", () => {
   });
 });
 
+const hideOnlyPlan = () => {
+  const capabilities = {
+    ...swiftShaderHost(forkWithGl([HIDE_ONLY], { knobs: {} })),
+    fontStack: CHECKED_FONT_STACK,
+  };
+
+  const { record } = planFor({ capabilities }).chosen;
+
+  if (record === null) {
+    throw new Error("A headless plan records its device.");
+  }
+
+  const gpu = {
+    backend: "swiftshader",
+    persona: { kind: "hide-only", name: HIDE_ONLY.name },
+  } as const;
+
+  return planFor({
+    capabilities,
+    device: { kind: "record", record: { ...record, device: { ...record.device, gpu } } },
+  });
+};
+
+const renoirPlan = () =>
+  planFor({
+    capabilities: {
+      ...gpuHost(forkWithGl([RENOIR], { knobs: {} }), RENOIR_RENDERER),
+      fontStack: CHECKED_FONT_STACK,
+    },
+  });
+
+const hidden = { ...linuxHeadless, webglExtensions: ["WEBGL_debug_renderer_info"] };
+
+describe("the GL persona expectations", () => {
+  it("holds when the page shows the artifact's renderer and none of its hidden extensions", () => {
+    expect([
+      evaluate(hideOnlyPlan(), hidden).mismatches,
+      evaluate(renoirPlan(), { ...hidden, webglRenderer: RENOIR_RENDERER }).mismatches,
+    ]).toStrictEqual([[], []]);
+  });
+
+  it("fails fatally on a native page that still lists one of a hardware persona's hidden extensions", () => {
+    const page = {
+      ...linuxHeadless,
+      webglExtensions: ["WEBGL_clip_cull_distance", "WEBGL_debug_renderer_info"],
+      webglRenderer: RENOIR_RENDERER,
+    };
+
+    expect(evaluate(renoirPlan(), page).mismatches).toStrictEqual([
+      {
+        expected: [
+          "WEBGL_clip_cull_distance",
+          "WEBGL_compressed_texture_astc",
+          "WEBGL_compressed_texture_etc",
+          "WEBGL_compressed_texture_etc1",
+        ],
+        field: "webglExtensions",
+        observed: ["WEBGL_clip_cull_distance", "WEBGL_debug_renderer_info"],
+        surface: "gpu",
+      },
+    ]);
+  });
+
+  it("fails fatally on a page whose renderer is not the artifact's", () => {
+    const { mismatches } = evaluate(renoirPlan(), hidden);
+
+    expect(
+      mismatches.map((mismatch) => ({ ...mismatch, named: describeMismatch(mismatch, hidden) })),
+    ).toStrictEqual([
+      {
+        expected: RENOIR_RENDERER,
+        field: "webglRenderer",
+        named: "gpu webglRenderer",
+        observed: SWIFTSHADER_RENDERER,
+        surface: "gpu",
+      },
+    ]);
+  });
+
+  it("fails fatally on a page that still lists a hidden extension", () => {
+    const { mismatches } = evaluate(hideOnlyPlan(), linuxHeadless);
+
+    expect(
+      mismatches.map((mismatch) => ({
+        ...mismatch,
+        named: describeMismatch(mismatch, linuxHeadless),
+      })),
+    ).toStrictEqual([
+      {
+        expected: [
+          "WEBGL_compressed_texture_astc",
+          "WEBGL_compressed_texture_etc",
+          "WEBGL_compressed_texture_etc1",
+        ],
+        field: "webglExtensions",
+        named: "gpu webglExtensions",
+        observed: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+        surface: "gpu",
+      },
+    ]);
+  });
+});
+
 describe("severity", () => {
   const germanLinux = { ...linuxHeadless, intlLocale: "de", languages: ["de-DE", "de"] };
 
@@ -241,7 +353,7 @@ describe("severity", () => {
         },
         { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
       ],
-      report: { notes: [], tells: ["hardware-unhonored"] },
+      report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
     });
   });
 
@@ -258,7 +370,7 @@ describe("severity", () => {
           },
           { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
         ],
-        tells: ["unmeasured-chrome", "hardware-unhonored"],
+        tells: ["unmeasured-chrome", "gl-persona-unavailable", "hardware-unhonored"],
       },
     });
   });
@@ -307,7 +419,7 @@ describe("severity", () => {
             surface: "timezone",
           },
         ],
-        tells: ["hardware-unhonored"],
+        tells: ["gl-persona-unavailable", "hardware-unhonored"],
       },
     });
   });
@@ -326,7 +438,10 @@ describe("severity", () => {
         }),
       ).toMatchObject({
         mismatches: [{ expected: "UTC0", field: "zone", observed: zone, surface: "timezone" }],
-        report: { notes: [], tells: ["unmeasured-chrome", "hardware-unhonored"] },
+        report: {
+          notes: [],
+          tells: ["unmeasured-chrome", "gl-persona-unavailable", "hardware-unhonored"],
+        },
       });
     },
   );
@@ -342,7 +457,7 @@ describe("severity", () => {
       mismatches: [],
       report: {
         notes: [{ expected: "en", field: "intlLocale", observed: "fr-CA", surface: "locale" }],
-        tells: ["hardware-unhonored"],
+        tells: ["gl-persona-unavailable", "hardware-unhonored"],
       },
     });
   });
@@ -366,7 +481,7 @@ describe("the hardware expectations", () => {
   it("holds when the page reads the drawn cores and memory", () => {
     expect(evaluate(hardwarePlan(), { ...seen, afterCapture: secure(16) })).toMatchObject({
       mismatches: [],
-      report: { notes: [], tells: [] },
+      report: { notes: [], tells: ["gl-persona-unavailable"] },
     });
   });
 
@@ -383,7 +498,7 @@ describe("the hardware expectations", () => {
       mismatches: [],
       report: {
         notes: [{ expected: 16, field: "deviceMemory", observed: 8, surface: "hardware" }],
-        tells: ["hardware-drift"],
+        tells: ["gl-persona-unavailable", "hardware-drift"],
       },
     });
   });
@@ -397,7 +512,7 @@ describe("the hardware expectations", () => {
   ] as const)("expects no memory from $name", ({ afterCapture }) => {
     expect(evaluate(hardwarePlan(), { ...seen, afterCapture })).toMatchObject({
       mismatches: [],
-      report: { notes: [], tells: [] },
+      report: { notes: [], tells: ["gl-persona-unavailable"] },
     });
   });
 
@@ -406,7 +521,7 @@ describe("the hardware expectations", () => {
       evaluate(planFor(), { ...linuxHeadless, afterCapture: secure(32), hardwareConcurrency: 64 }),
     ).toMatchObject({
       mismatches: [],
-      report: { notes: [], tells: ["hardware-unhonored"] },
+      report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
     });
   });
 
@@ -430,7 +545,7 @@ describe("the colour scheme", () => {
         notes: [
           { expected: "light", field: "colorScheme", observed: "dark", surface: "automation" },
         ],
-        tells: ["hardware-unhonored"],
+        tells: ["gl-persona-unavailable", "hardware-unhonored"],
       },
     });
   });
@@ -487,7 +602,13 @@ describe("the headed window", () => {
           { expected: 1024, field: "outerWidth", observed: 1600, surface: "window" },
           { expected: 768, field: "outerHeight", observed: 900, surface: "window" },
         ],
-        tells: ["no-taskbar", "display-implausible", "hardware-unhonored", "flag-infobar"],
+        tells: [
+          "no-taskbar",
+          "display-implausible",
+          "gl-persona-unavailable",
+          "hardware-unhonored",
+          "flag-infobar",
+        ],
       },
     });
   });
@@ -510,7 +631,7 @@ describe("a pinned alias", () => {
           notes: [],
           observed: { timeZone: "Europe/Kiev" },
           surfaces: { timezone: { source: "pin", zone: "Europe/Kiev" } },
-          tells: ["hardware-unhonored"],
+          tells: ["gl-persona-unavailable", "hardware-unhonored"],
         },
       },
     );
@@ -546,6 +667,7 @@ describe("tells", () => {
 
     expect(evaluate(planFor(), headless).report.tells).toStrictEqual([
       "headless-token",
+      "gl-persona-unavailable",
       "hardware-unhonored",
     ]);
   });
@@ -561,6 +683,7 @@ describe("tells", () => {
     expect(evaluate(proxied, headless).report.tells).toStrictEqual([
       "headless-token",
       "exit-unknown",
+      "gl-persona-unavailable",
       "hardware-unhonored",
     ]);
   });
@@ -603,7 +726,7 @@ describe("the fonts evidence", () => {
       fontEvidence: { kind: "confirmed" },
       mismatches: [],
       notes: [],
-      tells: ["hardware-unhonored"],
+      tells: ["gl-persona-unavailable", "hardware-unhonored"],
     });
   });
 
@@ -628,7 +751,7 @@ describe("the fonts evidence", () => {
       notes: [
         { expected: "c6755abb", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
       ],
-      tells: ["hardware-unhonored", "fonts-drift"],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "fonts-drift"],
     });
   });
 
@@ -653,7 +776,7 @@ describe("the fonts evidence", () => {
       notes: [
         { expected: true, field: "fontsSentinelResolved", observed: false, surface: "fonts" },
       ],
-      tells: ["hardware-unhonored", "fonts-drift"],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "fonts-drift"],
     });
   });
 
@@ -998,7 +1121,7 @@ describe("the zone check run against the host's Intl", () => {
       expect(zoneCheckUnder(zone)).toMatchObject({
         mismatches: [],
         observation: { requestedZone: zone },
-        report: { notes: [], tells: ["hardware-unhonored"] },
+        report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
       });
     },
   );
@@ -1015,7 +1138,7 @@ describe("the zone check run against the host's Intl", () => {
       }).toMatchObject({
         described: [`timezone zone (TZ=${zone}; Chrome named no zone)`],
         mismatches: [{ expected: zone, field: "zone", observed: null, surface: "timezone" }],
-        report: { notes: [], tells: ["hardware-unhonored"] },
+        report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
       });
     },
   );

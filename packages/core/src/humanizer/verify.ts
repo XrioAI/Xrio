@@ -69,6 +69,8 @@ export type FactTell =
   | "host-zone-utc"
   | "exit-unknown"
   | "speech-persona-skew"
+  | "gl-persona-skew"
+  | "gl-persona-unavailable"
   | "http-profile-skew"
   | "fork-commit-unreadable"
   | "host-fonts"

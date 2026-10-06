@@ -77,6 +77,9 @@ const pick = <Row extends Weighted>(rows: readonly Row[], seed: Seed, purpose: s
   return last;
 };
 
+export const drawGlPersona = <Row extends Weighted>(seed: Seed, rows: readonly Row[]): Row =>
+  pick(rows, seed, "gpu");
+
 type MachineClass = (typeof MACHINE_CLASSES)[number];
 
 const pinnedValue = (
@@ -85,32 +88,44 @@ const pinnedValue = (
   purpose: string,
 ): number | undefined => (rows === undefined ? undefined : pick(rows, seed, purpose).value);
 
-export interface DrawnHardware {
+interface DrawnHardware {
+  readonly kind: "drawn";
   readonly cores: number;
   readonly memoryGb: number;
   readonly source: "drawn" | "pinned";
   readonly capped: boolean;
 }
 
+interface UnfitHardware {
+  readonly kind: "unfit";
+  readonly capped: boolean;
+}
+
+export type HardwareDraw = DrawnHardware | UnfitHardware;
+
+const classesWithin = (limits: readonly number[]): readonly MachineClass[] =>
+  MACHINE_CLASSES.filter(({ cores }) => limits.every((limit) => cores <= limit));
+
+const sameRows = (left: readonly MachineClass[], right: readonly MachineClass[]): boolean =>
+  left.length === right.length && left.every((row) => right.includes(row));
+
 export const drawHardware = (
   seed: Seed,
   tables: HardwareTables = {},
   ceilings: readonly number[] = [],
-): DrawnHardware | undefined => {
-  const eligible = MACHINE_CLASSES.filter(({ cores }) =>
-    ceilings.every((ceiling) => cores <= ceiling),
-  );
-
+  personaMaxThreads?: number,
+): HardwareDraw => {
+  const persona = personaMaxThreads === undefined ? [] : [personaMaxThreads];
   const cores = pinnedValue(tables.cores, seed, "hardware-cores");
   const memoryGb = pinnedValue(tables.memoryGb, seed, "hardware-memory");
 
   if (cores !== undefined && memoryGb !== undefined) {
-    return { capped: false, cores, memoryGb, source: "pinned" };
+    return { capped: false, cores, kind: "drawn", memoryGb, source: "pinned" };
   }
 
-  const pool = cores === undefined ? eligible : MACHINE_CLASSES;
+  const rowsWithin = (limits: readonly number[]): readonly MachineClass[] => {
+    const candidates = cores === undefined ? classesWithin(limits) : MACHINE_CLASSES;
 
-  const rowsFrom = (candidates: readonly MachineClass[]): readonly MachineClass[] => {
     const agreeing = candidates.filter(
       (row) =>
         (cores === undefined || row.cores === cores) &&
@@ -120,21 +135,27 @@ export const drawHardware = (
     return agreeing.length > 0 ? agreeing : candidates;
   };
 
-  const rows = rowsFrom(pool);
-  const uncapped = rowsFrom(MACHINE_CLASSES);
+  const rows = rowsWithin([...ceilings, ...persona]);
+  const capped = !sameRows(rows, rowsWithin(persona));
 
   if (rows.length === 0) {
     return memoryGb === undefined
-      ? undefined
-      : { capped: true, cores: Math.min(...ceilings), memoryGb, source: "pinned" };
+      ? { capped, kind: "unfit" }
+      : {
+          capped,
+          cores: Math.min(...ceilings, ...persona),
+          kind: "drawn",
+          memoryGb,
+          source: "pinned",
+        };
   }
 
   const row = pick(rows, seed, "hardware");
 
   return {
-    capped:
-      rows.length !== uncapped.length || rows.some((candidate) => !uncapped.includes(candidate)),
+    capped,
     cores: cores ?? row.cores,
+    kind: "drawn",
     memoryGb: memoryGb ?? row.memoryGb,
     source: cores === undefined && memoryGb === undefined ? "drawn" : "pinned",
   };

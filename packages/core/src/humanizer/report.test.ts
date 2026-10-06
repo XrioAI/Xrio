@@ -294,7 +294,13 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "UTC" },
           window: { height: 1018, kind: "maximized", source: "drawn", width: 1680, x: 0, y: 32 },
         },
-        tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
+        tells: [
+          "headless-token",
+          "host-zone-utc",
+          "gl-persona-unavailable",
+          "hardware-unhonored",
+          "host-fonts",
+        ],
       },
     });
   });
@@ -335,6 +341,7 @@ describe("the identity report", () => {
       tells: [
         "headless-token",
         "host-zone-utc",
+        "gl-persona-unavailable",
         "hardware-unhonored",
         "host-fonts",
         "speech-persona-skew",
@@ -357,7 +364,13 @@ describe("the identity report", () => {
 
       expect({ binary, tells }).toStrictEqual({
         binary: { commit: COMMIT, dirty: 3, fork: "xrio", version: "154.0.8037.57" },
-        tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
+        tells: [
+          "headless-token",
+          "host-zone-utc",
+          "gl-persona-unavailable",
+          "hardware-unhonored",
+          "host-fonts",
+        ],
       });
     });
 
@@ -370,7 +383,13 @@ describe("the identity report", () => {
 
       expect({ binary, tells }).toStrictEqual({
         binary: { commit: null, dirty: null, fork: "xrio", version: "154.0.8037.57" },
-        tells: ["headless-token", "host-zone-utc", "hardware-unhonored", "host-fonts"],
+        tells: [
+          "headless-token",
+          "host-zone-utc",
+          "gl-persona-unavailable",
+          "hardware-unhonored",
+          "host-fonts",
+        ],
       });
     });
 
@@ -382,6 +401,7 @@ describe("the identity report", () => {
         tells: [
           "headless-token",
           "host-zone-utc",
+          "gl-persona-unavailable",
           "hardware-unhonored",
           "host-fonts",
           "fork-commit-unreadable",
@@ -426,7 +446,7 @@ describe("the identity report", () => {
         binary: { commit: null, dirty: null, fork: null, version: "154.0.8037.57" },
         coverage: insecureCoverage,
         digests: {
-          device: "2d8b0e9006044e784b1c8773658016085faf838b559749604031e64bc30fdd08",
+          device: "454908c5cc83747918fba77f92b5fcf8e1aa234e0290b0619e2accd6a9eeb0a3",
           host: plan.chosen.digests.host,
         },
         exit: { facts: { kind: "unknown" }, route: "direct" },
@@ -474,7 +494,7 @@ describe("the identity report", () => {
           device: {
             cores: 0,
             fonts: { kind: "system" },
-            gpu: { backend: "native" },
+            gpu: { backend: "native", persona: null },
             memoryGb: 0,
             screen: {
               height: 1117,
@@ -492,7 +512,7 @@ describe("the identity report", () => {
         surfaces: {
           automation: null,
           fonts: { reason: null, source: "host" },
-          gpu: { backend: "native" },
+          gpu: { backend: "native", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },
           leaks: { dnsOverHttps: "off", networkPrediction: "off" },
           locale: { languages: ["en-US", "en"], tag: "en-US" },
@@ -503,7 +523,7 @@ describe("the identity report", () => {
           timezone: { source: "host", zone: "America/Toronto" },
           window: { size: { height: 900, width: 1600 }, source: "fixed" },
         },
-        tells: ["hardware-unhonored", "flag-infobar"],
+        tells: ["gl-persona-unavailable", "hardware-unhonored", "flag-infobar"],
       },
     });
   });

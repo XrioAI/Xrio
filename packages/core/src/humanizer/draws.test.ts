@@ -4,6 +4,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
+import {
+  forkWithGl,
+  gpuHost,
+  HIDE_ONLY,
+  RENOIR,
+  RENOIR_RENDERER,
+  swiftShaderHost,
+} from "../testing/gl-fork.ts";
 import { forkWithKnobs } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { DeviceRecord, Observation } from "./contracts.ts";
@@ -15,7 +23,7 @@ import {
   windowBounds,
   workAreaOf,
 } from "./draws.ts";
-import type { DrawnDisplay } from "./draws.ts";
+import type { DrawnDisplay, HardwareDraw } from "./draws.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import {
@@ -468,15 +476,26 @@ const DISPLAY_GOLDEN = [
 
 const single = (value: number) => [{ value, weight: 1 }];
 
+const coresOf = (draw: HardwareDraw): number => (draw.kind === "drawn" ? draw.cores : 0);
+
 describe(drawHardware, () => {
   it.each([
-    { permitted: 32, row: { capped: false, cores: 6, memoryGb: 16, source: "drawn" } },
-    { permitted: 24, row: { capped: false, cores: 6, memoryGb: 16, source: "drawn" } },
-    { permitted: 12, row: { capped: true, cores: 6, memoryGb: 16, source: "drawn" } },
-    { permitted: 8, row: { capped: true, cores: 8, memoryGb: 8, source: "drawn" } },
-    { permitted: 6, row: { capped: true, cores: 4, memoryGb: 8, source: "drawn" } },
-    { permitted: 4, row: { capped: true, cores: 4, memoryGb: 8, source: "drawn" } },
-    { permitted: 2, row: undefined },
+    {
+      permitted: 32,
+      row: { capped: false, cores: 6, kind: "drawn", memoryGb: 16, source: "drawn" },
+    },
+    {
+      permitted: 24,
+      row: { capped: false, cores: 6, kind: "drawn", memoryGb: 16, source: "drawn" },
+    },
+    {
+      permitted: 12,
+      row: { capped: true, cores: 6, kind: "drawn", memoryGb: 16, source: "drawn" },
+    },
+    { permitted: 8, row: { capped: true, cores: 8, kind: "drawn", memoryGb: 8, source: "drawn" } },
+    { permitted: 6, row: { capped: true, cores: 4, kind: "drawn", memoryGb: 8, source: "drawn" } },
+    { permitted: 4, row: { capped: true, cores: 4, kind: "drawn", memoryGb: 8, source: "drawn" } },
+    { permitted: 2, row: { capped: true, kind: "unfit" } },
   ])(
     "draws $row for the fixed seed on a host that permits $permitted CPUs",
     ({ permitted, row }) => {
@@ -495,7 +514,7 @@ describe(drawHardware, () => {
 
       for (let index = 1; index <= FREQUENCY_SEEDS; index += 1) {
         const drawn = drawHardware(seedAt(index), undefined, [ceiling]);
-        const key = `${drawn?.cores}/${drawn?.memoryGb}`;
+        const key = drawn.kind === "drawn" ? `${drawn.cores}/${drawn.memoryGb}` : "unfit";
 
         counts.set(key, (counts.get(key) ?? 0) + 1);
       }
@@ -514,7 +533,7 @@ describe(drawHardware, () => {
 
   it("never draws more cores than any ceiling in the list allows", () => {
     for (let index = 1; index <= CONTAINMENT_SEEDS; index += 1) {
-      expect(drawHardware(seedAt(index), undefined, [16, 12])?.cores).toBeLessThanOrEqual(12);
+      expect(coresOf(drawHardware(seedAt(index), undefined, [16, 12]))).toBeLessThanOrEqual(12);
     }
   });
 
@@ -537,81 +556,81 @@ describe(drawHardware, () => {
     {
       ceilings: [3],
       name: "a pinned memory on a host under the smallest row presents it with the host's CPUs as cores",
-      row: { capped: true, cores: 3, memoryGb: 16, source: "pinned" },
+      row: { capped: true, cores: 3, kind: "drawn", memoryGb: 16, source: "pinned" },
       tables: { memoryGb: single(16) },
     },
     {
       ceilings: [6],
       name: "a pinned memory no row has caps when the ceiling trims the rows it draws from",
-      row: { capped: true, cores: 4, memoryGb: 2, source: "pinned" },
+      row: { capped: true, cores: 4, kind: "drawn", memoryGb: 2, source: "pinned" },
       tables: { memoryGb: single(2) },
     },
     {
       ceilings: [4],
       name: "a pinned 4 GB no row has caps to the one row under the ceiling",
-      row: { capped: true, cores: 4, memoryGb: 4, source: "pinned" },
+      row: { capped: true, cores: 4, kind: "drawn", memoryGb: 4, source: "pinned" },
       tables: { memoryGb: single(4) },
     },
     {
       ceilings: [8],
       name: "a pinned 8 GB caps nothing when the ceiling keeps every row with 8 GB",
-      row: { capped: false, cores: 4, memoryGb: 8, source: "pinned" },
+      row: { capped: false, cores: 4, kind: "drawn", memoryGb: 8, source: "pinned" },
       tables: { memoryGb: single(8) },
     },
     {
       ceilings: [16, 2],
       name: "a pinned memory under an unsorted ceiling list obeys the smallest ceiling",
-      row: { capped: true, cores: 2, memoryGb: 16, source: "pinned" },
+      row: { capped: true, cores: 2, kind: "drawn", memoryGb: 16, source: "pinned" },
       tables: { memoryGb: single(16) },
     },
     {
       ceilings: [32],
       name: "a pinned memory under a ceiling that removes no row caps nothing",
-      row: { capped: false, cores: 12, memoryGb: 32, source: "pinned" },
+      row: { capped: false, cores: 12, kind: "drawn", memoryGb: 32, source: "pinned" },
       tables: { memoryGb: single(32) },
     },
     {
       ceilings: [8],
       name: "a pinned memory caps only when the ceiling removed a row with that memory",
-      row: { capped: true, cores: 6, memoryGb: 16, source: "pinned" },
+      row: { capped: true, cores: 6, kind: "drawn", memoryGb: 16, source: "pinned" },
       tables: { memoryGb: single(16) },
     },
     {
       name: "a pinned core count draws its memory from the rows with those cores",
-      row: { capped: false, cores: 12, memoryGb: 16, source: "pinned" },
+      row: { capped: false, cores: 12, kind: "drawn", memoryGb: 16, source: "pinned" },
       tables: { cores: single(12) },
     },
     {
       name: "a pinned memory draws its cores from the rows with that memory",
-      row: { capped: false, cores: 12, memoryGb: 32, source: "pinned" },
+      row: { capped: false, cores: 12, kind: "drawn", memoryGb: 32, source: "pinned" },
       tables: { memoryGb: single(32) },
     },
     {
       ceilings: [6],
       name: "a pinned memory with no row under the ceiling draws its cores from the rows that remain",
-      row: { capped: true, cores: 4, memoryGb: 32, source: "pinned" },
+      row: { capped: true, cores: 4, kind: "drawn", memoryGb: 32, source: "pinned" },
       tables: { memoryGb: single(32) },
     },
     {
       name: "a core count Xrio's rows never name draws its memory from all of them",
-      row: { capped: false, cores: 3, memoryGb: 16, source: "pinned" },
+      row: { capped: false, cores: 3, kind: "drawn", memoryGb: 16, source: "pinned" },
       tables: { cores: single(3) },
     },
     {
       ceilings: [6],
       name: "a pinned core count ignores the ceiling",
-      row: { capped: false, cores: 16, memoryGb: 16, source: "pinned" },
+      row: { capped: false, cores: 16, kind: "drawn", memoryGb: 16, source: "pinned" },
       tables: { cores: single(16) },
     },
     {
       ceilings: [2],
       name: "both fields pinned ignore the ceiling and Xrio's rows",
-      row: { capped: false, cores: 3, memoryGb: 32, source: "pinned" },
+      row: { capped: false, cores: 3, kind: "drawn", memoryGb: 32, source: "pinned" },
       tables: { cores: single(3), memoryGb: single(32) },
     },
     {
       name: "a weighted table of cores replaces Xrio's weights",
-      row: { capped: false, cores: 4, memoryGb: 8, source: "pinned" },
+      row: { capped: false, cores: 4, kind: "drawn", memoryGb: 8, source: "pinned" },
       tables: {
         cores: [
           { value: 4, weight: 1 },
@@ -623,10 +642,115 @@ describe(drawHardware, () => {
     expect(drawHardware(fixedSeed, tables, ceilings)).toStrictEqual(row);
   });
 
+  it.each([
+    {
+      ceilings: [32],
+      draw: { capped: false, cores: 6, kind: "drawn", memoryGb: 16, source: "drawn" },
+      name: "a 16-thread persona on 32 CPUs removes the 24-core class without capping",
+      persona: 16,
+    },
+    {
+      ceilings: [12],
+      draw: { capped: true, cores: 6, kind: "drawn", memoryGb: 16, source: "drawn" },
+      name: "a 16-thread persona on 12 CPUs is capped by the host",
+      persona: 16,
+    },
+    {
+      ceilings: [3],
+      draw: { capped: true, kind: "unfit" },
+      name: "a 16-thread persona on 3 CPUs leaves no row because of the host",
+      persona: 16,
+    },
+    {
+      ceilings: [32],
+      draw: { capped: false, kind: "unfit" },
+      name: "a 2-thread persona on 32 CPUs leaves no row because of the persona alone",
+      persona: 2,
+    },
+    {
+      ceilings: [32],
+      draw: { capped: false, cores: 2, kind: "drawn", memoryGb: 16, source: "pinned" },
+      name: "a pinned memory under a 2-thread persona takes the persona's threads as its cores",
+      persona: 2,
+      tables: { memoryGb: single(16) },
+    },
+    {
+      ceilings: [32],
+      draw: { capped: false, cores: 24, kind: "drawn", memoryGb: 32, source: "pinned" },
+      name: "a pinned core count above the persona's threads is presented as given",
+      persona: 16,
+      tables: { cores: single(24) },
+    },
+  ])("gives $name", ({ ceilings, draw, persona, tables }) => {
+    expect(drawHardware(fixedSeed, tables, ceilings, persona)).toStrictEqual(draw);
+  });
+
   it("draws a pinned 8 GB's row as it would with no ceiling when the ceiling removes none of its rows", () => {
     expect(drawHardware(fixedSeed, { memoryGb: single(8) }, [8])).toStrictEqual(
       drawHardware(fixedSeed, { memoryGb: single(8) }),
     );
+  });
+});
+
+const NARROW_RENOIR = { ...RENOIR, maxThreads: 8 };
+
+const WIDE_RENOIR = { ...RENOIR, maxThreads: 24, name: "basharsx4-amd-wide" };
+
+describe("the GL persona draw", () => {
+  it("pins the fixed seed's persona and the hardware row its max_threads allows", () => {
+    const { gpu, hardware } = planFor(
+      fixedSeed,
+      gpuHost(forkWithGl([WIDE_RENOIR, NARROW_RENOIR]), RENOIR_RENDERER),
+    );
+
+    expect({ gpu, hardware }).toStrictEqual({
+      gpu: { backend: "native", persona: { kind: "hardware", name: "basharsx4-amd-renoir" } },
+      hardware: { cores: 8, memoryGb: 8, source: "drawn" },
+    });
+  });
+
+  it("draws no persona over SwiftShader though the package ships hide-only ones, and sets no ceiling", () => {
+    const { gpu, hardware } = planFor(
+      fixedSeed,
+      swiftShaderHost(forkWithGl([HIDE_ONLY, { ...HIDE_ONLY, maxThreads: 4, name: "narrow" }])),
+    );
+
+    expect({ gpu, hardware }).toStrictEqual({
+      gpu: { backend: "swiftshader", persona: null },
+      hardware: { cores: 6, memoryGb: 16, source: "drawn" },
+    });
+  });
+
+  it("records the drawn persona's backend, kind and name in the device record", () => {
+    const plan = planIdentity({
+      capabilities: gpuHost(forkWithGl([RENOIR]), RENOIR_RENDERER),
+      device: { kind: "fresh", seed: fixedSeed },
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: "UTC",
+      mode: "headless",
+      pins: noPins,
+    });
+
+    expect(plan.chosen.record?.device.gpu).toStrictEqual({
+      backend: "native",
+      persona: { kind: "hardware", name: "basharsx4-amd-renoir" },
+    });
+  });
+
+  it("moves no screen, window or hardware draw for any of 10,000 seeds when no persona caps the hardware", () => {
+    const capabilities = gpuHost(forkWithGl([WIDE_RENOIR]), RENOIR_RENDERER);
+
+    for (let index = 1; index <= CONTAINMENT_SEEDS; index += 1) {
+      const seed = seedAt(index);
+      const persona = planFor(seed, capabilities);
+      const none = planFor(seed, forkWithKnobs());
+
+      expect([persona.screen, persona.window, persona.hardware]).toStrictEqual([
+        none.screen,
+        none.window,
+        none.hardware,
+      ]);
+    }
   });
 });
 
@@ -943,9 +1067,9 @@ describe("a record replayed on another host", () => {
       record: replayed.chosen.record?.device.gpu,
       tells: replayed.tells,
     }).toStrictEqual({
-      gpu: { backend: "native" },
+      gpu: { backend: "native", persona: null },
       record: { backend: "swiftshader", persona: null },
-      tells: ["host-zone-utc", "hardware-unhonored", "replay-host-skew"],
+      tells: ["host-zone-utc", "gl-persona-unavailable", "hardware-unhonored", "replay-host-skew"],
     });
   });
 
@@ -967,7 +1091,13 @@ describe("a record replayed on another host", () => {
         digest: "62bbc5617946311ab21ed9ec8ef22f68a15e4ccf06cebf01aca807fedb1def3d",
         kind: "stack",
       },
-      tells: ["host-zone-utc", "hardware-unhonored", "host-fonts", "replay-host-skew"],
+      tells: [
+        "host-zone-utc",
+        "gl-persona-unavailable",
+        "hardware-unhonored",
+        "host-fonts",
+        "replay-host-skew",
+      ],
     });
   });
 });
@@ -1041,7 +1171,7 @@ describe("a record replayed with another core count or memory", () => {
 
     expect({ hardware: plan.chosen.surfaces.hardware, tells: plan.tells }).toStrictEqual({
       hardware: { cores: 0, memoryGb: 0, source: "host" },
-      tells: ["host-zone-utc", "hardware-unhonored", "host-fonts"],
+      tells: ["host-zone-utc", "gl-persona-unavailable", "hardware-unhonored", "host-fonts"],
     });
   });
 });

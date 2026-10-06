@@ -102,7 +102,7 @@ const forkScript = (directory: string, overrides: { readonly version?: string })
     `  --xrio-dump-config) echo dump >> "$DUMPS"; [ -e "$HANG" ] && /bin/sleep "$(/bin/cat "$HANG")"; exec /bin/cat ${quoted(path.join(directory, "dump.txt"))} ;;`,
     `  --version) echo ${quoted(`Chromium ${overrides.version ?? FAKE_FORK_VERSION}`)}; exit 0 ;;`,
     "esac",
-    `exec /usr/bin/env XRIO_FAKE_SCENARIO=fork ${quoted(process.execPath)} ${quoted(FAKE_CHROME)} "$@"`,
+    `exec /usr/bin/env XRIO_FAKE_SCENARIO=fork XRIO_FAKE_PACKAGE=${quoted(directory)} ${quoted(process.execPath)} ${quoted(FAKE_CHROME)} "$@"`,
     "",
   ].join("\n");
 

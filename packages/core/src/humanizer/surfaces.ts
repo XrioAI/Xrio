@@ -4,6 +4,7 @@ import type {
   DeviceRecord,
   DisplayTables,
   ExitFacts,
+  GlPersona,
   GpuChoice,
   HardwareTables,
   HostCapabilities,
@@ -13,9 +14,11 @@ import type {
   WindowPin,
   WindowState,
 } from "./contracts.ts";
-import { drawDisplay, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
+import { drawDisplay, drawGlPersona, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
+import { glLineupOf } from "./gl-persona.ts";
+import type { EligiblePersona, GlLineup } from "./gl-persona.ts";
 import type { IdentityIntent } from "./intent.ts";
 import {
   chromeAcceptLanguages,
@@ -363,35 +366,109 @@ const resolveTimezone = (
 
 const WEBGL_CONTEXT: Expectation = compatible("webgl", equals(true), "fatal");
 
-const chooseGpu = ({
-  platform,
-  readableRenderNode,
-}: HostCapabilities): Pick<Resolutions["gpu"], "inputs" | "value"> => {
+interface GlBackend {
+  readonly kind: GpuChoice["backend"];
+  readonly switches: readonly LaunchInput[];
+}
+
+interface GlChoice {
+  readonly backend: GlBackend;
+  readonly presented: EligiblePersona | null;
+  readonly skewed: boolean;
+}
+
+const glBackendOf = ({ platform, readableRenderNode }: HostCapabilities): GlBackend => {
   if (platform !== "linux") {
-    return { inputs: [], value: { backend: "native" } };
+    return { kind: "native", switches: [] };
   }
 
   return readableRenderNode === true
     ? {
-        inputs: NATIVE_GL_SWITCHES.map(({ name, value }): LaunchInput => ({
+        kind: "native",
+        switches: NATIVE_GL_SWITCHES.map(({ name, value }): LaunchInput => ({
           name,
           sink: "switch",
           value,
         })),
-        value: { backend: "native" },
       }
     : {
-        inputs: [{ name: "--enable-unsafe-swiftshader", sink: "switch" }],
-        value: { backend: "swiftshader", persona: null },
+        kind: "swiftshader",
+        switches: [{ name: "--enable-unsafe-swiftshader", sink: "switch" }],
       };
 };
 
-const resolveGpu = ({
-  capabilities,
-}: Pick<IdentityContext, "capabilities">): Resolutions["gpu"] => ({
-  expected: [WEBGL_CONTEXT],
-  ...chooseGpu(capabilities),
-});
+const recordedPersonaOf = (device: DeviceChoice): string | undefined =>
+  device.kind === "record" ? device.record.device.gpu.persona?.name : undefined;
+
+const choosePersona = (
+  { drawable, pinnable }: GlLineup,
+  recorded: string | undefined,
+  seed: Seed,
+): EligiblePersona | null => {
+  const replayed = pinnable.find(({ persona }) => persona.name === recorded);
+
+  if (replayed !== undefined) {
+    return replayed;
+  }
+
+  return drawable.length === 0
+    ? null
+    : drawGlPersona(
+        seed,
+        drawable.map((choice) => ({ choice, weight: 1 })),
+      ).choice;
+};
+
+const chooseGl = (
+  { capabilities, device }: Pick<IdentityContext, "capabilities" | "device">,
+  { seed }: Device,
+): GlChoice => {
+  const backend = glBackendOf(capabilities);
+  const lineup = glLineupOf(backend.kind, capabilities);
+
+  return {
+    backend,
+    presented: choosePersona(lineup, recordedPersonaOf(device), seed),
+    skewed: lineup.skewed,
+  };
+};
+
+const personaInputs = (persona: GlPersona | null): LaunchInput[] =>
+  persona === null ? [] : [{ name: "--xrio-gl-persona", sink: "switch", value: persona.name }];
+
+const personaExpectations = (persona: GlPersona | null): Expectation[] =>
+  persona === null
+    ? []
+    : [
+        {
+          compatibility: false,
+          field: "webglRenderer",
+          matcher: equals(persona.renderer),
+          severity: "fatal",
+        },
+        {
+          compatibility: false,
+          field: "webglExtensions",
+          matcher: { kind: "excludes-all", values: persona.hiddenExtensions },
+          severity: "fatal",
+        },
+      ];
+
+const glTells = ({ presented, skewed }: GlChoice): FactTell[] => [
+  ...(skewed ? ["gl-persona-skew" as const] : []),
+  ...(presented === null ? ["gl-persona-unavailable" as const] : []),
+];
+
+const resolveGpu = (gl: GlChoice): Resolutions["gpu"] => {
+  const persona = gl.presented?.persona ?? null;
+
+  return {
+    expected: [WEBGL_CONTEXT, ...personaExpectations(persona)],
+    inputs: [...gl.backend.switches, ...personaInputs(persona)],
+    tells: glTells(gl),
+    value: gl.presented?.gpu ?? { backend: gl.backend.kind, persona: null },
+  };
+};
 
 const HARDWARE_KNOBS = ["hardware-concurrency", "device-memory"] as const;
 
@@ -431,6 +508,7 @@ const keepHost = (tells: readonly FactTell[]): Resolutions["hardware"] => ({
 const resolveHardware = (
   { capabilities, device, pins }: Pick<IdentityContext, "capabilities" | "device" | "pins">,
   { seed }: Device,
+  presented: EligiblePersona | null,
 ): Resolutions["hardware"] => {
   if (!honorsHardware(capabilities)) {
     return keepHost(["hardware-unhonored"]);
@@ -444,15 +522,22 @@ const resolveHardware = (
       : presentHardware({ cores, memoryGb, source: "record" });
   }
 
-  const drawn = drawHardware(seed, pins.hardware, [capabilities.permittedCpus]);
+  const drawn = drawHardware(
+    seed,
+    pins.hardware,
+    [capabilities.permittedCpus],
+    presented?.persona.maxThreads,
+  );
 
-  if (drawn === undefined) {
-    return keepHost(["hardware-capped"]);
+  const tells: FactTell[] = drawn.capped ? ["hardware-capped"] : [];
+
+  if (drawn.kind === "unfit") {
+    return keepHost(tells);
   }
 
-  const { capped, cores, memoryGb, source } = drawn;
+  const { cores, memoryGb, source } = drawn;
 
-  return presentHardware({ cores, memoryGb, source }, capped ? ["hardware-capped"] : []);
+  return presentHardware({ cores, memoryGb, source }, tells);
 };
 
 const resolveHeadedWindow = (): Resolutions["window"] => ({
@@ -686,12 +771,13 @@ const resolveAutomation = (
 export const resolveSurfaces = (context: IdentityContext): Resolutions => {
   const replayed = replayPolicy(context);
   const device = deviceOf(context);
+  const gl = chooseGl(replayed, device);
 
   return {
     automation: resolveAutomation(replayed),
     fonts: resolveFonts(replayed),
-    gpu: resolveGpu(replayed),
-    hardware: resolveHardware(replayed, device),
+    gpu: resolveGpu(gl),
+    hardware: resolveHardware(replayed, device, gl.presented),
     leaks: resolveLeaks(),
     locale: resolveLocale(replayed),
     media: resolveMedia(replayed),

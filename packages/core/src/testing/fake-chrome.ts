@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { Socket } from "node:net";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -296,6 +298,59 @@ const WEBGL_EXTENSIONS = [
   "WEBGL_lose_context",
 ];
 
+interface GlStrings {
+  readonly vendor: string;
+  readonly renderer: string;
+  readonly hidden: readonly string[];
+}
+
+const STOCK_GL: GlStrings = { hidden: [], renderer: WEBGL_RENDERER, vendor: WEBGL_VENDOR };
+
+const isNamed = (value: unknown): value is string => typeof value === "string" && value !== "";
+
+const isLoadableGl = (
+  value: unknown,
+  name: string,
+): value is { vendor: string; renderer: string; hidden_extensions: string[] } =>
+  typeof value === "object" &&
+  value !== null &&
+  "name" in value &&
+  value.name === name &&
+  "vendor" in value &&
+  isNamed(value.vendor) &&
+  "renderer" in value &&
+  isNamed(value.renderer) &&
+  "hidden_extensions" in value &&
+  Array.isArray(value.hidden_extensions) &&
+  value.hidden_extensions.every(isNamed);
+
+const loadedGl = (directory: string, name: string): GlStrings | undefined => {
+  try {
+    const artifact: unknown = JSON.parse(
+      readFileSync(path.join(directory, "personas", `${name}.xrio-gl.json`), "utf-8"),
+    );
+
+    return isLoadableGl(artifact, name)
+      ? { hidden: artifact.hidden_extensions, renderer: artifact.renderer, vendor: artifact.vendor }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const presentedGl = (): GlStrings => {
+  const name = switchValue("--xrio-gl-persona");
+  const directory = process.env.XRIO_FAKE_PACKAGE;
+
+  if (scenario !== "fork" || name === undefined || directory === undefined) {
+    return STOCK_GL;
+  }
+
+  return loadedGl(directory, name) ?? STOCK_GL;
+};
+
+const GL = presentedGl();
+
 const HOST_CORES = 8;
 
 const HOST_MEMORY_GB = 8;
@@ -352,9 +407,12 @@ const OBSERVATION = {
   userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
   webdriver: false,
   webgl: scenario !== "no-webgl",
-  webglExtensions: scenario === "no-webgl" ? null : WEBGL_EXTENSIONS,
-  webglRenderer: scenario === "no-webgl" ? null : WEBGL_RENDERER,
-  webglVendor: scenario === "no-webgl" ? null : WEBGL_VENDOR,
+  webglExtensions:
+    scenario === "no-webgl"
+      ? null
+      : WEBGL_EXTENSIONS.filter((extension) => !GL.hidden.includes(extension)),
+  webglRenderer: scenario === "no-webgl" ? null : GL.renderer,
+  webglVendor: scenario === "no-webgl" ? null : GL.vendor,
   zone: "UTC",
   zoneOffsets: UTC_OFFSETS,
 };
