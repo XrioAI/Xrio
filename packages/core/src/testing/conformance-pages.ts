@@ -18,6 +18,8 @@ const WINDOW_SIZE_GIVE_UP_MS = 5000;
 
 const CONFORMANCE_PAGE_GIVE_UP_MS = 5000;
 
+const WEBGPU_GIVE_UP_MS = 5000;
+
 const REALM_COUNT = 8;
 
 const CYRILLIC_WINDOWS_1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
@@ -173,6 +175,26 @@ startRealms((name, row) => parent.postMessage({ name, row }, "*"), { withService
 const IDENTITY_SERVICE_FRAME_SCRIPT = `<script>
 ${START_REALMS_SOURCE}
 startServiceWorker((name, row) => parent.postMessage({ name, row }, "*"));
+</script>`;
+
+const IDENTITY_WEBGPU_SCRIPT = `<script>
+(async () => {
+  const started = performance.now();
+  const row = { adapter: null, ms: 0, error: null };
+  try {
+    const adapter = (await navigator.gpu?.requestAdapter()) ?? null;
+    row.adapter =
+      adapter === null
+        ? null
+        : { vendor: String(adapter.info.vendor), architecture: String(adapter.info.architecture) };
+  } catch (error) {
+    row.error = String(error);
+  }
+  row.ms = Math.round(performance.now() - started);
+  document.getElementById("identity-webgpu").textContent = JSON.stringify(row);
+  fetch("/identity-webgpu-done");
+})();
+setTimeout(() => fetch("/identity-webgpu-done"), ${WEBGPU_GIVE_UP_MS});
 </script>`;
 
 const CLIENT_HINTS_SCRIPT = `<script>
@@ -633,10 +655,11 @@ const routes = new Map<
     (response, { crossOrigin }, request) => {
       requestedPaths.delete("/identity-sized");
       requestedPaths.delete("/identity-realms-done");
+      requestedPaths.delete("/identity-webgpu-done");
       sendPage(
         response,
         "identity",
-        `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${identityReportScript(crossOrigin)}<script src="/identity-realms-settled.js"></script>`,
+        `<pre id="identity"></pre><script type="application/json" id="identity-workers"></script>${WINDOW_SIZE_WATCH}<script src="/identity-settled.js"></script>${identityReportScript(crossOrigin)}<script type="application/json" id="identity-webgpu"></script>${IDENTITY_WEBGPU_SCRIPT}<script src="/identity-realms-settled.js"></script><script src="/identity-webgpu-settled.js"></script>`,
         `<meta name="request-accept-language" content="${request.headers["accept-language"] ?? ""}">`,
       );
     },
@@ -696,6 +719,14 @@ const routes = new Map<
   ["/identity-realms-settled.js", holdScriptUntilRequested("/identity-realms-done")],
   [
     "/identity-realms-done",
+    (response) => {
+      response.writeHead(204);
+      response.end();
+    },
+  ],
+  ["/identity-webgpu-settled.js", holdScriptUntilRequested("/identity-webgpu-done")],
+  [
+    "/identity-webgpu-done",
     (response) => {
       response.writeHead(204);
       response.end();

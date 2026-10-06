@@ -84,6 +84,11 @@ const SEC_CH_DEVICE_MEMORY_HEADER = /"sec-ch-device-memory":"\d+"/u;
 
 const MEDIA_REPORT = /<pre id="media">(?<report>[^<]*)<\/pre>/u;
 
+const IDENTITY_WEBGPU =
+  /<script type="application\/json" id="identity-webgpu">(?<row>[^<]*)<\/script>/u;
+
+const WEBGPU_TIMING = /"ms":\d+[,}]/u;
+
 const RESPONSIVE = /<p id="layout">(?<layout>[a-z]+)<\/p>/u;
 
 const pageReportOf = ({ screen, window }: SurfaceChoices) =>
@@ -637,6 +642,25 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
       },
     });
     expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
+  });
+
+  it("reports the page's WebGPU adapter on /identity, and Xrio's read agrees when it observed one", async () => {
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const rowText = IDENTITY_WEBGPU.exec(html)?.groups?.row ?? "null";
+    const row: unknown = JSON.parse(rowText);
+
+    const agreed =
+      identity.coverage.webgpu.state === "observed"
+        ? { adapter: identity.observed.webgpuAdapter }
+        : {};
+
+    expect(rowText).toMatch(WEBGPU_TIMING);
+    expect(row).toMatchObject({ ...agreed, error: null });
   });
 
   it.each([
