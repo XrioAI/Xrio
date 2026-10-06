@@ -5,6 +5,7 @@ import type {
   DisplayTables,
   ExitFacts,
   GpuChoice,
+  HardwareTables,
   HostCapabilities,
   Insets,
   MediaDeviceCounts,
@@ -171,7 +172,7 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
   };
 };
 
-const RECORD_OVERRIDES = ["mode", "display", "locale", "timezone"] as const;
+const RECORD_OVERRIDES = ["mode", "display", "hardware", "locale", "timezone"] as const;
 
 export type RecordOverride = (typeof RECORD_OVERRIDES)[number];
 
@@ -201,6 +202,11 @@ const keepsDisplay = ({ device }: DeviceRecord, display: DisplayTables): boolean
     (display.taskbars?.some((insets) => sameInsets(insets, device.screen.workArea)) ?? true) &&
     (display.windows?.some((pin) => keepsWindow(device.window, pin)) ?? true));
 
+const keepsHardware = ({ device }: DeviceRecord, hardware: HardwareTables): boolean =>
+  holdsHostHardware(device) ||
+  ((hardware.cores?.some(({ value }) => value === device.cores) ?? true) &&
+    (hardware.memoryGb?.some(({ value }) => value === device.memoryGb) ?? true));
+
 const keepsZone = ({ timezone }: DeviceRecord["policy"], zone: string): boolean =>
   timezone.kind === "pinned" && timezone.zone === canonicalZone(zone);
 
@@ -213,6 +219,7 @@ export const recordOverrides = (
 ): RecordOverride[] => {
   const kept = {
     display: pins.display === undefined || keepsDisplay(record, pins.display),
+    hardware: pins.hardware === undefined || keepsHardware(record, pins.hardware),
     locale: pins.locale === undefined || pins.locale === record.policy.locale,
     mode: keepsMode(record, mode),
     timezone: pins.timezone === undefined || keepsZone(record.policy, pins.timezone),
@@ -431,7 +438,7 @@ const resolveHardware = (
     const { cores, memoryGb } = device.record.device;
 
     return holdsHostHardware(device.record.device)
-      ? keepHost([])
+      ? keepHost(["hardware-unhonored"])
       : presentHardware({ cores, memoryGb, source: "record" });
   }
 

@@ -208,6 +208,36 @@ describe("a stored record that cannot replay", () => {
       stored: withDevice({ window: { height: 50, kind: "floating", width: 1300, x: 100, y: 100 } }),
     },
     {
+      field: "device",
+      reason: "its 0.5 cores are not a positive whole number of at most 2147483647",
+      stored: withDevice({ cores: 0.5, memoryGb: 16 }),
+    },
+    {
+      field: "device",
+      reason: "its -2 cores are not a positive whole number of at most 2147483647",
+      stored: withDevice({ cores: -2, memoryGb: 16 }),
+    },
+    {
+      field: "device",
+      reason: "its 0 cores are not a positive whole number of at most 2147483647",
+      stored: withDevice({ cores: 0, memoryGb: 16 }),
+    },
+    {
+      field: "device",
+      reason: "its 2147483648 cores are not a positive whole number of at most 2147483647",
+      stored: withDevice({ cores: 2_147_483_648, memoryGb: 16 }),
+    },
+    {
+      field: "device",
+      reason: "its 12 GB of memory is not one of 2, 4, 8, 16 or 32",
+      stored: withDevice({ cores: 6, memoryGb: 12 }),
+    },
+    {
+      field: "device",
+      reason: "its 0 GB of memory is not one of 2, 4, 8, 16 or 32",
+      stored: withDevice({ cores: 6, memoryGb: 0 }),
+    },
+    {
       field: "policy",
       reason: "Xrio has not measured Chrome's language list for its locale xx-XX",
       stored: { ...record, policy: { ...record.policy, locale: "xx-XX" } },
@@ -225,5 +255,17 @@ describe("a stored record that cannot replay", () => {
       message: `Device record cannot replay: ${reason}.`,
       refusal: { field, kind: "unreplayable", reason },
     });
+  });
+});
+
+describe("a stored record's hardware", () => {
+  it.each([
+    { cores: 0, memoryGb: 0, name: "the host's own values, which a stock launch recorded" },
+    { cores: 12, memoryGb: 16, name: "12 cores and 16 GB" },
+    { cores: 3, memoryGb: 2, name: "a core count and memory Xrio's table never draws" },
+  ])("replays $name", ({ cores, memoryGb }) => {
+    const stored = withDevice({ cores, memoryGb });
+
+    expect(refuseUnreplayable(stored)).toBe(stored);
   });
 });

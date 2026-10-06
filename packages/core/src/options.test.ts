@@ -7,7 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { DeviceRecord } from "./humanizer/contracts.ts";
 import { refuseRecordOverrides, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { noPins } from "./testing/no-pins.ts";
-import type { ScrapeOptions } from "./types.ts";
+import type { HardwareOptions, ScrapeOptions } from "./types.ts";
 
 const page = { format: "html", url: "https://example.com" } as const;
 
@@ -1055,8 +1055,14 @@ describe("hardware option", () => {
   });
 });
 
+const HARDWARE_PINS: readonly HardwareOptions[] = [
+  { cores: 8 },
+  { memoryGb: 32 },
+  { cores: 12, memoryGb: 8 },
+];
+
 const scrapeWith = (
-  choices: Pick<ScrapeOptions, "display" | "locale" | "timezone">,
+  choices: Pick<ScrapeOptions, "display" | "hardware" | "locale" | "timezone">,
   mode: "headless" | "headed" = "headless",
 ) => {
   const { identity, source } = resolveScrapeIntent(
@@ -1137,6 +1143,44 @@ describe(refuseRecordOverrides, () => {
         ),
       ),
     );
+  });
+
+  it("lets a scrape pin the cores and memory the record presents, and refuses any others", () => {
+    const presenting: DeviceRecord = {
+      ...record,
+      device: { ...record.device, cores: 12, memoryGb: 16 },
+    };
+
+    const fixed = `The session's device record fixes its hardware; a scrape in that session cannot change it.`;
+
+    expect(() => {
+      refuseRecordOverrides(
+        presenting,
+        scrapeWith({
+          hardware: {
+            cores: [
+              { value: 8, weight: 1 },
+              { value: 12, weight: 1 },
+            ],
+            memoryGb: 16,
+          },
+        }),
+      );
+    }).not.toThrow();
+
+    for (const hardware of HARDWARE_PINS) {
+      expect(() => {
+        refuseRecordOverrides(presenting, scrapeWith({ hardware }));
+      }).toThrow(expect.objectContaining(refusal(fixed)));
+    }
+  });
+
+  it("lets a scrape pin any hardware on a record made where the host's own values showed", () => {
+    for (const hardware of HARDWARE_PINS) {
+      expect(() => {
+        refuseRecordOverrides(record, scrapeWith({ hardware }));
+      }).not.toThrow();
+    }
   });
 
   it("names every field a scrape would change, the mode included", () => {

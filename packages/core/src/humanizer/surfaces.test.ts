@@ -591,7 +591,7 @@ describe("the hardware surface", () => {
     ]);
   });
 
-  it("presents a record's cores and memory, and keeps the host's where the record has none", () => {
+  it("presents a record's cores and memory, and keeps the host's with a hardware-unhonored tell where the record has none", () => {
     expect([
       hardwareOf({ device: { kind: "record", record: recordWith(12, 16) } }),
       hardwareOf({ device: { kind: "record", record: recordWith(0, 0) } }),
@@ -605,7 +605,7 @@ describe("the hardware surface", () => {
       {
         expected: [],
         inputs: [],
-        tells: [],
+        tells: ["hardware-unhonored"],
         value: { cores: 0, memoryGb: 0, source: "host" },
       },
     ]);

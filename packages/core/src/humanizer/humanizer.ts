@@ -59,7 +59,14 @@ const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   window: resolutions.window.value,
 });
 
-const hostSkewed = (record: DeviceRecord, surfaces: SurfaceChoices): boolean =>
+const hostSkewed = (
+  record: DeviceRecord,
+  surfaces: SurfaceChoices,
+  { permittedCpus }: HostCapabilities,
+): boolean =>
+  record.device.cores > permittedCpus ||
+  record.device.cores !== surfaces.hardware.cores ||
+  record.device.memoryGb !== surfaces.hardware.memoryGb ||
   !isDeepStrictEqual(record.device.gpu, surfaces.gpu) ||
   !isDeepStrictEqual(record.device.fonts, fontsOf(surfaces)) ||
   !isDeepStrictEqual(record.device.voices, voicesOf(surfaces.speech));
@@ -81,7 +88,10 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
   const device = deviceOf(context);
   const surfaces = choicesOf(resolutions);
   const record = recordFor(context, device, surfaces);
-  const skewed = context.device.kind === "record" && hostSkewed(context.device.record, surfaces);
+
+  const skewed =
+    context.device.kind === "record" &&
+    hostSkewed(context.device.record, surfaces, context.capabilities);
 
   return {
     chosen: {

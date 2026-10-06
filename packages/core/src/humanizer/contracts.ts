@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
-import { chromeAcceptLanguages } from "./owned-inputs.ts";
+import {
+  chromeAcceptLanguages,
+  FORK_MAX_CORES,
+  holdsHostHardware,
+  REPORTABLE_MEMORY_GB,
+} from "./owned-inputs.ts";
 import { canonicalZone } from "./zone-name.ts";
 
 export type Seed = string;
@@ -285,6 +290,20 @@ const windowProblem = ({ screen, window }: PresentedDevice): string | undefined 
     ? undefined
     : `its ${window.width}x${window.height} window at ${window.x},${window.y} is not a whole-pixel window inside its screen's work area`;
 
+const hardwareProblem = ({ cores, memoryGb }: PresentedDevice): string | undefined => {
+  if (holdsHostHardware({ cores, memoryGb })) {
+    return undefined;
+  }
+
+  if (!isWholeAtLeast(cores, 1) || cores > FORK_MAX_CORES) {
+    return `its ${cores} cores are not a positive whole number of at most ${FORK_MAX_CORES}`;
+  }
+
+  return REPORTABLE_MEMORY_GB.some((memory) => memory === memoryGb)
+    ? undefined
+    : `its ${memoryGb} GB of memory is not one of 2, 4, 8, 16 or 32`;
+};
+
 const policyProblem = ({ locale, timezone }: DeviceRecord["policy"]) => {
   if (chromeAcceptLanguages(locale) === undefined) {
     return `Xrio has not measured Chrome's language list for its locale ${locale}`;
@@ -299,7 +318,10 @@ const unreplayable = (field: "device" | "policy", reason: string): DeviceRecordR
   new DeviceRecordRefusedError({ field, kind: "unreplayable", reason });
 
 export const refuseUnreplayable = (record: DeviceRecord): DeviceRecord => {
-  const deviceProblem = screenProblem(record.device.screen) ?? windowProblem(record.device);
+  const deviceProblem =
+    screenProblem(record.device.screen) ??
+    windowProblem(record.device) ??
+    hardwareProblem(record.device);
 
   if (deviceProblem !== undefined) {
     throw unreplayable("device", deviceProblem);

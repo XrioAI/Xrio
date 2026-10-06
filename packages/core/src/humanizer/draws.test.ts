@@ -968,6 +968,80 @@ describe("a record replayed on another host", () => {
   });
 });
 
+const replayedOn = (record: DeviceRecord, capabilities: IdentityContext["capabilities"]) => {
+  const plan = planIdentity({
+    capabilities,
+    device: { kind: "record", record },
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: "UTC",
+    mode: "headless",
+    pins: noPins,
+  });
+
+  return {
+    cores: plan.inputs.switches.filter((entry) => entry.startsWith("--xrio-")),
+    hardware: plan.chosen.surfaces.hardware,
+    tells: plan.tells.filter(
+      (tell) => tell === "replay-host-skew" || tell === "hardware-unhonored",
+    ),
+  };
+};
+
+const stored = (cores: number, memoryGb: number): DeviceRecord => ({
+  ...fixedRecord,
+  device: { ...fixedRecord.device, cores, memoryGb },
+});
+
+describe("a record replayed with another core count or memory", () => {
+  it("presents the stored cores and memory on a host that permits them, with no skew", () => {
+    expect(replayedOn(stored(12, 16), forkWithKnobs(undefined, 12))).toStrictEqual({
+      cores: ["--xrio-hardware-concurrency=12", "--xrio-device-memory=16"],
+      hardware: { cores: 12, memoryGb: 16, source: "record" },
+      tells: [],
+    });
+  });
+
+  it("still presents cores a host does not permit, and tells replay-host-skew", () => {
+    expect(replayedOn(stored(12, 16), forkWithKnobs(undefined, 8))).toStrictEqual({
+      cores: ["--xrio-hardware-concurrency=12", "--xrio-device-memory=16"],
+      hardware: { cores: 12, memoryGb: 16, source: "record" },
+      tells: ["replay-host-skew"],
+    });
+  });
+
+  it("tells replay-host-skew where a stock binary shows the host's values instead", () => {
+    expect(replayedOn(stored(12, 16), { permittedCpus: 32, platform: "linux" })).toStrictEqual({
+      cores: [],
+      hardware: { cores: 0, memoryGb: 0, source: "host" },
+      tells: ["hardware-unhonored", "replay-host-skew"],
+    });
+  });
+
+  it("sends nothing, tells hardware-unhonored and no skew for a record made where the host's values showed", () => {
+    expect(replayedOn(stored(0, 0), forkWithKnobs())).toStrictEqual({
+      cores: [],
+      hardware: { cores: 0, memoryGb: 0, source: "host" },
+      tells: ["hardware-unhonored"],
+    });
+  });
+
+  it("keeps the host's values and tells hardware-unhonored for that record under any hardware pin", () => {
+    const plan = planIdentity({
+      capabilities: forkWithKnobs(),
+      device: { kind: "record", record: stored(0, 0) },
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: "UTC",
+      mode: "headless",
+      pins: { ...noPins, hardware: { cores: single(8), memoryGb: single(16) } },
+    });
+
+    expect({ hardware: plan.chosen.surfaces.hardware, tells: plan.tells }).toStrictEqual({
+      hardware: { cores: 0, memoryGb: 0, source: "host" },
+      tells: ["host-zone-utc", "hardware-unhonored", "host-fonts"],
+    });
+  });
+});
+
 describe("a record made from a scrape's pins", () => {
   const pins = {
     display: {
