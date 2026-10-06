@@ -66,13 +66,17 @@ describe("the flag-infobar tell against the planned argv", () => {
     }
   });
 
-  it.each([
-    "--disable-webnn-compiler-sandbox",
-    "--no-sandbox",
-    "--host-resolver-rules=MAP * ~NOTFOUND",
-    "--log-net-log=/tmp/net.json",
-  ])("accepts the listed switch %s from a caller", (entry) => {
-    expect(parseBrowserArgs([entry])).toStrictEqual([entry]);
+  it.each(["--disable-webnn-compiler-sandbox", "--no-sandbox", "--log-net-log=/tmp/net.json"])(
+    "accepts the listed switch %s from a caller",
+    (entry) => {
+      expect(parseBrowserArgs([entry])).toStrictEqual([entry]);
+    },
+  );
+
+  it("refuses a caller's --host-resolver-rules, which would compete with Xrio's DNS rule", () => {
+    expect(() => parseBrowserArgs(["--host-resolver-rules=MAP * ~NOTFOUND"])).toThrow(
+      /browserArgs cannot include --host-resolver-rules, which Xrio manages/u,
+    );
   });
 
   it.each([

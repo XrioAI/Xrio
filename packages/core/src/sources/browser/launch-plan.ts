@@ -106,6 +106,7 @@ const MANAGED_SWITCHES: ReadonlySet<string> = new Set([
   "--proxy-auto-detect",
   "--proxy-bypass-list",
   "--no-proxy-server",
+  "--host-resolver-rules",
 ]);
 
 const MANAGED_SWITCH_PREFIXES = ["--remote-debugging-"] as const;
