@@ -281,7 +281,7 @@ export const loadHttpDocument = async (
 ): Promise<SourceDocument> => {
   const { inputs, report } = identity;
 
-  await using relay = await startRelay(proxy, deadline);
+  await using relay = await startRelay(proxy, deadline, "token");
 
   await using session = await createSession({
     ...chromeProfile(inputs),
