@@ -23,6 +23,7 @@ export interface InternalEvent {
   event:
     | "identity-chosen"
     | "fork-probed"
+    | "host-renderer-probed"
     | "font-stack-checked"
     | "font-settlement-failed"
     | "browser-argv"

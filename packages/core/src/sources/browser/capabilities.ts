@@ -17,6 +17,7 @@ import { XrioError } from "../../errors.ts";
 import type {
   ForkFacts,
   HostCapabilities,
+  HostRenderer,
   KnobOrigin,
   KnobRegistry,
   SpeechPersona,
@@ -35,6 +36,7 @@ import { createFontStackCheck, fontStackBeside } from "./font-stack.ts";
 import { GL_ARTIFACT_SCHEMA, glArtifactLimitsOf, parseGlArtifact } from "./gl-artifacts.ts";
 import type { GlArtifactLimits, GlArtifactReading } from "./gl-artifacts.ts";
 import { killProcessGroup, retireProcessGroup } from "./group-lifetime.ts";
+import { createHostRendererReader } from "./host-renderer.ts";
 import { TEARDOWN_BUDGET_MS } from "./port.ts";
 
 const PERSONA_MARKER = "personas";
@@ -68,6 +70,8 @@ const STDERR_TAIL_CHARS = 2048;
 const FACTS_FORMAT = 2;
 
 const RENDER_NODE_DIRECTORY = "/dev/dri";
+
+const DRM_DIRECTORY = "/sys/class/drm";
 
 const PROCESS_STATUS_FILE = "/proc/self/status";
 
@@ -146,6 +150,7 @@ interface ProbeOptions {
   readonly fcList: string;
   readonly now: () => number;
   readonly renderNodeDirectory: string;
+  readonly drmDirectory: string;
   readonly onlineCpusFile: string;
   readonly processStatusFile: string;
   readonly parallelism: () => number;
@@ -289,16 +294,16 @@ const isReadable = async (file: string): Promise<boolean> => {
   }
 };
 
-const hasReadableRenderNode = async (directory: string): Promise<boolean> => {
+const readableRenderNodes = async (directory: string): Promise<string[]> => {
   const names = await namesIn(directory);
 
   const readable = await Promise.all(
     names
       .filter((name) => RENDER_NODE_NAME.test(name))
-      .map(async (name) => await isReadable(path.join(directory, name))),
+      .map(async (name) => ({ name, readable: await isReadable(path.join(directory, name)) })),
   );
 
-  return readable.includes(true);
+  return readable.filter((node) => node.readable).map((node) => node.name);
 };
 
 const cpusInList = (list: string): ReadonlySet<number> | undefined => {
@@ -768,6 +773,11 @@ const runForkOutput = async (
   return stdout;
 };
 
+const withinDeadline = async <Result>(
+  run: () => Promise<Result>,
+  deadline: Deadline | undefined,
+): Promise<Result> => (deadline === undefined ? await run() : await untilDeadline(run, deadline));
+
 const settledOrThrow = <Value>(result: PromiseSettledResult<Value>): Value => {
   if (result.status === "rejected") {
     throw result.reason;
@@ -834,6 +844,44 @@ const probeOutputs = async (
   }
 };
 
+const runHeadless = async (
+  binary: string,
+  args: readonly string[],
+  { budgetMs, now, scratchRoot: root, signal }: ProbeOptions,
+): Promise<string> => {
+  const scratch = await createScratchDir(now(), root, "probe");
+  const groups = new Set<number>();
+  const stops = { budget: AbortSignal.timeout(budgetMs), budgetMs, groups, shutdown: signal };
+
+  try {
+    return await runForkOutput(
+      binary,
+      ["--headless", `--user-data-dir=${scratch.path}`, ...args],
+      stops,
+    );
+  } finally {
+    await removeProbeScratch(scratch, groups);
+  }
+};
+
+const rendererWithin = async (
+  learning: Promise<HostRenderer | undefined>,
+  deadline: Deadline | undefined,
+): Promise<HostRenderer | undefined> => {
+  if (deadline === undefined) {
+    return await learning;
+  }
+
+  const gaveUp = Promise.withResolvers<undefined>();
+  const timer = setTimeout(gaveUp.resolve, Math.floor(deadline.remainingMs() / 2), undefined);
+
+  try {
+    return await Promise.race([learning, gaveUp.promise]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const readStoredFacts = async (file: string): Promise<StoredFacts | undefined> => {
   let stored: unknown;
 
@@ -892,9 +940,36 @@ const probeFailed = ({ directory }: ForkPackage, cause: unknown): XrioError =>
     },
   );
 
+export interface ProbeWork {
+  readonly join: <Value>(work: Promise<Value>) => Promise<Value>;
+  readonly settled: () => Promise<void>;
+}
+
+export const createProbeWork = (): ProbeWork => {
+  const pending = new Set<Promise<unknown>>();
+
+  const forget = async (work: Promise<unknown>): Promise<void> => {
+    await Promise.allSettled([work]);
+    pending.delete(work);
+  };
+
+  return {
+    join: async (work) => {
+      pending.add(work);
+      void forget(work);
+
+      return await work;
+    },
+    settled: async () => {
+      await Promise.allSettled(pending);
+    },
+  };
+};
+
 export type HostCapabilityProbe = (
   browserPath: string | undefined,
   deadline?: Deadline,
+  work?: ProbeWork,
 ) => Promise<HostCapabilities>;
 
 export const createCapabilityProbe = (
@@ -903,6 +978,7 @@ export const createCapabilityProbe = (
   const options: ProbeOptions = {
     budgetMs: PROBE_BUDGET_MS,
     budgetSignal: (budgetMs) => AbortSignal.timeout(budgetMs),
+    drmDirectory: DRM_DIRECTORY,
     fcList: "fc-list",
     now: Date.now,
     onlineCpusFile: ONLINE_CPUS_FILE,
@@ -917,6 +993,14 @@ export const createCapabilityProbe = (
   };
 
   const checkFontStack = createFontStackCheck(options);
+
+  const rendererOf = createHostRendererReader({
+    drmDirectory: options.drmDirectory,
+    now: options.now,
+    root: options.root,
+    runHeadless: async (binary, args) => await runHeadless(binary, args, options),
+    signal: options.signal,
+  });
 
   const entries = new Map<string, ProbeEntry>();
 
@@ -1012,12 +1096,24 @@ export const createCapabilityProbe = (
     }
   };
 
-  const probeFork: HostCapabilityProbe = async (browserPath, deadline) => {
+  const needsHostRenderer = (facts: ForkFacts, renderNodes: readonly string[]): boolean =>
+    options.platform === "linux" &&
+    renderNodes.length > 0 &&
+    facts.personas.gl.some(({ kind }) => kind === "hardware");
+
+  const probeFork = async (
+    browserPath: string | undefined,
+    deadline: Deadline | undefined,
+    { join }: ProbeWork,
+  ): Promise<HostCapabilities> => {
     const permittedCpus = await permittedCpusOf(options);
 
-    const host: HostCapabilities = (await hasReadableRenderNode(options.renderNodeDirectory))
-      ? { permittedCpus, platform: options.platform, readableRenderNode: true }
-      : { permittedCpus, platform: options.platform };
+    const renderNodes = await readableRenderNodes(options.renderNodeDirectory);
+
+    const host: HostCapabilities =
+      renderNodes.length > 0
+        ? { permittedCpus, platform: options.platform, readableRenderNode: true }
+        : { permittedCpus, platform: options.platform };
 
     const fork = browserPath === undefined ? undefined : await forkPackageOf(browserPath);
 
@@ -1025,17 +1121,23 @@ export const createCapabilityProbe = (
       return host;
     }
 
-    const facts =
-      deadline === undefined
-        ? await forkFactsOf(fork)
-        : await untilDeadline(async () => await forkFactsOf(fork), deadline);
+    const facts = await withinDeadline(async () => await join(forkFactsOf(fork)), deadline);
 
-    return { ...host, fork: facts };
+    if (!needsHostRenderer(facts, renderNodes)) {
+      return { ...host, fork: facts };
+    }
+
+    const hostRenderer = await rendererWithin(join(rendererOf(fork.binary, renderNodes)), deadline);
+
+    return hostRenderer === undefined
+      ? { ...host, fork: facts }
+      : { ...host, fork: facts, hostRenderer };
   };
 
   const probeFontStack = async (
     browserPath: string | undefined,
     deadline: Deadline | undefined,
+    { join }: ProbeWork,
   ) => {
     if (options.platform !== "linux" || browserPath === undefined) {
       return null;
@@ -1047,15 +1149,13 @@ export const createCapabilityProbe = (
       return null;
     }
 
-    return deadline === undefined
-      ? await checkFontStack(directory)
-      : await untilDeadline(async () => await checkFontStack(directory), deadline);
+    return await withinDeadline(async () => await join(checkFontStack(directory)), deadline);
   };
 
-  return async (browserPath, deadline) => {
+  return async (browserPath, deadline, work = createProbeWork()) => {
     const [capabilities, fontStack] = await Promise.all([
-      probeFork(browserPath, deadline),
-      probeFontStack(browserPath, deadline),
+      probeFork(browserPath, deadline, work),
+      probeFontStack(browserPath, deadline, work),
     ]);
 
     return fontStack === null ? capabilities : { ...capabilities, fontStack };

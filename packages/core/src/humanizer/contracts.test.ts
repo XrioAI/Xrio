@@ -124,6 +124,28 @@ describe(hostDigest, () => {
     ]);
   });
 
+  it("tells hosts apart by the renderer they learned", () => {
+    const base = { permittedCpus: 32, platform: "linux", readableRenderNode: true } as const;
+
+    const digests = [
+      hostDigest(base),
+      hostDigest({
+        ...base,
+        hostRenderer: { renderer: "ANGLE (AMD)", vendor: "Google Inc. (AMD)" },
+      }),
+      hostDigest({
+        ...base,
+        hostRenderer: { renderer: "ANGLE (NVIDIA)", vendor: "Google Inc. (NVIDIA)" },
+      }),
+    ];
+
+    expect(digests).toStrictEqual([
+      "e496d775d3c7e06ccdbdae91bb74460070ce76e681e96592a7463355b644a22a",
+      "3677847b1330859969603c985b14a0761df61b2a916486fca60a57807084615d",
+      "36315aeddcf0afc8318e3ae08c116dbe83d445fcbee06a9ccd2c52cce7437a37",
+    ]);
+  });
+
   it("leaves font evidence out, so the gathering scrape and later ones share the digest", () => {
     expect(
       [1000, 2000].map((ageMs) =>

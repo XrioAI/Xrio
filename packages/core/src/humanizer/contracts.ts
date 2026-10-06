@@ -166,10 +166,16 @@ export interface FontEvidence {
   readonly sentinel: string;
 }
 
+export interface HostRenderer {
+  readonly vendor: string;
+  readonly renderer: string;
+}
+
 export interface HostCapabilities {
   readonly platform: NodeJS.Platform;
   readonly permittedCpus: number;
   readonly readableRenderNode?: true;
+  readonly hostRenderer?: HostRenderer;
   readonly fork?: ForkFacts;
   readonly fontStack?: FontStackFacts;
   readonly fontEvidence?: FontEvidence;
@@ -378,6 +384,7 @@ interface DigestedHost {
   readonly platform: NodeJS.Platform;
   readonly permittedCpus: number;
   readonly readableRenderNode: true | undefined;
+  readonly hostRenderer: HostRenderer | undefined;
   readonly fork: ForkFacts | undefined;
   readonly fontStack: StackContent | undefined;
 }
@@ -409,6 +416,7 @@ const stackContentOf = (stack: FontStackFacts): StackContent =>
 export const hostDigest = ({
   fontStack,
   fork,
+  hostRenderer,
   permittedCpus,
   platform,
   readableRenderNode,
@@ -416,6 +424,7 @@ export const hostDigest = ({
   sha256Of({
     fontStack: fontStack === undefined ? undefined : stackContentOf(fontStack),
     fork,
+    hostRenderer,
     permittedCpus,
     platform,
     readableRenderNode,

@@ -40,13 +40,16 @@ import {
   dumpsRun,
   fakeForkPath,
   hangDumpFor,
+  renderProbeLines,
+  renderProbesRun,
   replaceDump,
+  setHostRenderer,
   stopHanging,
   trapExecuted,
 } from "../../testing/fake-fork.ts";
 import type { FakeForkScenario } from "../../testing/fake-fork.ts";
 import { sweepAbandonedScratch } from "./browser-process.ts";
-import { createCapabilityProbe } from "./capabilities.ts";
+import { createCapabilityProbe, createProbeWork } from "./capabilities.ts";
 import { waitForGroupExit } from "./group-lifetime.ts";
 
 const KIT_DUMP = new URL("fixtures/kit-dump.txt", import.meta.url);
@@ -1479,6 +1482,409 @@ describe("hostCapabilities GL artifacts the fork's loader refuses", () => {
   });
 });
 
+const AMD = {
+  renderer: "ANGLE (AMD, Vulkan 1.3.255 (AMD Radeon Graphics (RADV RENOIR) (0x0000164C)), radv)",
+  vendor: "Google Inc. (AMD)",
+};
+
+const isRendererProbed = (message: unknown): message is { event: string; detail: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  message.event === "host-renderer-probed" &&
+  "detail" in message &&
+  typeof message.detail === "string";
+
+const NVIDIA = {
+  renderer: "ANGLE (NVIDIA, Vulkan 1.3.277 (NVIDIA GeForce RTX 3060 (0x00002504)), NVIDIA)",
+  vendor: "Google Inc. (NVIDIA)",
+};
+
+const rendererProbeIn = (
+  root: string,
+  overrides: Partial<{ now: () => number; platform: NodeJS.Platform }> = {},
+) =>
+  createCapabilityProbe({
+    drmDirectory: path.join(root, "drm"),
+    parallelism: () => PARALLELISM,
+    platform: "linux",
+    processStatusFile: path.join(root, "no-status"),
+    renderNodeDirectory: path.join(root, "dri"),
+    root: path.join(root, "scratch"),
+    ...overrides,
+  });
+
+const pciIdsIn = async (root: string, node: string, vendor: string, device: string) => {
+  const directory = path.join(root, "drm", node, "device");
+
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "vendor"), `${vendor}\n`);
+  await writeFile(path.join(directory, "device"), `${device}\n`);
+};
+
+const renderNodesIn = async (root: string, ...names: string[]) => {
+  await rm(path.join(root, "dri"), { force: true, recursive: true });
+  await driWith(
+    path.join(root, "dri"),
+    Object.fromEntries(names.map((name) => [name, "readable" as const])),
+  );
+};
+
+const readyForkIn = async (root: string) => {
+  await renderNodesIn(root, "renderD128");
+
+  const executable = await fakeForkPath("kit", { root });
+
+  await setHostRenderer(executable, AMD);
+
+  return executable;
+};
+
+const renderProbeStarted = async (executable: string, runs: number): Promise<void> => {
+  if ((await renderProbesRun(executable)) < runs) {
+    await delay(10);
+    await renderProbeStarted(executable, runs);
+  }
+};
+
+const rendererFilesIn = async (root: string) => {
+  const entries = await readdir(path.join(root, "scratch"));
+
+  return entries.filter((entry) => entry.startsWith("host-renderer-"));
+};
+
+const storedRendererIn = async (root: string): Promise<string> => {
+  const [file = ""] = await rendererFilesIn(root);
+
+  return await readFile(path.join(root, "scratch", file), "utf-8");
+};
+
+describe("hostCapabilities host renderer", () => {
+  let root = "";
+  let probed: string[] = [];
+
+  const recordRendererProbe: ChannelListener = (message) => {
+    if (isRendererProbed(message)) {
+      probed.push(message.detail);
+    }
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-capabilities-renderer-"));
+    probed = [];
+    subscribe("xrio:event", recordRendererProbe);
+  });
+
+  afterEach(async () => {
+    unsubscribe("xrio:event", recordRendererProbe);
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("learns the renderer once, and a second process reads it from the file", async () => {
+    const executable = await readyForkIn(root);
+    const clock = clockAt(1_000_000);
+    const first = await rendererProbeIn(root, { now: clock.now })(executable);
+    const second = await rendererProbeIn(root, { now: clock.now })(executable);
+    const [file = ""] = await rendererFilesIn(root);
+
+    expect([first.hostRenderer, second.hostRenderer]).toStrictEqual([AMD, AMD]);
+    await expect(renderProbesRun(executable)).resolves.toBe(1);
+    expect(file).toMatch(/^host-renderer-[\da-f]{64}\.json$/u);
+    expect(JSON.parse(await storedRendererIn(root))).toStrictEqual({
+      format: 1,
+      kind: "learned",
+      learnedAt: 1_000_000,
+      ...AMD,
+    });
+    expect(probed).toStrictEqual([
+      JSON.stringify({ binary: await realpath(executable), renderNodes: ["renderD128"], ...AMD }),
+    ]);
+  });
+
+  it("keys the record by the render node, so another node launches again", async () => {
+    const executable = await readyForkIn(root);
+
+    await rendererProbeIn(root)(executable);
+    await renderNodesIn(root, "renderD129");
+    await expect(rendererProbeIn(root)(executable)).resolves.toMatchObject({ hostRenderer: AMD });
+
+    await expect(renderProbesRun(executable)).resolves.toBe(2);
+    await expect(rendererFilesIn(root)).resolves.toHaveLength(2);
+  });
+
+  it("reads the renderer again when its file does not hold one", async () => {
+    const executable = await readyForkIn(root);
+
+    await rendererProbeIn(root)(executable);
+
+    const [file = ""] = await rendererFilesIn(root);
+
+    await writeFile(path.join(root, "scratch", file), '{"format":1,"vendor":3}');
+    await expect(rendererProbeIn(root)(executable)).resolves.toMatchObject({ hostRenderer: AMD });
+    await expect(renderProbesRun(executable)).resolves.toBe(2);
+  });
+
+  it("learns the renderer again when the GPU behind the same render node changes", async () => {
+    const executable = await readyForkIn(root);
+
+    await pciIdsIn(root, "renderD128", "0x1002", "0x1636");
+    await expect(rendererProbeIn(root)(executable)).resolves.toMatchObject({ hostRenderer: AMD });
+
+    await pciIdsIn(root, "renderD128", "0x10de", "0x2504");
+    await setHostRenderer(executable, NVIDIA);
+    await expect(rendererProbeIn(root)(executable)).resolves.toMatchObject({
+      hostRenderer: NVIDIA,
+    });
+    await expect(renderProbesRun(executable)).resolves.toBe(2);
+  });
+
+  it("forgets a renderer 24 hours after it was learned, also in a process that read it later", async () => {
+    const executable = await readyForkIn(root);
+    const clock = clockAt(1_000_000);
+
+    await rendererProbeIn(root, { now: clock.now })(executable);
+    clock.advance(23 * HOUR_MS);
+
+    const later = rendererProbeIn(root, { now: clock.now });
+
+    await later(executable);
+
+    const launchesWhenRead = await renderProbesRun(executable);
+
+    clock.advance(HOUR_MS);
+    await expect(later(executable)).resolves.toMatchObject({ hostRenderer: AMD });
+    expect([launchesWhenRead, await renderProbesRun(executable)]).toStrictEqual([1, 2]);
+  });
+
+  it("keeps the renderer another process learned while its own read failed", async () => {
+    const executable = await readyForkIn(root);
+    const clock = clockAt(1_000_000);
+    const page = path.join(path.dirname(executable), "renderer-page.html");
+
+    await rendererProbeIn(root, { now: clock.now })(executable);
+    clock.advance(25 * HOUR_MS);
+    await rm(page);
+    execFileSync("/usr/bin/mkfifo", [page]);
+
+    const reading = rendererProbeIn(root, { now: clock.now })(executable);
+
+    await renderProbeStarted(executable, 2);
+
+    const [file = ""] = await rendererFilesIn(root);
+    const learnedMeanwhile = { format: 1, kind: "learned", learnedAt: clock.now(), ...NVIDIA };
+
+    await writeFile(path.join(root, "scratch", file), JSON.stringify(learnedMeanwhile));
+    await setHostRenderer(executable, null);
+
+    await expect(reading).resolves.toMatchObject({ hostRenderer: NVIDIA });
+    expect(JSON.parse(await storedRendererIn(root))).toStrictEqual(learnedMeanwhile);
+  });
+
+  it("learns the renderer again after a chmod of the binary either way", async () => {
+    const executable = await readyForkIn(root);
+
+    await rendererProbeIn(root)(executable);
+    await chmod(executable, 0o700);
+    await rendererProbeIn(root)(executable);
+    await chmod(executable, 0o755);
+    await rendererProbeIn(root)(executable);
+
+    await expect(renderProbesRun(executable)).resolves.toBe(3);
+  });
+
+  it("keeps a learned renderer for 24 hours, then learns it again", async () => {
+    const executable = await readyForkIn(root);
+    const clock = clockAt(1_000_000);
+
+    await rendererProbeIn(root, { now: clock.now })(executable);
+    clock.advance(23 * HOUR_MS);
+    await rendererProbeIn(root, { now: clock.now })(executable);
+    await expect(renderProbesRun(executable)).resolves.toBe(1);
+
+    clock.advance(2 * HOUR_MS);
+    await expect(rendererProbeIn(root, { now: clock.now })(executable)).resolves.toMatchObject({
+      hostRenderer: AMD,
+    });
+    await expect(renderProbesRun(executable)).resolves.toBe(2);
+  });
+
+  it("answers a scrape within half its remaining deadline and keeps learning for later ones", async () => {
+    const executable = await readyForkIn(root);
+    const probe = rendererProbeIn(root);
+    const work = createProbeWork();
+
+    const page = path.join(path.dirname(executable), "renderer-page.html");
+
+    await rm(page);
+    execFileSync("/usr/bin/mkfifo", [page]);
+    using deadline = startDeadline(2000);
+
+    const answered = await probe(executable, deadline, work);
+
+    expect([answered.fork?.dialect, answered.hostRenderer]).toStrictEqual(["xrio", undefined]);
+    expect(deadline.remainingMs()).toBeGreaterThan(500);
+
+    await setHostRenderer(executable, AMD);
+    await work.settled();
+
+    expect(JSON.parse(await storedRendererIn(root))).toMatchObject({ kind: "learned", ...AMD });
+    await expect(rendererProbeIn(root)(executable)).resolves.toMatchObject({ hostRenderer: AMD });
+    await expect(renderProbesRun(executable)).resolves.toBe(1);
+  });
+
+  it("shares one launch between concurrent probes", async () => {
+    const executable = await readyForkIn(root);
+    const probe = rendererProbeIn(root);
+    const results = await Promise.all([probe(executable), probe(executable), probe(executable)]);
+
+    expect(results.map(({ hostRenderer }) => hostRenderer)).toStrictEqual([AMD, AMD, AMD]);
+    await expect(renderProbesRun(executable)).resolves.toBe(1);
+  });
+
+  it("launches headless with both native GL switches and the dump", async () => {
+    const executable = await readyForkIn(root);
+
+    await rendererProbeIn(root)(executable);
+
+    const [line = ""] = await renderProbeLines(executable);
+    const [headless, profile, useGl, useAngle, dump, url = ""] = line.split(" ");
+
+    expect([headless, useGl, useAngle, dump]).toStrictEqual([
+      "--headless",
+      "--use-gl=angle",
+      "--use-angle=vulkan",
+      "--dump-dom",
+    ]);
+    expect(profile).toMatch(/^--user-data-dir=\//u);
+    expect(url.startsWith("data:text/html,")).toBeTruthy();
+    expect(decodeURIComponent(url)).toContain("UNMASKED_RENDERER_WEBGL");
+  });
+});
+
+describe("hostCapabilities host renderer that is not learned", () => {
+  let root = "";
+  let probed: string[] = [];
+
+  const recordRendererProbe: ChannelListener = (message) => {
+    if (isRendererProbed(message)) {
+      probed.push(message.detail);
+    }
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "xrio-capabilities-renderer-"));
+    probed = [];
+    subscribe("xrio:event", recordRendererProbe);
+  });
+
+  afterEach(async () => {
+    unsubscribe("xrio:event", recordRendererProbe);
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("launches nothing without a readable render node", async () => {
+    const executable = await readyForkIn(root);
+
+    await renderNodesIn(root);
+    await expect(rendererProbeIn(root)(executable)).resolves.not.toHaveProperty("hostRenderer");
+    await expect(renderProbesRun(executable)).resolves.toBe(0);
+  });
+
+  it("launches nothing off Linux", async () => {
+    const executable = await readyForkIn(root);
+
+    await expect(
+      rendererProbeIn(root, { platform: "darwin" })(executable),
+    ).resolves.not.toHaveProperty("hostRenderer");
+    await expect(renderProbesRun(executable)).resolves.toBe(0);
+  });
+
+  it("launches nothing on stock Chrome", async () => {
+    await renderNodesIn(root, "renderD128");
+
+    const trap = await fakeForkPath("stock-trap", { root });
+
+    await expect(rendererProbeIn(root)(trap)).resolves.toStrictEqual({
+      permittedCpus: PARALLELISM,
+      platform: "linux",
+      readableRenderNode: true,
+    });
+    expect(existsSync(trapExecuted(trap))).toBeFalsy();
+  });
+
+  it("launches nothing on a fork whose personas hold no hardware artifact", async () => {
+    const executable = await readyForkIn(root);
+
+    await rm(path.join(path.dirname(executable), "personas", "synthetic-gpu.xrio-gl.json"));
+    await expect(rendererProbeIn(root)(executable)).resolves.not.toHaveProperty("hostRenderer");
+    await expect(renderProbesRun(executable)).resolves.toBe(0);
+  });
+
+  it.each([
+    ["a page with no marker", undefined, "the page printed no WebGL payload"],
+    ["a page that reports no WebGL context", null, "the page reported no WebGL renderer"],
+  ])("gives no renderer and stores the failure for %s", async (_label, strings, reason) => {
+    const executable = await readyForkIn(root);
+    const probe = rendererProbeIn(root, { now: clockAt(1_000_000).now });
+
+    await setHostRenderer(executable, strings);
+
+    const result = await probe(executable);
+
+    expect([result.fork?.dialect, result.hostRenderer]).toStrictEqual(["xrio", undefined]);
+    expect(JSON.parse(await storedRendererIn(root))).toStrictEqual({
+      failedAt: 1_000_000,
+      format: 1,
+      kind: "failed",
+      reason,
+    });
+    expect(probed).toStrictEqual([
+      JSON.stringify({
+        binary: await realpath(executable),
+        reason,
+        renderNodes: ["renderD128"],
+        renderer: null,
+        vendor: null,
+      }),
+    ]);
+  });
+
+  it("keeps a failed read 60 s for the next process too, then reads again", async () => {
+    const executable = await readyForkIn(root);
+    const clock = clockAt(1_000_000);
+
+    await setHostRenderer(executable, undefined);
+    await rendererProbeIn(root, { now: clock.now })(executable);
+    clock.advance(FAILED_PROBE_TTL_MS - 1);
+    await rendererProbeIn(root, { now: clock.now })(executable);
+    await expect(renderProbesRun(executable)).resolves.toBe(1);
+
+    await setHostRenderer(executable, AMD);
+    clock.advance(1);
+    await expect(rendererProbeIn(root, { now: clock.now })(executable)).resolves.toMatchObject({
+      hostRenderer: AMD,
+    });
+    await expect(renderProbesRun(executable)).resolves.toBe(2);
+  });
+
+  it("does not retry a failed read for 60 s, then reads again", async () => {
+    const executable = await readyForkIn(root);
+    const clock = clockAt(1_000_000);
+    const probe = rendererProbeIn(root, { now: clock.now });
+
+    await setHostRenderer(executable, undefined);
+    await probe(executable);
+    clock.advance(FAILED_PROBE_TTL_MS - 1);
+    await probe(executable);
+    await expect(renderProbesRun(executable)).resolves.toBe(1);
+
+    await setHostRenderer(executable, AMD);
+    clock.advance(1);
+    await expect(probe(executable)).resolves.toMatchObject({ hostRenderer: AMD });
+    await expect(renderProbesRun(executable)).resolves.toBe(2);
+  });
+});
+
 describe("hostCapabilities font stack", () => {
   const { checks, factsOf, fixture, probeOn, scratch, stackDirectory, stackFiles } = useFontStack();
 
@@ -1727,6 +2133,25 @@ describe("hostCapabilities font stack refusals", () => {
     clock.advance(FAILED_PROBE_TTL_MS);
     await expect(factsOf(probe)).resolves.toMatchObject({ kind: "checked" });
     await expect(fcListRuns(fixture())).resolves.toHaveLength(2);
+  });
+
+  it("answers at its deadline mid-check, and settles the caller's work once the check is kept", async () => {
+    const work = createProbeWork();
+
+    await hangFcListFor(fixture(), 1);
+    using deadline = startDeadline(200);
+
+    await expect(probeOn()(fixture().binary, deadline, work)).rejects.toMatchObject({
+      code: "TIMEOUT",
+    });
+
+    const keptAtDeadline = await stackFiles();
+
+    await work.settled();
+
+    const keptOnceSettled = await stackFiles();
+
+    expect([keptAtDeadline.length, keptOnceSettled.length]).toStrictEqual([0, 1]);
   });
 
   it("stops a check when its client closes, and keeps nothing", async () => {

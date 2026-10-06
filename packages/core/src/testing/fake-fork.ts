@@ -76,6 +76,12 @@ const PACKAGES: Readonly<Record<Exclude<FakeForkScenario, TrapScenario>, FakePac
   },
 };
 
+const NO_RENDERER_PAGE = "<html><head></head><body></body></html>\n";
+
+const RENDERER_PAGE_FILE = "renderer-page.html";
+
+const RENDERER_PROBES_FILE = "renderer-probes";
+
 const quoted = (value: string): string => `'${value.replaceAll("'", String.raw`'\''`)}'`;
 
 const forkScript = (directory: string, overrides: { readonly version?: string }): string =>
@@ -83,6 +89,15 @@ const forkScript = (directory: string, overrides: { readonly version?: string })
     "#!/bin/sh",
     `HANG=${quoted(path.join(directory, "hang"))}`,
     `DUMPS=${quoted(path.join(directory, "dumps"))}`,
+    `PROBES=${quoted(path.join(directory, RENDERER_PROBES_FILE))}`,
+    `PAGE=${quoted(path.join(directory, RENDERER_PAGE_FILE))}`,
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--dump-dom" ]; then',
+    '    printf \'%s\\n\' "$*" >> "$PROBES"',
+    `    if [ -e "$PAGE" ]; then /bin/cat "$PAGE"; else printf '%s' ${quoted(NO_RENDERER_PAGE)}; fi`,
+    "    exit 0",
+    "  fi",
+    "done",
     'case "$1" in',
     `  --xrio-dump-config) echo dump >> "$DUMPS"; [ -e "$HANG" ] && /bin/sleep "$(/bin/cat "$HANG")"; exec /bin/cat ${quoted(path.join(directory, "dump.txt"))} ;;`,
     `  --version) echo ${quoted(`Chromium ${overrides.version ?? FAKE_FORK_VERSION}`)}; exit 0 ;;`,
@@ -200,4 +215,33 @@ export const dumpsRun = async (executable: string): Promise<number> => {
 
 export const replaceDump = async (executable: string, dump: string): Promise<void> => {
   await writeFile(path.join(path.dirname(executable), "dump.txt"), dump);
+};
+
+export const setHostRenderer = async (
+  executable: string,
+  strings: { readonly vendor: string; readonly renderer: string } | null | undefined,
+): Promise<void> => {
+  const body =
+    strings === undefined ? "" : `xrio-gl ${encodeURIComponent(JSON.stringify(strings))}`;
+
+  await writeFile(
+    path.join(path.dirname(executable), RENDERER_PAGE_FILE),
+    `<html><head></head><body>${body}</body></html>\n`,
+  );
+};
+
+export const renderProbeLines = async (executable: string): Promise<string[]> => {
+  try {
+    const log = await readFile(path.join(path.dirname(executable), RENDERER_PROBES_FILE), "utf-8");
+
+    return log.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
+export const renderProbesRun = async (executable: string): Promise<number> => {
+  const lines = await renderProbeLines(executable);
+
+  return lines.length;
 };

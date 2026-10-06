@@ -21,6 +21,7 @@ import {
   chromeAcceptLanguages,
   holdsHostHardware,
   isChromeBadFlag,
+  NATIVE_GL_SWITCHES,
   XRIO_SENT_BAD_FLAG_SWITCHES,
 } from "./owned-inputs.ts";
 import type { LaunchInput } from "./owned-inputs.ts";
@@ -372,10 +373,11 @@ const chooseGpu = ({
 
   return readableRenderNode === true
     ? {
-        inputs: [
-          { name: "--use-gl", sink: "switch", value: "angle" },
-          { name: "--use-angle", sink: "switch", value: "vulkan" },
-        ],
+        inputs: NATIVE_GL_SWITCHES.map(({ name, value }): LaunchInput => ({
+          name,
+          sink: "switch",
+          value,
+        })),
         value: { backend: "native" },
       }
     : {

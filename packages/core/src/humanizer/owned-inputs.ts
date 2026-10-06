@@ -10,6 +10,11 @@ export const OWNED_SWITCHES = [
   "--use-fake-device-for-media-stream",
 ] as const;
 
+export const NATIVE_GL_SWITCHES = [
+  { name: "--use-gl", value: "angle" },
+  { name: "--use-angle", value: "vulkan" },
+] as const;
+
 const FORK_HARDWARE_SWITCHES = ["--xrio-hardware-concurrency", "--xrio-device-memory"] as const;
 
 export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE", "TZ", "FONTCONFIG_PATH"] as const;

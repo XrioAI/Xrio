@@ -4,7 +4,7 @@ import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import type { HostCapabilities } from "../../humanizer/contracts.ts";
 import { scratchRoot } from "./browser-process.ts";
-import { createCapabilityProbe, PROBE_SETTLE_BUDGET_MS } from "./capabilities.ts";
+import { createCapabilityProbe, createProbeWork, PROBE_SETTLE_BUDGET_MS } from "./capabilities.ts";
 import type { HostCapabilityProbe } from "./capabilities.ts";
 import { settleWithin } from "./lifetime.ts";
 
@@ -47,26 +47,16 @@ const processProbeFor = (root: string): HostCapabilityProbe => {
 
 export const hostFactsFor = (cacheDir: CacheDir): ClientHostFacts => {
   const probe = processProbeFor(hostCacheRoot(cacheDir));
-  const probing = new Set<Promise<HostCapabilities>>();
-
-  const trackUntilSettled = async (snapshot: Promise<HostCapabilities>): Promise<void> => {
-    probing.add(snapshot);
-    await Promise.allSettled([snapshot]);
-    probing.delete(snapshot);
-  };
+  const work = createProbeWork();
 
   return {
     settle: async () => {
-      await settleWithin(Promise.allSettled(probing), PROBE_SETTLE_BUDGET_MS);
+      await settleWithin(work.settled(), PROBE_SETTLE_BUDGET_MS);
     },
     snapshotFor: async (binary, deadline) => {
       deadline.throwIfExpired();
 
-      const snapshot = probe(binary);
-
-      void trackUntilSettled(snapshot);
-
-      return await untilDeadline(async () => await snapshot, deadline);
+      return await untilDeadline(async () => await probe(binary, deadline, work), deadline);
     },
   };
 };

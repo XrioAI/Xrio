@@ -2,6 +2,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
+import { performance } from "node:perf_hooks";
 import { inspect } from "node:util";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -720,6 +721,20 @@ describe("XrioClient browser admission", () => {
   );
 });
 
+const closeTimingOf = async (client: XrioClient): Promise<string> => {
+  const started = performance.now();
+
+  await client.close();
+
+  const ms = performance.now() - started;
+
+  if (ms < 100) {
+    return "within 100 ms";
+  }
+
+  return ms >= 1000 && ms < 6000 ? "within 1 to 6 s" : `after ${Math.round(ms)} ms`;
+};
+
 describe("the client's host facts", () => {
   it("starts no probe when constructed or closed without scraping", async () => {
     const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
@@ -849,6 +864,47 @@ describe("the client's host facts", () => {
       await client.close();
 
       await expect(storedFactsIn(nodePath.join(cacheDir, "host"))).resolves.toHaveLength(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("closes a client that joined no probe at once, and the clients whose scrapes started or joined one once it is gone", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      const browserPath = await fakeForkPath("kit", { root });
+      const cacheDir = nodePath.join(root, "cache");
+
+      await hangDumpFor(browserPath, 3);
+
+      const starter = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+      const joiner = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+      const idle = new XrioClient({ cacheDir, mode: "http" });
+      const request = { format: "html", timeoutMs: 300, url: "http://127.0.0.1:9/" } as const;
+
+      await Promise.all([
+        expect(starter.scrape(request)).rejects.toMatchObject({ code: "TIMEOUT" }),
+        expect(joiner.scrape(request)).rejects.toMatchObject({ code: "TIMEOUT" }),
+      ]);
+
+      const [idleClose, joinerClose, starterClose] = await Promise.all([
+        closeTimingOf(idle),
+        closeTimingOf(joiner),
+        closeTimingOf(starter),
+      ]);
+
+      expect({
+        dumps: await dumpsRun(browserPath),
+        idle: idleClose,
+        joiner: joinerClose,
+        starter: starterClose,
+      }).toStrictEqual({
+        dumps: 1,
+        idle: "within 100 ms",
+        joiner: "within 1 to 6 s",
+        starter: "within 1 to 6 s",
+      });
     } finally {
       await rm(root, { force: true, recursive: true });
     }
