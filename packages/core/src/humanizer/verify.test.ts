@@ -476,6 +476,246 @@ const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
   webgpuAdapter: { kind: "none" },
 });
 
+const announcedPlan = (persona = RENOIR) => {
+  const plan = planFor({
+    capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, persona])),
+    pins: { ...noPins, hardware: { gpuPolicy: "announce" } },
+  });
+
+  return { ...plan, expected: [] };
+};
+
+const BATTERYLESS_STATE = { charging: true, kind: "state", level: 1 } as const;
+
+const readingWith = (
+  overrides: Partial<Extract<Observation["afterCapture"], { kind: "secure" }>>,
+): Observation["afterCapture"] => ({
+  battery: true,
+  batteryState: { charging: false, kind: "state", level: 0.8 },
+  clientHints: null,
+  deviceMemory: 8,
+  kind: "secure",
+  webgpu: true,
+  webgpuAdapter: { kind: "none" },
+  ...overrides,
+});
+
+const afterCaptureTells = (
+  plan: ReturnType<typeof announcedPlan>,
+  afterCapture: Observation["afterCapture"],
+) =>
+  evaluate(plan, { ...linuxHeadless, afterCapture }).report.tells.filter(
+    (tell) => tell === "gpu-contradiction" || tell === "form-factor-battery-skew",
+  );
+
+describe("the announced persona's after-capture tells", () => {
+  it.each([
+    {
+      adapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+      why: "SwiftShader",
+    },
+    {
+      adapter: { architecture: "gen-12lp", kind: "adapter", vendor: "intel" },
+      why: "an Intel GPU",
+    },
+    { adapter: { architecture: "ada", kind: "adapter", vendor: "nvidia" }, why: "an NVIDIA GPU" },
+  ] as const)(
+    "tells gpu-contradiction when the adapter is $why under an AMD persona",
+    ({ adapter }) => {
+      expect(
+        afterCaptureTells(announcedPlan(), readingWith({ webgpuAdapter: adapter })),
+      ).toStrictEqual(["gpu-contradiction"]);
+    },
+  );
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "ATI Technologies" },
+      vendor: "Google Inc. (AMD)",
+      why: "an ATI-named adapter under AMD",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" },
+      vendor: "Google Inc. (ATI Technologies)",
+      why: "an AMD adapter under an ATI persona",
+    },
+    {
+      adapter: { architecture: "ada", kind: "adapter", vendor: "nvidia" },
+      vendor: "Google Inc. (NVIDIA Corporation)",
+      why: "an NVIDIA adapter under an NVIDIA Corporation persona",
+    },
+    {
+      adapter: { architecture: "gen-12lp", kind: "adapter", vendor: "intel" },
+      vendor: "Intel Inc.",
+      why: "an Intel adapter under an unbranded Intel Inc. persona",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd advanced micro devices" },
+      vendor: "Google Inc. (AMD)",
+      why: "an adapter whose vendor contains the persona's brand",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "" },
+      vendor: "Google Inc. (AMD)",
+      why: "an adapter that names no vendor",
+    },
+  ] as const)("tells no gpu-contradiction for $why", ({ adapter, vendor }) => {
+    expect(
+      afterCaptureTells(
+        announcedPlan({ ...RENOIR, vendor }),
+        readingWith({ webgpuAdapter: adapter }),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" },
+      vendor: "Intel Inc.",
+      why: "an AMD adapter under an unbranded Intel Inc. persona",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" },
+      vendor: "Google Inc. (NVIDIA Corporation)",
+      why: "an AMD adapter under an NVIDIA Corporation persona",
+    },
+    {
+      adapter: { architecture: "gen-12lp", kind: "adapter", vendor: "intel" },
+      vendor: "Google Inc. (ATI Technologies)",
+      why: "an Intel adapter under an ATI persona",
+    },
+  ] as const)("tells gpu-contradiction for $why", ({ adapter, vendor }) => {
+    expect(
+      afterCaptureTells(
+        announcedPlan({ ...RENOIR, vendor }),
+        readingWith({ webgpuAdapter: adapter }),
+      ),
+    ).toStrictEqual(["gpu-contradiction"]);
+  });
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "swiftshader" },
+      why: "a vendor that names SwiftShader",
+    },
+    {
+      adapter: { architecture: "swiftshader", kind: "adapter", vendor: "" },
+      why: "an architecture that names SwiftShader beside an empty vendor",
+    },
+  ] as const)(
+    "tells gpu-contradiction for $why even when the persona claims no vendor",
+    ({ adapter }) => {
+      expect(
+        afterCaptureTells(
+          announcedPlan({ ...RENOIR, vendor: "" }),
+          readingWith({ webgpuAdapter: adapter }),
+        ),
+      ).toStrictEqual(["gpu-contradiction"]);
+    },
+  );
+
+  it.each(["matched", "announce"] as const)(
+    "judges nothing on a native GPU under %s, where the host's own GPU is presented",
+    (gpuPolicy) => {
+      const plan = {
+        ...planFor({
+          capabilities: gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER),
+          pins: { ...noPins, hardware: { gpuPolicy } },
+        }),
+        expected: [],
+      };
+
+      expect(
+        afterCaptureTells(
+          plan,
+          readingWith({
+            batteryState: BATTERYLESS_STATE,
+            webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+          }),
+        ),
+      ).toStrictEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" } as const,
+      why: "an AMD adapter",
+    },
+    { adapter: { kind: "none" } as const, why: "no adapter" },
+    { adapter: { kind: "timed-out" } as const, why: "an adapter read that timed out" },
+    { adapter: { kind: "failed" } as const, why: "an adapter read that failed" },
+  ])("tells no gpu-contradiction for $why", ({ adapter }) => {
+    expect(
+      afterCaptureTells(announcedPlan(), readingWith({ webgpuAdapter: adapter })),
+    ).toStrictEqual([]);
+  });
+
+  it("tells form-factor-battery-skew for a laptop persona on a batteryless page", () => {
+    expect(
+      afterCaptureTells(announcedPlan(), readingWith({ batteryState: BATTERYLESS_STATE })),
+    ).toStrictEqual(["form-factor-battery-skew"]);
+  });
+
+  it.each([
+    {
+      batteryState: { charging: false, kind: "state", level: 1 } as const,
+      why: "discharging at full",
+    },
+    {
+      batteryState: { charging: true, kind: "state", level: 0.99 } as const,
+      why: "charging below full",
+    },
+    { batteryState: { kind: "none" } as const, why: "no battery API" },
+    { batteryState: { kind: "timed-out" } as const, why: "a battery read that timed out" },
+    { batteryState: { kind: "failed" } as const, why: "a battery read that failed" },
+  ])("tells no form-factor-battery-skew for a battery $why", ({ batteryState }) => {
+    expect(afterCaptureTells(announcedPlan(), readingWith({ batteryState }))).toStrictEqual([]);
+  });
+
+  it("tells no form-factor-battery-skew for a desktop persona", () => {
+    expect(
+      afterCaptureTells(
+        announcedPlan({ ...RENOIR, formFactor: "desktop" }),
+        readingWith({ batteryState: BATTERYLESS_STATE }),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("tells both when the page contradicts the persona twice", () => {
+    expect(
+      afterCaptureTells(
+        announcedPlan(),
+        readingWith({
+          batteryState: BATTERYLESS_STATE,
+          webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+        }),
+      ),
+    ).toStrictEqual(["gpu-contradiction", "form-factor-battery-skew"]);
+  });
+
+  it("judges nothing without an announced persona, a secure origin or a launch that sent one", () => {
+    const contradicting = readingWith({
+      batteryState: BATTERYLESS_STATE,
+      webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+    });
+
+    const matched = {
+      ...planFor({ capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])) }),
+      expected: [],
+    };
+
+    const stock = { ...planFor(), expected: [] };
+
+    expect([
+      afterCaptureTells(matched, contradicting),
+      afterCaptureTells(stock, contradicting),
+      afterCaptureTells(announcedPlan(), { kind: "insecure" }),
+      afterCaptureTells(announcedPlan(), { kind: "failed" }),
+    ]).toStrictEqual([[], [], [], []]);
+  });
+});
+
 describe("the hardware expectations", () => {
   const seen = { ...linuxHeadless, hardwareConcurrency: 6 };
 

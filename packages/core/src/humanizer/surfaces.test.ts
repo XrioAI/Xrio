@@ -1110,6 +1110,7 @@ const THIRD_HARDWARE = { ...RENOIR, name: "basharsx4-amd-third" };
 describe("a GL persona under the announce policy", () => {
   it("presents a hardware persona over SwiftShader and expects its renderer", () => {
     expect(announcedGpuOf(swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])))).toStrictEqual({
+      claims: { laptop: true, vendor: "AMD" },
       expected: [
         webglContext,
         {
@@ -1334,6 +1335,76 @@ describe("the battery's launch inputs", () => {
     expect(
       [names("matched"), names("announce")].flat().filter((name) => /battery/iu.test(name)),
     ).toStrictEqual([]);
+  });
+});
+
+const claimsOf = (capabilities: HostCapabilities, pins: IdentityIntent = announcing) =>
+  planIdentity(contextOf({ capabilities, pins })).claims;
+
+describe("the persona claims an announce plan hands to the after-capture read", () => {
+  it("names the persona's GPU vendor and form factor under announce", () => {
+    expect(claimsOf(swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])))).toStrictEqual({
+      laptop: true,
+      vendor: "AMD",
+    });
+  });
+
+  it("reports a desktop persona as no laptop", () => {
+    const desktop = { ...RENOIR, formFactor: "desktop" } as const;
+
+    expect(claimsOf(swiftShaderHost(forkWithGl([desktop])))).toStrictEqual({
+      laptop: false,
+      vendor: "AMD",
+    });
+  });
+
+  it.each([
+    { brand: "NVIDIA Corporation", vendor: "Google Inc. (NVIDIA Corporation)" },
+    { brand: "ATI Technologies", vendor: "Google Inc. (ATI Technologies)" },
+    { brand: "Intel Inc.", vendor: "Intel Inc." },
+    { brand: "Google Inc.", vendor: " Google Inc. " },
+    { brand: undefined, vendor: "" },
+    { brand: undefined, vendor: "  " },
+  ])("reads the vendor brand of $vendor as $brand", ({ brand, vendor }) => {
+    expect(claimsOf(swiftShaderHost(forkWithGl([{ ...RENOIR, vendor }])))).toStrictEqual({
+      laptop: true,
+      vendor: brand,
+    });
+  });
+
+  it("claims nothing under matched, when no hardware persona is eligible, or on stock Chrome", () => {
+    const skewed = { ...RENOIR, chromeVersion: OTHER_CHROME };
+
+    expect([
+      claimsOf(swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])), noPins),
+      claimsOf(swiftShaderHost(forkWithGl([HIDE_ONLY, skewed]))),
+      claimsOf({ permittedCpus: 32, platform: "linux" }),
+    ]).toStrictEqual([null, null, null]);
+  });
+
+  it.each(["matched", "announce"] as const)(
+    "claims nothing on a native GPU under %s, where the host's own GPU is presented",
+    (gpuPolicy) => {
+      const capabilities = gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER);
+
+      expect(claimsOf(capabilities, { ...noPins, hardware: { gpuPolicy } })).toBeNull();
+    },
+  );
+
+  it("claims the persona of a replayed announce record", () => {
+    const record = recordPresenting(
+      swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
+      ANNOUNCED_RENOIR,
+    );
+
+    const plan = planIdentity(
+      contextOf({
+        capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
+        device: { kind: "record", record },
+      }),
+    );
+
+    expect(plan.claims).toStrictEqual({ laptop: true, vendor: "AMD" });
   });
 });
 

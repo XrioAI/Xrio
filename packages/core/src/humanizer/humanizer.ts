@@ -3,7 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 
 import { deviceDigest, hostDigest } from "./contracts.ts";
-import type { DeviceRecord, FontEvidence, ForkFacts, HostCapabilities } from "./contracts.ts";
+import type {
+  DeviceRecord,
+  FontEvidence,
+  ForkFacts,
+  HostCapabilities,
+  PersonaClaims,
+} from "./contracts.ts";
 import { mergeBrowserInputs } from "./inputs.ts";
 import type { BrowserInputs } from "./inputs.ts";
 import type { IdentityIntent } from "./intent.ts";
@@ -43,6 +49,7 @@ export interface IdentityPlan {
     readonly afterCapture: (budgetMs: number) => string;
   };
   readonly tells: readonly FactTell[];
+  readonly claims: PersonaClaims | null;
   readonly chosen: ChosenIdentity;
   readonly fontEvidence: FontEvidence | undefined;
 }
@@ -113,6 +120,7 @@ export const planIdentity = (context: IdentityContext): IdentityPlan => {
       seed: device.seed,
       surfaces,
     },
+    claims: resolutions.gpu.claims ?? null,
     expected: EMISSION_ORDER.flatMap((surface) =>
       resolutions[surface].expected.map((expectation) => ({ ...expectation, surface })),
     ),

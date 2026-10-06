@@ -5,6 +5,7 @@ import type {
   GpuPolicy,
   HostCapabilities,
   HostRenderer,
+  PersonaClaims,
 } from "./contracts.ts";
 import { MACHINE_CLASSES } from "./owned-inputs.ts";
 
@@ -47,6 +48,8 @@ const UNKNOWN_HOST_RENDERER = "this host's own renderer is unknown";
 const FEWEST_CLASS_CORES = Math.min(...MACHINE_CLASSES.map(({ cores }) => cores));
 
 const NOT_A_FORK = "this browser is not an Xrio fork package, so it has no GL personas";
+
+const UNMASKED_VENDOR_BRAND = /\((?<brand>[^()]+)\)$/u;
 
 const ANGLE_OPENING = "ANGLE (";
 
@@ -218,6 +221,18 @@ const refusalOf = (verdict: Verdict): [string, string][] =>
   verdict.kind === "eligible" ? [] : [[verdict.persona.name, verdict.reason]];
 
 const refused = (reason: string): PinnedPersona => ({ kind: "refused", reason });
+
+const brandOf = (vendor: string): string | undefined => {
+  const text = vendor.trim();
+  const brand = UNMASKED_VENDOR_BRAND.exec(text)?.groups?.brand?.trim() ?? text;
+
+  return brand === "" ? undefined : brand;
+};
+
+export const personaClaims = ({ formFactor, vendor }: GlPersona): PersonaClaims => ({
+  laptop: formFactor === "laptop",
+  vendor: brandOf(vendor),
+});
 
 export const hardwareEligibleCount = ({ pinnable }: GlLineup): number =>
   pinnable.filter(({ persona }) => persona.kind === "hardware").length;

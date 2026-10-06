@@ -12,6 +12,7 @@ import type {
   Insets,
   MediaDeviceCounts,
   NameRow,
+  PersonaClaims,
   Seed,
   WindowPin,
   WindowState,
@@ -19,7 +20,7 @@ import type {
 import { drawDisplay, drawGlPersona, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
-import { glLineupOf, hardwareEligibleCount } from "./gl-persona.ts";
+import { glLineupOf, hardwareEligibleCount, personaClaims } from "./gl-persona.ts";
 import type { EligiblePersona, GlLineup } from "./gl-persona.ts";
 import type { IdentityIntent } from "./intent.ts";
 import {
@@ -105,6 +106,7 @@ interface Resolution<Value> {
   readonly inputs: readonly LaunchInput[];
   readonly expected: readonly Expectation[];
   readonly tells?: readonly FactTell[];
+  readonly claims?: PersonaClaims;
   readonly value: Value;
 }
 
@@ -508,6 +510,11 @@ const glTells = (gl: GlChoice): FactTell[] => [
 const withoutPersona = (backend: GpuChoice["backend"]): GpuChoice =>
   backend === "native" ? { backend, persona: null } : { backend, persona: null };
 
+const claimsOf = (gl: GlChoice): { claims?: PersonaClaims } =>
+  announcedOverSoftware(gl) && gl.presented !== null
+    ? { claims: personaClaims(gl.presented.persona) }
+    : {};
+
 const resolveGpu = (gl: GlChoice): Resolutions["gpu"] => {
   const persona = gl.presented?.persona ?? null;
 
@@ -516,6 +523,7 @@ const resolveGpu = (gl: GlChoice): Resolutions["gpu"] => {
     inputs: [...gl.backend.switches, ...personaInputs(persona)],
     tells: glTells(gl),
     value: gl.presented?.gpu ?? withoutPersona(gl.backend.kind),
+    ...claimsOf(gl),
   };
 };
 

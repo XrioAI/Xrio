@@ -92,6 +92,11 @@ export type GpuChoice =
       readonly policy: "announce";
     };
 
+export interface PersonaClaims {
+  readonly vendor: string | undefined;
+  readonly laptop: boolean;
+}
+
 export interface PresentedDevice {
   readonly screen: { readonly width: number; readonly height: number; readonly workArea: Insets };
   readonly window: WindowState;

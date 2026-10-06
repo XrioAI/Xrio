@@ -8,6 +8,7 @@ import type {
   ClientHints,
   FontEvidence,
   Observation,
+  PersonaClaims,
   SecureContextReading,
   WebGpuAdapterReading,
 } from "./contracts.ts";
@@ -66,6 +67,8 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
+type AfterCaptureTell = "gpu-contradiction" | "form-factor-battery-skew";
+
 export type FactTell =
   | "host-zone-utc"
   | "exit-unknown"
@@ -90,9 +93,13 @@ export type IdentityTell =
   | "unmeasured-chrome"
   | FactTell
   | "fonts-drift"
-  | "hardware-drift";
+  | "hardware-drift"
+  | AfterCaptureTell;
 
-type ObservedTell = Exclude<IdentityTell, FactTell | "fonts-drift" | "hardware-drift">;
+type ObservedTell = Exclude<
+  IdentityTell,
+  FactTell | "fonts-drift" | "hardware-drift" | AfterCaptureTell
+>;
 
 export type FontEvidenceOutcome =
   | { readonly kind: "gathered"; readonly digest: string; readonly sentinel: string }
@@ -463,13 +470,64 @@ const fontEvidenceOutcome = (
 const hardwareDriftOf = (notes: readonly IdentityMismatch[]): readonly "hardware-drift"[] =>
   notes.some(({ surface }) => surface === "hardware") ? ["hardware-drift"] : [];
 
+const SWIFTSHADER_NAME = /swiftshader/iu;
+
+const BATTERYLESS = { charging: true, level: 1 } as const;
+
+const ATI_BRAND = /^ati\b/u;
+
+const canonicalVendor = (vendor: string): string => {
+  const lower = vendor.trim().toLowerCase();
+
+  return ATI_BRAND.test(lower) ? "amd" : lower;
+};
+
+const namesAnother = (adapter: string, vendor: string): boolean => {
+  const named = canonicalVendor(adapter);
+  const claimed = canonicalVendor(vendor);
+
+  return !named.includes(claimed) && !claimed.includes(named);
+};
+
+const contradictsClaims = (
+  { vendor }: PersonaClaims,
+  adapter: Extract<WebGpuAdapterReading, { kind: "adapter" }>,
+): boolean =>
+  SWIFTSHADER_NAME.test(adapter.vendor) ||
+  SWIFTSHADER_NAME.test(adapter.architecture) ||
+  (vendor !== undefined && namesAnother(adapter.vendor, vendor));
+
+const showsNoBattery = (reading: BatteryReading): boolean =>
+  reading.kind === "state" &&
+  reading.charging === BATTERYLESS.charging &&
+  reading.level === BATTERYLESS.level;
+
+const afterCaptureTellsOf = (
+  claims: PersonaClaims | null,
+  afterCapture: AfterCapture,
+): readonly AfterCaptureTell[] => {
+  if (claims === null || afterCapture.kind !== "secure") {
+    return [];
+  }
+
+  const { batteryState, webgpuAdapter } = afterCapture;
+
+  return [
+    ...(webgpuAdapter.kind === "adapter" && contradictsClaims(claims, webgpuAdapter)
+      ? ["gpu-contradiction" as const]
+      : []),
+    ...(claims.laptop && showsNoBattery(batteryState) ? ["form-factor-battery-skew" as const] : []),
+  ];
+};
+
 export const evaluate = (
   {
     chosen,
+    claims,
     expected,
     fontEvidence,
     tells,
-  }: Pick<IdentityPlan, "chosen" | "expected" | "fontEvidence" | "tells">,
+  }: Pick<IdentityPlan, "chosen" | "claims" | "expected" | "fontEvidence" | "tells">,
   observation: Observation,
 ): Evaluation => {
   const measured = isMeasured(observation.product);
@@ -520,6 +578,7 @@ export const evaluate = (
         ...tells,
         ...(drifted ? ["fonts-drift" as const] : []),
         ...hardwareDriftOf(notes),
+        ...afterCaptureTellsOf(claims, observation.afterCapture),
       ],
     },
   };
