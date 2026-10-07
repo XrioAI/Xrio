@@ -1,14 +1,18 @@
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { Dirent } from "node:fs";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable, Writable } from "node:stream";
 import { text } from "node:stream/consumers";
-import { setTimeout as delay } from "node:timers/promises";
 
+import { publishInternalEvent } from "../../diagnostics.ts";
+import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { directoriesIn } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
-import { withinSignal } from "./lifetime.ts";
+import { settleWithin, withinSignal } from "./lifetime.ts";
 
 const OWNER_FILE = "xrio-owner.json";
 
@@ -16,15 +20,15 @@ const ABANDONED_AFTER_MS = 60 * 60 * 1000;
 
 const EXIT_WAIT_MS = 5000;
 
-const EXIT_POLL_MS = 25;
+const PROCESS_SCAN_BUDGET_MS = 1000;
 
-export const PROCESS_SCAN_BUDGET_MS = 1000;
+const STDERR_TAIL_BYTES = 8192;
+
+const STDERR_DRAIN_MS = 500;
 
 const OWNER_PERMISSION_UNIT = 0o100;
 
 const PROCESS_ID = /^\d+$/u;
-
-const EXITED_STATES = new Set(["Z", "X", "x"]);
 
 interface Owner {
   pid: number;
@@ -50,7 +54,7 @@ export const scratchRoot = (): string => path.join("/tmp", `xrio-${currentUid()}
 
 const groupAndOtherPermissions = (mode: number): number => mode % OWNER_PERMISSION_UNIT;
 
-const ensureScratchRoot = async (root: string): Promise<void> => {
+export const ensureScratchRoot = async (root: string): Promise<void> => {
   await mkdir(root, { mode: 0o700, recursive: true });
   const stats = await lstat(root);
 
@@ -91,9 +95,17 @@ const listEntries = async (directory: string): Promise<Dirent[]> => {
   }
 };
 
-export const createScratchDir = async (now: number, root = scratchRoot()): Promise<ScratchDir> => {
+export type ScratchPurpose = "browser" | "probe";
+
+const SCRATCH_PREFIXES: Readonly<Record<ScratchPurpose, string>> = { browser: "b", probe: "p" };
+
+export const createScratchDir = async (
+  now: number,
+  root = scratchRoot(),
+  purpose: ScratchPurpose = "browser",
+): Promise<ScratchDir> => {
   await ensureScratchRoot(root);
-  const directory = await mkdtemp(path.join(root, "b"));
+  const directory = await mkdtemp(path.join(root, SCRATCH_PREFIXES[purpose]));
   const owner: Owner = { createdAt: now, pid: process.pid };
 
   await writeFile(path.join(directory, OWNER_FILE), JSON.stringify(owner), { mode: 0o600 });
@@ -116,12 +128,17 @@ export const removeScratchDir = async (
   await rm(directory, { force: true, recursive: true });
 };
 
-const writeAtomically = async (file: string, contents: string): Promise<void> => {
-  const temporary = `${file}.${process.pid}.tmp`;
+export const writeAtomically = async (file: string, contents: string): Promise<void> => {
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
 
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(temporary, contents, { mode: 0o600 });
-  await rename(temporary, file);
+
+  try {
+    await writeFile(temporary, contents, { flag: "wx", mode: 0o600 });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 };
 
 export const prepareProfile = async (plan: LaunchPlan): Promise<void> => {
@@ -143,76 +160,80 @@ export const prepareProfile = async (plan: LaunchPlan): Promise<void> => {
   );
 };
 
-const trySignal = (target: number): boolean => {
-  try {
-    return process.kill(target, "SIGKILL");
-  } catch {
-    return false;
+interface ChromePipe {
+  readonly toBrowser: Writable;
+  readonly fromBrowser: Readable;
+}
+
+export interface SpawnedChrome {
+  readonly pid: number;
+  readonly leaderExited: Promise<void>;
+  readonly pipe: ChromePipe | undefined;
+  readonly stderrTail: () => Promise<string>;
+}
+
+const drainTail = (stderr: Readable): (() => Promise<string>) => {
+  const closed = Promise.withResolvers<"closed">();
+  let tail = Buffer.alloc(0);
+
+  stderr.on("data", (chunk: Buffer) => {
+    tail = Buffer.concat([tail, chunk]).subarray(-STDERR_TAIL_BYTES);
+  });
+
+  for (const ended of ["close", "error"]) {
+    stderr.once(ended, () => {
+      closed.resolve("closed");
+    });
   }
+
+  return async () => {
+    await settleWithin(closed.promise, STDERR_DRAIN_MS);
+
+    return tail.toString("utf-8");
+  };
 };
 
-export const killProcessGroup = (pid: number): void => {
-  trySignal(-pid);
-  trySignal(pid);
+const pipeOf = (child: ChildProcess): ChromePipe | undefined => {
+  const { 3: toBrowser, 4: fromBrowser } = child.stdio;
+
+  return toBrowser instanceof Writable && fromBrowser instanceof Readable
+    ? { fromBrowser, toBrowser }
+    : undefined;
 };
 
-const linuxProcessState = async (
-  pid: string,
-  signal: AbortSignal,
-): Promise<{ state: string; group: number } | undefined> => {
-  try {
-    const stat = await readFile(`/proc/${pid}/stat`, { encoding: "utf-8", signal });
-    const [state = "", , group = ""] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+export const spawnChrome = (
+  executable: string,
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+): SpawnedChrome => {
+  publishInternalEvent({ detail: JSON.stringify(args), event: "browser-argv" });
 
-    return { group: Number(group), state };
-  } catch {
-    return undefined;
+  const child = spawn(executable, args, {
+    detached: true,
+    env,
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+  });
+
+  const exited = Promise.withResolvers<"exited">();
+
+  child.once("error", exited.reject);
+  child.once("exit", () => {
+    exited.resolve("exited");
+  });
+
+  const leaderExited = (async () => {
+    await exited.promise;
+  })();
+
+  void Promise.allSettled([leaderExited]);
+
+  const { pid, stderr } = child;
+
+  if (pid === undefined || stderr === null) {
+    throw new Error(`Chrome could not start at ${executable}.`);
   }
-};
 
-const isRunning = (entry: { state: string } | undefined): boolean =>
-  entry !== undefined && !EXITED_STATES.has(entry.state);
-
-const linuxStillRunning = async (pid: number, signal: AbortSignal): Promise<boolean> => {
-  const entries = await withinSignal(async () => await readdir("/proc"), signal);
-  signal.throwIfAborted();
-
-  const members = await Promise.all(
-    entries
-      .filter((entry) => PROCESS_ID.test(entry))
-      .map(async (entry) => await linuxProcessState(entry, signal)),
-  );
-
-  return (
-    isRunning(await linuxProcessState(String(pid), signal)) ||
-    members.some((member) => member?.group === pid && isRunning(member))
-  );
-};
-
-const stillRunning = async (pid: number, signal: AbortSignal): Promise<boolean> =>
-  process.platform === "linux"
-    ? await linuxStillRunning(pid, signal)
-    : isAlive(pid) || isAlive(-pid);
-
-export const waitForExit = async (pid: number, parent?: AbortSignal): Promise<boolean> => {
-  const timeout = AbortSignal.timeout(EXIT_WAIT_MS);
-  const signal = parent === undefined ? timeout : AbortSignal.any([timeout, parent]);
-
-  try {
-    // oxlint-disable-next-line eslint/no-await-in-loop -- a process known only by its pid has no exit event to await.
-    while (await withinSignal(async () => await stillRunning(pid, signal), signal)) {
-      // oxlint-disable-next-line eslint/no-await-in-loop -- a process known only by its pid has no exit event to await.
-      await delay(EXIT_POLL_MS, undefined, { signal });
-    }
-
-    return true;
-  } catch (error) {
-    if (signal.aborted) {
-      return false;
-    }
-
-    throw error;
-  }
+  return { leaderExited, pid, pipe: pipeOf(child), stderrTail: drainTail(stderr) };
 };
 
 const readCommandLine = async (pid: string, signal: AbortSignal): Promise<string[]> => {
@@ -265,7 +286,11 @@ const psBrowserPid = async (marker: string, signal: AbortSignal): Promise<number
 
     const line = listing
       .split("\n")
-      .find((entry) => entry.includes(` ${marker} `) && !entry.includes(" --type="));
+      .find(
+        (entry) =>
+          (entry.includes(` ${marker} `) || entry.endsWith(` ${marker}`)) &&
+          !entry.includes(" --type="),
+      );
 
     return line === undefined ? undefined : Number(line.trim().split(" ", 1)[0]);
   } finally {
@@ -307,18 +332,12 @@ const scanBrowserPid = async (
   }
 };
 
-export const findBrowserPid = async (
-  profileDir: string,
-  budgetMs: number,
-  signal?: AbortSignal,
-): Promise<number | undefined> => {
-  const scan = await scanBrowserPid(profileDir, budgetMs, signal);
-
-  return scan.completed ? scan.pid : undefined;
-};
+const isProbeScratch = (directory: string): boolean =>
+  path.basename(directory).startsWith(SCRATCH_PREFIXES.probe);
 
 const browserStopped = async (directory: string): Promise<boolean> => {
-  const scan = await scanBrowserPid(directoriesIn(directory).profile, PROCESS_SCAN_BUDGET_MS);
+  const profile = isProbeScratch(directory) ? directory : directoriesIn(directory).profile;
+  const scan = await scanBrowserPid(profile, PROCESS_SCAN_BUDGET_MS);
 
   if (!scan.completed) {
     return false;
@@ -330,14 +349,16 @@ const browserStopped = async (directory: string): Promise<boolean> => {
 
   killProcessGroup(scan.pid);
 
-  return await waitForExit(scan.pid);
+  return await waitForGroupExit(scan.pid, AbortSignal.timeout(EXIT_WAIT_MS));
 };
 
 const removeIfAbandoned = async (directory: string, now: number): Promise<boolean> => {
   const owner = await readOwner(directory);
 
-  const isAbandoned =
-    owner !== undefined && now - owner.createdAt > ABANDONED_AFTER_MS && !isAlive(owner.pid);
+  const isOldEnough =
+    isProbeScratch(directory) || now - (owner?.createdAt ?? now) > ABANDONED_AFTER_MS;
+
+  const isAbandoned = owner !== undefined && isOldEnough && !isAlive(owner.pid);
 
   if (!isAbandoned || !(await browserStopped(directory))) {
     return false;

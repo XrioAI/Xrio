@@ -1,13 +1,33 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { ChannelListener } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { findBrowserPid, sweepAbandonedScratch, waitForExit } from "./browser-process.ts";
+import { startDeadline } from "../../deadline.ts";
+import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
+import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
+import { noPins } from "../../testing/no-pins.ts";
+import { plannedScrapes } from "../../testing/planned-scrapes.ts";
+import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
+import { spawnChrome, sweepAbandonedScratch } from "./browser-process.ts";
+import { cdpDriver } from "./cdp/driver.ts";
+import { waitForGroupExit } from "./group-lifetime.ts";
+
+const EXIT_WAIT_MS = 5000;
+
+const SWEEP_TIMEOUT_MS = 8000;
+
+const waitForExit = async (pid: number, parent?: AbortSignal): Promise<boolean> =>
+  await waitForGroupExit(
+    pid,
+    AbortSignal.any([AbortSignal.timeout(EXIT_WAIT_MS), ...(parent === undefined ? [] : [parent])]),
+  );
 
 const SCAN_BUDGET_MS = 1000;
 
@@ -46,13 +66,27 @@ const stopChild = async (child: ChildProcess): Promise<void> => {
 const startChild = async (profile: string): Promise<ChildProcess> => {
   const child = spawn(
     process.execPath,
-    ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${profile}`],
-    { stdio: "ignore" },
+    ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${profile}`, "about:blank"],
+    { detached: true, stdio: "ignore" },
   );
 
   await once(child, "spawn");
 
   return child;
+};
+
+const abandonDirectory = async (root: string): Promise<string> => {
+  const formerOwner = await startChild("xrio-former-owner");
+  const abandoned = path.join(root, "abandoned");
+
+  await stopChild(formerOwner);
+  await mkdir(abandoned, { mode: 0o700 });
+  await writeFile(
+    path.join(abandoned, "xrio-owner.json"),
+    JSON.stringify({ createdAt: 0, pid: formerOwner.pid }),
+  );
+
+  return abandoned;
 };
 
 describe("process exit waiting", () => {
@@ -105,36 +139,6 @@ describe("process exit waiting", () => {
 });
 
 describe.runIf(process.platform === "darwin")("macOS process scanning", () => {
-  it("kills a hung ps child and returns no PID when its own budget expires", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "xrio-hung-ps-"));
-    const pidFile = await createHungPs(directory);
-    let pid: number | undefined;
-
-    try {
-      vi.stubEnv("PATH", directory);
-      const scanning = findBrowserPid("xrio-hung-ps", SCAN_BUDGET_MS);
-      await vi.waitFor(async () => {
-        pid = Number(await readFile(pidFile, "utf-8"));
-        expect(pid).toBeGreaterThan(0);
-      });
-      await expect(scanning).resolves.toBeUndefined();
-
-      if (pid === undefined) {
-        throw new Error("The ps child did not record its process ID.");
-      }
-
-      expect({ exited: await waitForExit(pid) }).toStrictEqual({ exited: true });
-    } finally {
-      vi.unstubAllEnvs();
-
-      if (pid !== undefined) {
-        killPid(pid);
-      }
-
-      await rm(directory, { force: true, recursive: true });
-    }
-  });
-
   it("keeps an abandoned directory when checking for its browser times out", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-hung-ps-"));
     const abandoned = path.join(root, "abandoned");
@@ -181,40 +185,198 @@ describe.runIf(process.platform === "darwin")("macOS process scanning", () => {
   });
 
   it("rejects promptly when ps cannot be spawned", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "xrio-no-ps-"));
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-no-ps-"));
 
     try {
-      vi.stubEnv("PATH", directory);
+      await abandonDirectory(root);
+      vi.stubEnv("PATH", root);
       const startedAt = performance.now();
-      await expect(findBrowserPid("xrio-no-ps", 10_000)).rejects.toMatchObject({
+      await expect(sweepAbandonedScratch(root, Date.now())).rejects.toMatchObject({
         code: "ENOENT",
       });
       expect(performance.now() - startedAt).toBeLessThan(SCAN_BUDGET_MS);
     } finally {
       vi.unstubAllEnvs();
-      await rm(directory, { force: true, recursive: true });
+      await rm(root, { force: true, recursive: true });
     }
   });
 });
 
-describe.runIf(process.platform === "linux")("Linux process scanning", () => {
-  it("finds a real child with the matching profile marker", async () => {
-    const profile = path.join(tmpdir(), `xrio-scan-${crypto.randomUUID()}`);
-    const child = await startChild(profile);
+describe("process scanning in the sweep", () => {
+  it("kills the browser of an abandoned directory, then removes it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-browser-"));
+    const abandoned = await abandonDirectory(root);
+    const browser = await startChild(path.join(abandoned, "profile"));
 
     try {
-      if (child.pid === undefined) {
-        throw new Error("The child did not receive a process ID.");
-      }
-
-      await expect(findBrowserPid(profile, SCAN_BUDGET_MS)).resolves.toBe(child.pid);
+      await expect(sweepAbandonedScratch(root, Date.now())).resolves.toStrictEqual([abandoned]);
+      expect(browser.signalCode).toBe("SIGKILL");
     } finally {
-      await stopChild(child);
+      await stopChild(browser);
+      await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("returns no PID for a profile with no matching process", async () => {
-    const profile = path.join(tmpdir(), `xrio-absent-${crypto.randomUUID()}`);
-    await expect(findBrowserPid(profile, 50)).resolves.toBeUndefined();
+  it("removes an abandoned directory that no browser uses", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-idle-"));
+    const abandoned = await abandonDirectory(root);
+
+    try {
+      await expect(sweepAbandonedScratch(root, Date.now())).resolves.toStrictEqual([abandoned]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe.runIf(process.platform === "linux")("sweeping after a non-reaping parent", () => {
+  it(
+    "removes an abandoned directory whose killed browser leaves only unreaped zombies",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-zombie-"));
+
+      try {
+        const abandoned = await abandonDirectory(root);
+
+        await using group = await holdUnreapedGroup({
+          argument: `--user-data-dir=${path.join(abandoned, "profile")}`,
+          leader: "running",
+        });
+
+        const zombie = { group: group.leader, state: "Z" };
+
+        await expect(sweepAbandonedScratch(root, Date.now())).resolves.toStrictEqual([abandoned]);
+        await expect(processStateOf(group.leader)).resolves.toStrictEqual(zombie);
+        await expect(processStateOf(group.member)).resolves.toStrictEqual(zombie);
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    SWEEP_TIMEOUT_MS,
+  );
+});
+
+interface BrowserEvent {
+  readonly event: string;
+  readonly detail: string;
+}
+
+const isBrowserEvent = (message: unknown): message is BrowserEvent =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  typeof message.event === "string" &&
+  "detail" in message &&
+  typeof message.detail === "string";
+
+const recordLaunchEvents = (): {
+  readonly seen: string[];
+  readonly details: string[];
+} & Disposable => {
+  const seen: string[] = [];
+  const details: string[] = [];
+
+  const record: ChannelListener = (message) => {
+    if (isBrowserEvent(message) && message.event.startsWith("browser-")) {
+      seen.push(message.event);
+      details.push(message.detail);
+    }
+  };
+
+  subscribe("xrio:event", record);
+
+  return {
+    [Symbol.dispose]: () => {
+      unsubscribe("xrio:event", record);
+    },
+    details,
+    seen,
+  };
+};
+
+const scrapeWith = async (browserPath: string) => {
+  const browsers = plannedScrapes(cdpDriver, 1);
+  using deadline = startDeadline(10_000);
+
+  try {
+    return await browsers.capture({
+      browserArgs: [],
+      browserPath,
+      deadline,
+      mode: "headless",
+      pins: noPins,
+      proxy: undefined,
+      url: new URL("https://fake.test/page"),
+    });
+  } finally {
+    await browsers.close();
+  }
+};
+
+describe("the browser-argv event", () => {
+  it("publishes exactly the argv the browser process received", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-argv-"));
+    const received = path.join(root, "received");
+    const executable = path.join(root, "chrome");
+
+    await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(received)}\n`);
+    await chmod(executable, 0o755);
+
+    try {
+      using events = recordLaunchEvents();
+
+      const chrome = spawnChrome(
+        executable,
+        ["--user-data-dir=/tmp/xrio-1/b1/profile", "--window-size=1280,800", "about:blank"],
+        { PATH: process.env.PATH ?? "" },
+      );
+
+      await chrome.leaderExited;
+
+      expect(events.seen).toStrictEqual(["browser-argv"]);
+      await expect(readFile(received, "utf-8")).resolves.toBe(
+        "--user-data-dir=/tmp/xrio-1/b1/profile\n--window-size=1280,800\nabout:blank\n",
+      );
+      expect(events.details).toStrictEqual([
+        '["--user-data-dir=/tmp/xrio-1/b1/profile","--window-size=1280,800","about:blank"]',
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("publishes one event per launch, before browser-launched", async () => {
+    using events = recordLaunchEvents();
+
+    await scrapeWith(await fakeChromePath("normal"));
+
+    expect(events.seen).toStrictEqual(["browser-argv", "browser-launched"]);
+
+    const argv: unknown = JSON.parse(events.details[0] ?? "null");
+
+    expect(argv).toContain("--remote-debugging-pipe");
+    expect(argv).toContain("--headless");
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("publishes the argv of a launch that fails after the process starts", async () => {
+    using events = recordLaunchEvents();
+
+    await expect(scrapeWith(await fakeChromePath("no-start"))).rejects.toMatchObject({
+      code: "BROWSER_LAUNCH_FAILED",
+    });
+
+    expect(events.seen).toStrictEqual(["browser-argv", "browser-launched"]);
+    expect(JSON.parse(events.details[0] ?? "null")).toContain("--remote-debugging-pipe");
+  });
+
+  it("publishes the argv of a launch whose binary cannot be executed", () => {
+    using events = recordLaunchEvents();
+
+    expect(() => spawnChrome("/does-not-exist/xrio-chrome", ["--headless"], {})).toThrow(
+      "Chrome could not start at /does-not-exist/xrio-chrome.",
+    );
+    expect(events.seen).toStrictEqual(["browser-argv"]);
+    expect(events.details).toStrictEqual(['["--headless"]']);
   });
 });

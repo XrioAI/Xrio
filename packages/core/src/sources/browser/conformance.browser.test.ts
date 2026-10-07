@@ -1,28 +1,51 @@
 import { spawn } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
-import { once } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { text } from "node:stream/consumers";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
+import type { Deadline } from "../../deadline.ts";
+import { knobOf } from "../../humanizer/contracts.ts";
+import { readHostZone } from "../../humanizer/host-zone.ts";
+import { planIdentity } from "../../humanizer/humanizer.ts";
+import type { IdentityIntent } from "../../humanizer/intent.ts";
+import type { SurfaceChoices } from "../../humanizer/surfaces.ts";
 import { chromePath } from "../../testing/chrome-path.ts";
-import { busyPageStarted, conformancePages } from "../../testing/conformance-pages.ts";
+import {
+  busyPageStarted,
+  conformancePages,
+  wasRequested,
+} from "../../testing/conformance-pages.ts";
+import { fixedDevice, fixedRandom, fixedSeed } from "../../testing/fixed-seed.ts";
 import { startFixtureServer } from "../../testing/fixture-server.ts";
 import type { FixtureServer } from "../../testing/fixture-server.ts";
 import { lastLaunchedPid, leftovers, nothingLeft } from "../../testing/leftovers.ts";
+import { noPins } from "../../testing/no-pins.ts";
+import { plannedScrapes } from "../../testing/planned-scrapes.ts";
+import type { PlannedScrapes } from "../../testing/planned-scrapes.ts";
 import { commandLineOf, killRenderers, noProcessUses, profileOf } from "../../testing/processes.ts";
+import { expectSentHardware } from "../../testing/sent-hardware.ts";
 import type { SourceDocument } from "../../types.ts";
-import { scratchRoot, sweepAbandonedScratch } from "./browser-process.ts";
-import { createBrowsers } from "./browsers.ts";
+import {
+  createScratchDir,
+  prepareProfile,
+  removeScratchDir,
+  scratchRoot,
+  sweepAbandonedScratch,
+} from "./browser-process.ts";
+import { createCapabilityProbe } from "./capabilities.ts";
+import { cdpDriver } from "./cdp/driver.ts";
+import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { planLaunch } from "./launch-plan.ts";
-import { patchrightDriver } from "./patchright/driver.ts";
+import { CLOSE_BUDGET_MS } from "./port.ts";
+import type { DriverBrowser } from "./port.ts";
+import { renderDocument } from "./render.ts";
 
 const SCRAPE_CHILD = fileURLToPath(new URL("../../testing/scrape-child.ts", import.meta.url));
 
@@ -34,48 +57,71 @@ const ABANDONED_LONG_AGO_MS = 2 * 60 * 60 * 1000;
 
 const BUSY_TIMEOUT_MS = 5000;
 
+const DOWNLOAD_TEARDOWN_BOUND_MS = 1000;
+
+const WATCH_SETTLE_MS = 300;
+
 const MARKER = /<meta name="xrio-page" content="(?<marker>[^"]+)"/u;
 
 const PROBE =
   /<output id="probe" data-webdriver="(?<webdriver>\w+)" data-focus="(?<focus>\w+)" data-visibility="(?<visibility>\w+)"/u;
 
-const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+const IDENTITY_REPORT = /<pre id="identity">(?<report>[^<]*)<\/pre>/u;
 
-const KNOWN_PATCHRIGHT_COMMANDS = new Set([
-  "browser Browser.getVersion",
-  "browser Browser.setDownloadBehavior",
-  "browser Target.attachToBrowserTarget",
-  "browser Target.attachToTarget",
-  "browser Target.detachFromTarget",
-  "browser Target.getTargetInfo",
-  "browser Target.setAutoAttach",
-  "browser>page Network.enable",
-  "browser>page Page.enable",
-  "browser>page Page.getFrameTree",
-  "browser>page Page.setLifecycleEventsEnabled",
-  "page DOM.getDocument",
-  "page DOM.getFrameOwner",
-  "page DOM.querySelectorAll",
-  "page Emulation.setEmulatedMedia",
-  "page Emulation.setFocusEmulationEnabled",
-  "page Fetch.continueRequest",
-  "page Fetch.enable",
-  "page Fetch.failRequest",
-  "page Log.enable",
-  "page Network.enable",
-  "page Network.setCacheDisabled",
-  "page Page.addScriptToEvaluateOnNewDocument",
-  "page Page.createIsolatedWorld",
-  "page Page.enable",
-  "page Page.getFrameTree",
-  "page Page.navigate",
-  "page Page.setFontFamilies",
-  "page Page.setLifecycleEventsEnabled",
-  "page Runtime.callFunctionOn",
-  "page Runtime.evaluate",
-  "page Runtime.runIfWaitingForDebugger",
-  "page Target.setAutoAttach",
-]);
+const IDENTITY_REALMS =
+  /<script type="application\/json" id="identity-workers">(?<realms>[^<]*)<\/script>/u;
+
+const CLIENT_HINTS_ECHO = /<pre id="client-hints">(?<headers>[^<]*)<\/pre>/u;
+
+const REALM_COUNT = 8;
+
+const REALM_HARDWARE_ROW =
+  /"hardwareConcurrency":\d+,"deviceMemory":\d+,"cpuPerformance":(?:null|\d+),"jsHeapSizeLimit":(?:null|\d+)/gu;
+
+const DEVICE_MEMORY_HEADER = /"device-memory":"\d+"/u;
+
+const SEC_CH_DEVICE_MEMORY_HEADER = /"sec-ch-device-memory":"\d+"/u;
+
+const MEDIA_REPORT = /<pre id="media">(?<report>[^<]*)<\/pre>/u;
+
+const IDENTITY_WEBGPU =
+  /<script type="application\/json" id="identity-webgpu">(?<row>[^<]*)<\/script>/u;
+
+const WEBGPU_TIMING = /"ms":\d+[,}]/u;
+
+const RESPONSIVE = /<p id="layout">(?<layout>[a-z]+)<\/p>/u;
+
+const pageReportOf = ({ screen, window }: SurfaceChoices) =>
+  screen.source === "host" || !("x" in window)
+    ? { screen: screen.source, window: window.source }
+    : {
+        screen: {
+          availHeight: screen.size.height - screen.workArea.top - screen.workArea.bottom,
+          availLeft: screen.workArea.left,
+          availTop: screen.workArea.top,
+          availWidth: screen.size.width - screen.workArea.left - screen.workArea.right,
+          height: screen.size.height,
+          width: screen.size.width,
+        },
+        window: {
+          innerWidth: window.width,
+          outerHeight: window.height,
+          outerWidth: window.width,
+          screenX: window.x,
+          screenY: window.y,
+        },
+      };
+
+const seeded =
+  (seed: string): (() => Uint8Array) =>
+  () =>
+    Buffer.from(seed, "hex");
+
+const INTL_LOCALE = /"intlLocale":"(?<locale>[^"]*)"/u;
+
+const ACCEPT_LANGUAGE = /<meta name="request-accept-language" content="(?<header>[^"]*)">/u;
+
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const capturedPages = [
   { landsOn: ["static"], path: "/static" },
@@ -90,9 +136,62 @@ const capturedPages = [
   { landsOn: ["alert"], path: "/alert" },
 ];
 
+const STATIC_PAGE_COMMANDS = [
+  "browser Browser.close",
+  "browser Browser.getVersion",
+  "browser Browser.setDownloadBehavior",
+  "browser Target.setAutoAttach",
+  "main Network.enable",
+  "main Page.bringToFront",
+  "main Page.createIsolatedWorld",
+  "main Page.enable",
+  "main Page.navigate",
+  "main Page.setLifecycleEventsEnabled",
+  "main Runtime.evaluate",
+  "main Runtime.runIfWaitingForDebugger",
+  "main Target.setAutoAttach",
+];
+
+const ALLOWED_PAIRS = new Set([
+  "browser Browser.close",
+  "browser Browser.getVersion",
+  "browser Browser.setDownloadBehavior",
+  "browser Target.setAutoAttach",
+  "main Network.enable",
+  "main Page.bringToFront",
+  "main Page.createIsolatedWorld",
+  "main Page.enable",
+  "main Page.handleJavaScriptDialog",
+  "main Page.navigate",
+  "main Page.setLifecycleEventsEnabled",
+  "main Runtime.evaluate",
+  "main Runtime.runIfWaitingForDebugger",
+  "main Target.setAutoAttach",
+  "popup Network.enable",
+  "popup Runtime.runIfWaitingForDebugger",
+  "popup Target.setAutoAttach",
+  "iframe Network.enable",
+  "iframe Runtime.runIfWaitingForDebugger",
+  "iframe Target.setAutoAttach",
+  "worker Network.enable",
+  "worker Runtime.runIfWaitingForDebugger",
+  "worker Target.setAutoAttach",
+  "service_worker Network.enable",
+  "service_worker Runtime.runIfWaitingForDebugger",
+  "shared_worker Network.enable",
+  "shared_worker Runtime.runIfWaitingForDebugger",
+  "other Network.enable",
+  "other Runtime.runIfWaitingForDebugger",
+]);
+
+const FAVICON = "/favicon.ico";
+
 const markerOf = (html: string): string | undefined => MARKER.exec(html)?.groups?.marker;
 
 const pathOf = (url: string): string => new URL(url).pathname;
+
+const minutesAheadOfUtc = (month: number): number =>
+  0 - new Date(new Date().getFullYear(), month, 15).getTimezoneOffset();
 
 const isLaunchLine = (value: unknown): value is { launched: number } =>
   typeof value === "object" &&
@@ -100,42 +199,9 @@ const isLaunchLine = (value: unknown): value is { launched: number } =>
   "launched" in value &&
   typeof value.launched === "number";
 
-const SENT = /pw:protocol SEND ► \{"id":-?\d+,"method":"(?<method>[^"]+)"/u;
-
-const ATTACHED =
-  /pw:protocol ◀ RECV \{"method":"Target\.attachedToTarget","params":\{"sessionId":"(?<attached>[^"]+)","targetInfo":\{"targetId":"[^"]+","type":"(?<type>[^"]+)"/u;
-
-const OUTER_SESSION = /,"sessionId":"(?<session>[^"]+)"\}$/u;
-
-const ADAPTER_SESSIONS = new Set(["browser", "page", "browser>page"]);
-
-const sentCommands = (trace: string): string[] => {
-  const sessions = new Map<string, string>();
-  const commands = new Set<string>();
-
-  for (const line of trace.split("\n")) {
-    const outer = OUTER_SESSION.exec(line)?.groups?.session;
-    const session = outer === undefined ? "browser" : (sessions.get(outer) ?? "other");
-    const attached = ATTACHED.exec(line)?.groups;
-    const method = SENT.exec(line)?.groups?.method;
-
-    if (attached?.attached !== undefined) {
-      const type = attached.type ?? "other";
-
-      sessions.set(attached.attached, outer === undefined ? type : `${session}>${type}`);
-    }
-
-    if (method !== undefined && ADAPTER_SESSIONS.has(session)) {
-      commands.add(`${session} ${method}`);
-    }
-  }
-
-  return [...commands].toSorted();
-};
-
 const SETTLE_SLACK_MS = 500;
 
-const SCRAPE_STAGES = new Set(["queue", "launch", "navigation", "capture"]);
+const SCRAPE_STAGES = new Set(["queue", "launch", "verify", "navigation", "capture"]);
 
 const isStageTiming = (message: unknown): message is { stage: string; durationMs: number } =>
   typeof message === "object" &&
@@ -189,9 +255,8 @@ const recordStages = () => {
   };
 };
 
-const runChildScrape = (mode: "headless" | "headed", url: string, env: NodeJS.ProcessEnv = {}) =>
+const runChildScrape = (mode: "headless" | "headed", url: string) =>
   spawn(process.execPath, [SCRAPE_CHILD, mode, chromePath(), url], {
-    env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -211,27 +276,46 @@ const waitUntil = async (condition: () => Promise<boolean>, budgetMs: number): P
   return await condition();
 };
 
-const MODES = ["headless", "headed"] as const;
+const ALL_MODES = ["headless", "headed"] as const;
+
+type Mode = (typeof ALL_MODES)[number];
+
+const REQUESTED_MODES = process.env.XRIO_TEST_MODES?.split(",");
+
+const MODES = ALL_MODES.filter((mode) => REQUESTED_MODES?.includes(mode) ?? true);
+
+if (MODES.length === 0) {
+  throw new Error(
+    `XRIO_TEST_MODES must name headless, headed or both, not "${process.env.XRIO_TEST_MODES}".`,
+  );
+}
+
+const PROBE_EXPECTED = { visibility: "visible", webdriver: "false" } as const;
 
 let server: FixtureServer;
 
 const load = async (
-  mode: (typeof MODES)[number],
+  mode: Mode,
   route: string,
   timeoutMs = 20_000,
   signal?: AbortSignal,
+  browserArgs: readonly string[] = [],
+  pins: IdentityIntent = noPins,
+  random: () => Uint8Array = fixedRandom,
 ): Promise<SourceDocument> => {
-  const browsers = createBrowsers(patchrightDriver, 1);
+  const browsers = plannedScrapes(cdpDriver, 1, { random });
   using deadline = startDeadline(timeoutMs, signal);
 
   try {
-    return await browsers.load({
+    return await browsers.visit({
+      browserArgs,
       browserPath: chromePath(),
       deadline,
       mode,
+      pins,
       proxy: undefined,
       url: new URL(route, server.origin),
-    });
+    }).document;
   } finally {
     await browsers.close();
   }
@@ -247,7 +331,121 @@ const serveFixturePages = () => {
   });
 };
 
-describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
+const isSentCommand = (message: unknown): message is { scope: string; method: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "scope" in message &&
+  typeof message.scope === "string" &&
+  "method" in message &&
+  typeof message.method === "string";
+
+const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<string[]> => {
+  const sent = new Set<string>();
+
+  const record: ChannelListener = (message) => {
+    if (isSentCommand(message)) {
+      sent.add(`${message.scope} ${message.method}`);
+    }
+  };
+
+  subscribe("xrio:cdp-command", record);
+
+  try {
+    for (const route of routes) {
+      // oxlint-disable-next-line eslint/no-await-in-loop
+      await load(mode, route);
+    }
+  } finally {
+    unsubscribe("xrio:cdp-command", record);
+  }
+
+  return [...sent].toSorted();
+};
+
+const isText = (value: unknown): value is string => typeof value === "string";
+
+const NO_AFTER_CAPTURE_READ = async (): Promise<null> => await Promise.resolve(null);
+
+const isNumber = (value: unknown): value is number => typeof value === "number";
+
+const isTextsOrNull = (value: unknown): value is readonly string[] | null =>
+  value === null || (Array.isArray(value) && value.every(isText));
+
+const hasPageWebgl = (
+  report: unknown,
+): report is { webgl: { renderer: string | null; extensions: readonly string[] | null } } =>
+  typeof report === "object" &&
+  report !== null &&
+  "webgl" in report &&
+  typeof report.webgl === "object" &&
+  report.webgl !== null &&
+  "renderer" in report.webgl &&
+  (report.webgl.renderer === null || isText(report.webgl.renderer)) &&
+  "extensions" in report.webgl &&
+  isTextsOrNull(report.webgl.extensions);
+
+const PLATFORM_READ =
+  'navigator.userAgentData.getHighEntropyValues(["platform"]).then(({ platform }) => platform)';
+
+const withBrowser = async <Result>(
+  mode: Mode,
+  run: (browser: DriverBrowser, deadline: Deadline) => Promise<Result>,
+): Promise<Result> => {
+  const scratch = await createScratchDir(Date.now());
+
+  const plan = planLaunch({
+    browserArgs: [],
+    browserPath: chromePath(),
+    display: process.env.DISPLAY,
+    headless: mode === "headless",
+    identity: planIdentity({
+      capabilities: await createCapabilityProbe()(chromePath()),
+      device: fixedDevice,
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: readHostZone(),
+      mode,
+      pins: noPins,
+    }).inputs,
+    proxyServer: undefined,
+    scratchDir: scratch.path,
+    xauthority: process.env.XAUTHORITY,
+  });
+
+  using deadline = startDeadline(20_000);
+
+  await prepareProfile(plan);
+  let pid: number | undefined;
+
+  const browser = await cdpDriver.launch(
+    plan,
+    deadline,
+    (reported) => {
+      pid = reported;
+    },
+    () => {},
+  );
+
+  try {
+    return await run(browser, deadline);
+  } finally {
+    await browser.close(CLOSE_BUDGET_MS);
+
+    if (pid !== undefined) {
+      killProcessGroup(pid);
+      await waitForGroupExit(pid, AbortSignal.timeout(5000));
+    }
+
+    await removeScratchDir(scratch);
+  }
+};
+
+const probed = (html: string, keys: readonly string[]) => {
+  const groups = PROBE.exec(html)?.groups ?? {};
+
+  return Object.fromEntries(keys.map((key) => [key, groups[key]]));
+};
+
+describe.each(MODES)("documents captured, %s", (mode) => {
   serveFixturePages();
 
   it.each(capturedPages)(
@@ -263,12 +461,90 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
         status: 200,
       });
       expect(pathOf(document.url)).toBe(marker === "landing" ? "/landing" : `/${marker}`);
-      expect({ ...PROBE.exec(document.html)?.groups }).toStrictEqual({
-        focus: "true",
-        visibility: "visible",
-        webdriver: "false",
-      });
+      expect(probed(document.html, Object.keys(PROBE_EXPECTED))).toStrictEqual(PROBE_EXPECTED);
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
+
+  it("reads the startup page before navigating, then captures the page it navigates to", async () => {
+    await withBrowser(mode, async (browser, deadline) => {
+      await expect(browser.evaluateIsolated("location.href", isText, deadline)).resolves.toBe(
+        "about:blank",
+      );
+
+      const { source: document } = await renderDocument(
+        browser,
+        new URL("/static", server.origin),
+        undefined,
+        deadline,
+        NO_AFTER_CAPTURE_READ,
+      );
+
+      expect(document).toMatchObject({ headers: { "x-page": "static" }, status: 200 });
+      expect(markerOf(document.html)).toBe("static");
+      expect(probed(document.html, Object.keys(PROBE_EXPECTED))).toStrictEqual(PROBE_EXPECTED);
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("awaits promises in isolated reads after a capture", async () => {
+    await withBrowser(mode, async (browser, deadline) => {
+      await renderDocument(
+        browser,
+        new URL("/static", server.origin),
+        undefined,
+        deadline,
+        NO_AFTER_CAPTURE_READ,
+      );
+
+      await expect(
+        browser.evaluateIsolated("Promise.resolve(42)", isNumber, deadline),
+      ).resolves.toBe(42);
+      await expect(browser.evaluateIsolated(PLATFORM_READ, isText, deadline)).resolves.toMatch(
+        /\S/u,
+      );
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("reads the launch's languages, zone offsets, automation flag and infobar tell on /identity", async () => {
+    const capabilities = await createCapabilityProbe()(chromePath());
+    const { html, identity } = await load(mode, "/identity");
+
+    const infobarShown =
+      mode === "headed" && knobOf(capabilities, "suppress-startup-infobars") !== "true";
+
+    const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+    expect(report).toMatchObject({
+      language: "en-US",
+      languages: ["en-US", "en"],
+      offsets: { january: minutesAheadOfUtc(0), july: minutesAheadOfUtc(6) },
+      webdriver: false,
+      windowSizeWait: "settled",
+    });
+    expect(identity.tells.includes("flag-infobar")).toBe(infobarShown);
+  });
+
+  it.runIf(mode === "headless")(
+    "reads the fixed seed's drawn screen, work area and maximized window on /identity",
+    async () => {
+      const { html } = await load(mode, "/identity");
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toMatchObject({
+        screen: {
+          availHeight: 1018,
+          availLeft: 0,
+          availTop: 32,
+          availWidth: 1680,
+          colorDepth: 24,
+          devicePixelRatio: 1,
+          height: 1050,
+          width: 1680,
+        },
+        window: { innerWidth: 1680, outerHeight: 1018, outerWidth: 1680, screenX: 0, screenY: 32 },
+      });
     },
   );
 
@@ -276,11 +552,9 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
     const document = await load(mode, "/redirect/1");
 
     expect(document.html).toContain('<p id="sent-cookies">hop1=1; hop2=1</p>');
-    expect(document.requestUrls.map(pathOf)).toStrictEqual([
-      "/redirect/1",
-      "/redirect/2",
-      "/landing",
-    ]);
+    expect(document.requestUrls.map(pathOf).filter((visited) => visited !== FAVICON)).toStrictEqual(
+      ["/redirect/1", "/redirect/2", "/landing"],
+    );
   });
 
   it("logs requests from cross-origin frames and workers, but not from Chrome's own extensions", async () => {
@@ -297,11 +571,54 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
     ).toStrictEqual([]);
   });
 
+  it("logs requests from workers that nested workers make", async () => {
+    const document = await load(mode, "/nested-worker");
+
+    expect(document.requestUrls).toStrictEqual(
+      expect.arrayContaining([`${server.origin}/outer-worker.js`, `${server.origin}/from-nested`]),
+    );
+  });
+
   it("returns a 401 with WWW-Authenticate as data", async () => {
     const document = await load(mode, "/basic-auth");
 
     expect(document).toMatchObject({ headers: { "x-page": "basic-auth" }, status: 401 });
     expect(markerOf(document.html)).toBe("basic-auth");
+  });
+
+  it("captures a page over 4 Mi code units in slices, whole", async () => {
+    const document = await load(mode, "/sliced");
+
+    expect(document.html).toHaveLength(4_194_432);
+    expect(document.html.endsWith('<p id="last">sliced-end</p></body></html>')).toBeTruthy();
+  });
+
+  it("refuses a page over 32 Mi code units as too large", async () => {
+    await expect(load(mode, "/too-large")).rejects.toMatchObject({
+      code: "RESPONSE_TOO_LARGE",
+    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it.each(["/redirect-to-closed-port", "/replace-with-blank"])(
+    "fails %s, which commits a document with no response, as a network error",
+    async (route) => {
+      await expect(load(mode, route)).rejects.toMatchObject({
+        code: "NETWORK_ERROR",
+        message: "The page committed a document that had no HTTP response.",
+      });
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
+
+  it("returns a 403 with an empty body as data", async () => {
+    const document = await load(mode, "/empty-403");
+
+    expect(document).toMatchObject({
+      cookies: ["empty-403=1; Path=/"],
+      headers: { "x-page": "empty-403" },
+      status: 403,
+    });
   });
 
   it("reads pages under a strict CSP, in legacy charsets and as XHTML", async () => {
@@ -329,7 +646,304 @@ describe.each(MODES)("documents captured on Patchright, %s", (mode) => {
   });
 });
 
-describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
+describe.each(MODES)("the launch identity, %s", (mode) => {
+  serveFixturePages();
+
+  it("reads the secure-context surfaces after capture on a loopback page", async () => {
+    const { identity } = await load(mode, "/identity");
+
+    expect(identity).toMatchObject({
+      coverage: {
+        battery: { state: "observed" },
+        clientHints: { state: "observed" },
+        deviceMemory: { state: "observed" },
+        webgpu: { state: "observed" },
+      },
+    });
+    expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
+  });
+
+  it("reports the page's WebGPU adapter on /identity, and Xrio's read agrees when it observed one", async () => {
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const rowText = IDENTITY_WEBGPU.exec(html)?.groups?.row ?? "null";
+    const row: unknown = JSON.parse(rowText);
+
+    const agreed =
+      identity.coverage.webgpu.state === "observed"
+        ? { adapter: identity.observed.webgpuAdapter }
+        : {};
+
+    expect(rowText).toMatch(WEBGPU_TIMING);
+    expect(row).toMatchObject({ ...agreed, error: null });
+  });
+
+  it("shows the drawn GL persona's renderer and none of its hidden extensions on /identity", async () => {
+    const capabilities = await createCapabilityProbe()(chromePath());
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+    if (!hasPageWebgl(report)) {
+      throw new Error("The identity page reports no WebGL strings.");
+    }
+
+    const { persona } = identity.surfaces.gpu;
+    const artifact = capabilities.fork?.personas.gl.find(({ name }) => name === persona?.name);
+
+    const hiddenShown = (artifact?.hiddenExtensions ?? []).filter(
+      (name) => report.webgl.extensions?.includes(name) === true,
+    );
+
+    expect({
+      artifact: artifact?.name ?? null,
+      hiddenShown,
+      unavailable: identity.tells.filter((tell) => tell === "gl-persona-unavailable"),
+    }).toStrictEqual({
+      artifact: persona?.name ?? null,
+      hiddenShown: [],
+      unavailable: persona === null ? ["gl-persona-unavailable"] : [],
+    });
+    expect(report.webgl).toMatchObject(
+      artifact === undefined ? {} : { renderer: artifact.renderer },
+    );
+    expect(identity.observed.webgl).toMatchObject(
+      artifact === undefined ? {} : { renderer: report.webgl.renderer },
+    );
+  });
+
+  it.each([
+    {
+      header: "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+      languages: ["de-DE", "de", "en-US", "en"],
+      tag: "de-DE",
+    },
+    {
+      header: "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+      languages: ["pt-BR", "pt", "en-US", "en"],
+      tag: "pt-BR",
+    },
+    { header: "en-AU,en-US;q=0.9,en;q=0.8", languages: ["en-AU", "en-US", "en"], tag: "en-AU" },
+  ])(
+    "presents the pinned $tag in the page, the Intl language and the request header",
+    async ({ header, languages, tag }) => {
+      const { html, identity } = await load(mode, "/identity", 20_000, undefined, [], {
+        ...noPins,
+        locale: tag,
+      });
+
+      const reportText = IDENTITY_REPORT.exec(html)?.groups?.report ?? "null";
+      const report: unknown = JSON.parse(reportText);
+      const intlLanguage = process.platform === "linux" ? tag.slice(0, 2) : "";
+
+      expect(report).toMatchObject({ language: languages[0], languages });
+      expect(
+        (INTL_LOCALE.exec(reportText)?.groups?.locale ?? "").startsWith(intlLanguage),
+      ).toBeTruthy();
+      expect(ACCEPT_LANGUAGE.exec(html)?.groups?.header).toBe(header);
+      expect(identity).toMatchObject({
+        surfaces: { locale: { languages, tag } },
+      });
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "lists one unlabelled microphone and speaker and no camera on Linux, with no permission granted",
+    async () => {
+      const { html } = await load(mode, "/media");
+      const report: unknown = JSON.parse(MEDIA_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toStrictEqual({
+        kinds: { audioinput: 1, audiooutput: 1 },
+        named: [],
+        permissions: { camera: "prompt", microphone: "prompt" },
+        requests:
+          mode === "headless"
+            ? { audio: "NotAllowedError", video: "NotFoundError" }
+            : { audio: "pending", video: "pending" },
+      });
+    },
+  );
+
+  it("reads after capture in an isolated world, out of reach of the page's own wrappers", async () => {
+    const { identity } = await load(mode, "/watch");
+
+    await delay(WATCH_SETTLE_MS);
+    expect({ identity, seen: wasRequested("/watch-seen") }).toMatchObject({
+      identity: { coverage: { clientHints: { state: "observed" } } },
+      seen: false,
+    });
+  });
+
+  it("lets the same wrappers see the production read when it runs in the main world", async () => {
+    await load(mode, "/watch-control");
+
+    await vi.waitFor(() => {
+      expect(wasRequested("/watch-seen")).toBeTruthy();
+    });
+  });
+
+  it("presents a pinned timezone on /identity, whatever the host's zone", async () => {
+    const browsers = plannedScrapes(cdpDriver, 1);
+    using deadline = startDeadline(20_000);
+
+    try {
+      const { html } = await browsers.visit({
+        browserArgs: [],
+        browserPath: chromePath(),
+        deadline,
+        mode,
+        pins: { ...noPins, timezone: "Australia/Adelaide" },
+        proxy: undefined,
+        url: new URL("/identity", server.origin),
+      }).document;
+
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toMatchObject({
+        offsets: { january: 630, july: 570 },
+        timeZone: "Australia/Adelaide",
+      });
+    } finally {
+      await browsers.close();
+    }
+  });
+});
+
+describe.each(MODES)("the hardware reads on the conformance pages, %s", (mode) => {
+  serveFixturePages();
+
+  it("reports four realms in the window's origin and four in a cross-site frame on /identity", async () => {
+    const { html } = await load(mode, "/identity");
+    const realms = IDENTITY_REALMS.exec(html)?.groups?.realms ?? "";
+
+    expect(realms.match(REALM_HARDWARE_ROW)).toHaveLength(REALM_COUNT);
+  });
+
+  it("reads the drawn cores and memory on /identity wherever the launch sent them", async () => {
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const sent = expectSentHardware(identity);
+    const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+    expect(report).toMatchObject(
+      sent === undefined ? {} : { deviceMemory: sent.memoryGb, hardwareConcurrency: sent.cores },
+    );
+  });
+
+  it("sends the drawn memory as the Device-Memory hints wherever the launch sent it", async () => {
+    const { html, identity } = await load(mode, "/client-hints");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const sent = expectSentHardware(identity);
+    const echoed = CLIENT_HINTS_ECHO.exec(html)?.groups?.headers ?? "";
+
+    const wanted =
+      sent === undefined
+        ? DEVICE_MEMORY_HEADER
+        : new RegExp(`"device-memory":"${sent.memoryGb}"`, "u");
+
+    expect(echoed).toMatch(wanted);
+  });
+
+  it("echoes the Device-Memory hints that /client-hints asked for", async () => {
+    const { html } = await load(mode, "/client-hints");
+    const echoed = CLIENT_HINTS_ECHO.exec(html)?.groups?.headers ?? "";
+
+    expect(echoed).toMatch(DEVICE_MEMORY_HEADER);
+    expect(echoed).toMatch(SEC_CH_DEVICE_MEMORY_HEADER);
+  });
+});
+
+describe.each(MODES)("the drawn device, %s", (mode) => {
+  serveFixturePages();
+
+  it.runIf(mode === "headless").each([
+    { layout: "gnome", seed: fixedSeed, window: "maximized" },
+    { layout: "ubuntu", seed: "0000000000000028", window: "floating" },
+    { layout: "kde", seed: "0000000000000005", window: "maximized" },
+    { layout: "cinnamon", seed: "00000000000000a1", window: "maximized" },
+  ])(
+    "presents $seed's $layout screen and $window window exactly, at least 1265 px wide",
+    async ({ layout, seed, window }) => {
+      const { html, identity } = await load(
+        mode,
+        "/identity",
+        20_000,
+        undefined,
+        [],
+        noPins,
+        seeded(seed),
+      );
+
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(identity).toMatchObject({
+        notes: [],
+        surfaces: { screen: { layout }, window: { kind: window } },
+      });
+      expect(report).toMatchObject(
+        identity.mode === "http" ? { mode: "http" } : pageReportOf(identity.surfaces),
+      );
+
+      const drawnWidth =
+        identity.mode === "http" || !("width" in identity.surfaces.window)
+          ? 0
+          : identity.surfaces.window.width;
+
+      expect(drawnWidth).toBeGreaterThanOrEqual(1265);
+    },
+  );
+
+  it.runIf(mode === "headless")(
+    "presents a pinned 1440x900 screen with a 48 px bottom taskbar and a maximized window",
+    async () => {
+      const display = {
+        screens: [{ height: 900, weight: 1, width: 1440 }],
+        taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }],
+        windows: [{ kind: "maximized", weight: 1 }],
+      } as const;
+
+      const { html } = await load(mode, "/identity", 20_000, undefined, [], {
+        ...noPins,
+        display,
+      });
+
+      const report: unknown = JSON.parse(IDENTITY_REPORT.exec(html)?.groups?.report ?? "null");
+
+      expect(report).toMatchObject({
+        screen: { availHeight: 852, availTop: 0, availWidth: 1440, height: 900, width: 1440 },
+        window: { outerHeight: 852, outerWidth: 1440, screenX: 0, screenY: 0 },
+      });
+    },
+  );
+
+  it.each([fixedSeed, "0000000000000028", "0000000000000005"])(
+    "serves the desktop layout to a 1200 px media query under seed %s",
+    async (seed) => {
+      const { html } = await load(mode, "/responsive", 20_000, undefined, [], noPins, seeded(seed));
+
+      expect(RESPONSIVE.exec(html)?.groups?.layout).toBe("desktop");
+    },
+  );
+});
+
+describe.each(MODES)("browser lifecycle, %s", (mode) => {
   serveFixturePages();
 
   it.each(["/download", "/no-content"])("reports %s as an aborted navigation", async (route) => {
@@ -343,7 +957,9 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
   it("times out a capture the page never answers, and leaves nothing behind", async () => {
     using stages = recordStages();
 
-    await expect(load(mode, "/busy", BUSY_TIMEOUT_MS)).rejects.toMatchObject({ code: "TIMEOUT" });
+    await expect(load(mode, "/busy", BUSY_TIMEOUT_MS)).rejects.toMatchObject({
+      code: "TIMEOUT",
+    });
     expect([...stages.timings.keys()]).toContain("capture");
     expect(timeUntilSettled(stages.timings)).toBeLessThan(BUSY_TIMEOUT_MS + SETTLE_SLACK_MS);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -358,12 +974,20 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
     const [commandLine, profile] = await Promise.all([commandLineOf(pid), profileOf(pid)]);
 
     const { args } = planLaunch({
+      browserArgs: [],
       browserPath: chromePath(),
       display: process.env.DISPLAY,
       headless: mode === "headless",
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: await createCapabilityProbe()(chromePath()),
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: readHostZone(),
+        mode,
+        pins: noPins,
+      }).inputs,
+      proxyServer: undefined,
       scratchDir: path.dirname(profile ?? ""),
-      timezone: process.env.TZ,
       xauthority: process.env.XAUTHORITY,
     });
 
@@ -373,6 +997,25 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
     expect(commandLine.split(" --").length - 1).toBe(
       args.filter((arg) => arg.startsWith("--")).length,
     );
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
+  it("launches Chrome with the client's switches once, after Xrio's own", async () => {
+    const controller = new AbortController();
+    const callerSwitches = ["--disable-gpu-compositing"];
+    const loading = load(mode, "/busy", 20_000, controller.signal, callerSwitches);
+
+    await busyPageStarted();
+    const commandLine = await commandLineOf(lastLaunchedPid() ?? 0);
+
+    controller.abort(new Error("argv checked"));
+    await expect(loading).rejects.toThrow("argv checked");
+
+    const caller = commandLine.indexOf("--disable-gpu-compositing");
+
+    expect(commandLine.split("--disable-gpu-compositing")).toHaveLength(2);
+    expect(commandLine.indexOf("--crash-dumps-dir=")).toBeLessThan(caller);
+    expect(caller).toBeLessThan(commandLine.indexOf("--user-data-dir="));
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
@@ -427,21 +1070,156 @@ describe.each(MODES)("browser lifecycle on Patchright, %s", (mode) => {
     ).resolves.toContain(path.dirname(profile));
     expect(existsSync(profile)).toBeFalsy();
   });
+});
 
-  it("sends Chrome only the commands in the known Patchright set", async () => {
-    const child = runChildScrape(mode, `${server.origin}/static`, { DEBUG: "pw:protocol" });
+describe.each(MODES)("downloads on our CDP client, %s", (mode) => {
+  serveFixturePages();
 
-    const [trace, output] = await Promise.all([
-      text(child.stderr),
-      text(child.stdout),
-      once(child, "exit"),
-    ]);
+  it("lets a denied download settle, so teardown finishes well within its budget", async () => {
+    using stages = recordStages();
 
-    expect(child.exitCode).toBe(0);
-    expect(output).toContain('{"status":200}');
-    expect(
-      sentCommands(trace).filter((command) => !KNOWN_PATCHRIGHT_COMMANDS.has(command)),
-    ).toStrictEqual([]);
-    expect(sentCommands(trace)).toContain("browser>page Page.setLifecycleEventsEnabled");
+    await expect(load(mode, "/download")).rejects.toMatchObject({
+      details: { netError: "net::ERR_ABORTED" },
+    });
+    expect(stages.timings.get("teardown")).toBeLessThan(DOWNLOAD_TEARDOWN_BOUND_MS);
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
+});
+
+describe.each(MODES)("commands our CDP client sends, %s", (mode) => {
+  serveFixturePages();
+
+  it("sends exactly the expected commands to load a static page", async () => {
+    await expect(tappedCommands(mode, ["/static"])).resolves.toStrictEqual(STATIC_PAGE_COMMANDS);
+  });
+
+  it("sends only allowlisted commands to frames, workers and dialogs", async () => {
+    const sent = await tappedCommands(mode, ["/static", "/iframe", "/worker", "/alert"]);
+
+    expect(sent.filter((pair) => !ALLOWED_PAIRS.has(pair))).toStrictEqual([]);
+    expect(sent).toStrictEqual(
+      expect.arrayContaining([
+        "iframe Runtime.runIfWaitingForDebugger",
+        "main Page.handleJavaScriptDialog",
+        "worker Runtime.runIfWaitingForDebugger",
+      ]),
+    );
+  });
+});
+
+interface VisitFailure {
+  name: string;
+  route: string;
+  error: object;
+  browserPath?: string;
+  timeoutMs?: number;
+  interrupt?: "abort" | "kill-renderer";
+}
+
+type BrowserLoad = (request: Parameters<PlannedScrapes["visit"]>[0]) => Promise<SourceDocument>;
+
+const visitFailures: VisitFailure[] = [
+  {
+    browserPath: "/nonexistent/chrome",
+    error: { code: "BROWSER_LAUNCH_FAILED" },
+    name: "a launch failure",
+    route: "/static",
+  },
+  {
+    error: { code: "NETWORK_ERROR", details: { netError: "net::ERR_ABORTED" } },
+    name: "a download",
+    route: "/download",
+  },
+  {
+    error: { message: "Ownership lost" },
+    interrupt: "abort",
+    name: "an aborted signal",
+    route: "/busy",
+  },
+  { error: { code: "TIMEOUT" }, name: "a timeout", route: "/busy", timeoutMs: BUSY_TIMEOUT_MS },
+  {
+    error: { code: "BROWSER_CRASHED" },
+    interrupt: "kill-renderer",
+    name: "a renderer killed mid-capture",
+    route: "/busy",
+  },
+];
+
+const interruptVisit = async (
+  failure: VisitFailure,
+  owner: AbortController,
+  stages: ReturnType<typeof recordStages>,
+): Promise<void> => {
+  if (failure.interrupt === "abort") {
+    await busyPageStarted();
+    owner.abort(new Error("Ownership lost"));
+  }
+
+  if (failure.interrupt === "kill-renderer") {
+    await stages.ended("navigation");
+    await killRenderers((await profileOf(lastLaunchedPid() ?? 0)) ?? "unknown profile");
+  }
+};
+
+const failOnce = async (
+  mode: (typeof MODES)[number],
+  failure: VisitFailure,
+  loadWith: BrowserLoad,
+): Promise<void> => {
+  using stages = recordStages();
+  using deadline = startDeadline(failure.timeoutMs ?? 20_000);
+  const owner = new AbortController();
+
+  const loading = loadWith({
+    browserArgs: [],
+    browserPath: failure.browserPath ?? chromePath(),
+    deadline: deadline.boundTo(owner.signal),
+    mode,
+    pins: noPins,
+    proxy: undefined,
+    url: new URL(failure.route, server.origin),
+  });
+
+  await interruptVisit(failure, owner, stages);
+  await expect(loading).rejects.toMatchObject(failure.error);
+};
+
+describe.each(MODES)("browser visits, %s", (mode) => {
+  serveFixturePages();
+
+  it.each(visitFailures)(
+    "visit: $name closes only after Chrome is gone, then admits the next scrape",
+    async (failure) => {
+      const browsers = plannedScrapes(cdpDriver, 1);
+      const closings: Promise<unknown>[] = [];
+
+      await failOnce(mode, failure, async (request) => {
+        const visit = browsers.visit(request);
+
+        closings.push(visit.closed);
+
+        return await visit.document;
+      });
+
+      await expect(Promise.all(closings)).resolves.toStrictEqual([{ exited: true }]);
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+
+      await failOnce(mode, failure, async (request) => await browsers.visit(request).document);
+      using deadline = startDeadline(20_000);
+
+      const next = await browsers.visit({
+        browserArgs: [],
+        browserPath: chromePath(),
+        deadline,
+        mode,
+        pins: noPins,
+        proxy: undefined,
+        url: new URL("/static", server.origin),
+      }).document;
+
+      await browsers.close();
+      expect(markerOf(next.html)).toBe("static");
+      await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+    },
+  );
 });

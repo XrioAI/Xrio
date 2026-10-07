@@ -1,0 +1,18 @@
+{
+  "chrome_version": "154.0.8037.57",
+  "claim": "synthetic-gpu.json",
+  "digest": "sha256:6819059b04a8e00c0dfd89c5e126ec5e729750d967656784b4a22a2170a7c6c3",
+  "float_arrays": [[33902, [1.0, 8.0]]],
+  "floats": [[36444, 2.0]],
+  "form_factor": "laptop",
+  "hidden_extensions": ["WEBGL_synthetic_a"],
+  "int_arrays": [],
+  "ints": [[3379, 16384]],
+  "max_threads": 12,
+  "name": "synthetic-gpu",
+  "not_added": [],
+  "over": "synthetic-gpu-base.json",
+  "renderer": "ANGLE (Synthetic, Synthetic GPU)",
+  "schema": "xrio-gl-table/v2",
+  "vendor": "Synthetic Inc."
+}

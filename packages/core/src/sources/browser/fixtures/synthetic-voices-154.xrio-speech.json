@@ -1,0 +1,29 @@
+{
+  "chrome_version": "154.0.8037.57",
+  "digest": "sha256:ccc9c0cb9cc77635b0367a46c14e35f6f9912cc524703f817bc4e9b7fd7ae48e",
+  "implementation": "tts_extension.js",
+  "implementation_sha256": "sha256:8bde0b2e4125b9a5711506880f5d0292a75c0aac8827a424085e21d553ff1758",
+  "manifest": "manifest.json",
+  "name": "synthetic-voices-154",
+  "reference": "synthetic-voices.json",
+  "reference_chrome_version": "154.0.8037.57",
+  "schema": "xrio-speech-table/v1",
+  "voices": [
+    {
+      "event_types": ["start", "end", "error"],
+      "is_default": true,
+      "lang": "en-US",
+      "local_service": false,
+      "name": "Synthetic One",
+      "voice_uri": "Synthetic One"
+    },
+    {
+      "event_types": ["start", "end", "error"],
+      "is_default": false,
+      "lang": "de-DE",
+      "local_service": false,
+      "name": "Synthetic Two",
+      "voice_uri": "Synthetic Two"
+    }
+  ]
+}

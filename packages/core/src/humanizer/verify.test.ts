@@ -1,0 +1,1810 @@
+import { runInNewContext } from "node:vm";
+
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { CHECKED_FONT_STACK } from "../testing/fake-font-stack.ts";
+import { fixedDevice } from "../testing/fixed-seed.ts";
+import {
+  forkWithGl,
+  gpuHost,
+  HIDE_ONLY,
+  RENOIR,
+  RENOIR_RENDERER,
+  SWIFTSHADER_RENDERER,
+  swiftShaderHost,
+} from "../testing/gl-fork.ts";
+import { forkWithKnobs } from "../testing/hardware-fork.ts";
+import { noPins } from "../testing/no-pins.ts";
+import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
+import { planIdentity } from "./humanizer.ts";
+import type { IdentityContext } from "./surfaces.ts";
+import {
+  afterCaptureRead,
+  describeMismatch,
+  evaluate,
+  identityRead,
+  readAfterCapture,
+  readObservation,
+} from "./verify.ts";
+import type { SurfaceExpectation } from "./verify.ts";
+
+const MEASURED = { headless: false, major: 154, version: "154.0.8037.57" };
+
+const UNMEASURED = { headless: false, major: 152, version: "152.0.7977.75" };
+
+const linuxHeadless: Observation = {
+  afterCapture: { kind: "not-navigated" },
+  anyPointer: "fine",
+  availHeight: 1018,
+  availLeft: 0,
+  availTop: 32,
+  availWidth: 1680,
+  colorDepth: 24,
+  colorScheme: "light",
+  devicePixelRatio: 1,
+  fontsDigest: "c41f09a2",
+  fontsSentinel: "5e17a1b2",
+  fontsSentinelResolved: true,
+  hardwareConcurrency: 32,
+  hover: "hover",
+  intlLocale: "en-US",
+  languages: ["en-US", "en"],
+  maxTouchPoints: 0,
+  outerHeight: 1018,
+  outerWidth: 1680,
+  pointer: "fine",
+  product: MEASURED,
+  reducedMotion: "no-preference",
+  requestedOffsets: ["GMT+05:30", "GMT+05:30"],
+  requestedZone: "Asia/Kolkata",
+  screenHeight: 1050,
+  screenWidth: 1680,
+  screenX: 0,
+  screenY: 32,
+  userAgent:
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+  webdriver: false,
+  webgl: true,
+  webglExtensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+  webglRenderer:
+    "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+  webglVendor: "Google Inc. (Google)",
+  zone: "Asia/Calcutta",
+  zoneOffsets: ["GMT+05:30", "GMT+05:30"],
+};
+
+const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
+  capabilities: { fontStack: CHECKED_FONT_STACK, permittedCpus: 32, platform: "linux" },
+  device: fixedDevice,
+  exit: { facts: { kind: "unknown" }, route: "direct" },
+  hostZone: "Asia/Kolkata",
+  mode: "headless",
+  pins: noPins,
+  ...overrides,
+});
+
+const EVIDENCE: FontEvidence = {
+  ageMs: 5_400_000,
+  digest: "2eeb6d13",
+  key: "5be0c7d2",
+  sentinel: "c6755abb",
+};
+
+const planFor = (overrides: Partial<IdentityContext> = {}) => planIdentity(contextOf(overrides));
+
+const planWithEvidence = () =>
+  planFor({
+    capabilities: {
+      fontEvidence: EVIDENCE,
+      fontStack: CHECKED_FONT_STACK,
+      permittedCpus: 32,
+      platform: "linux",
+    },
+  });
+
+const planWith = (expected: readonly SurfaceExpectation[]) => ({ ...planFor(), expected });
+
+const expectation = (overrides: Partial<SurfaceExpectation>): SurfaceExpectation => ({
+  compatibility: false,
+  field: "languages",
+  matcher: { kind: "equals", value: ["en-US", "en"] },
+  severity: "fatal",
+  surface: "locale",
+  ...overrides,
+});
+
+describe("each matcher kind", () => {
+  it.each([
+    {
+      held: { ...linuxHeadless, languages: ["en-US", "en"] },
+      kind: "equals",
+      missed: { ...linuxHeadless, languages: ["de-DE", "de"] },
+      rule: expectation({}),
+      seen: ["de-DE", "de"],
+      wanted: ["en-US", "en"],
+    },
+    {
+      held: { ...linuxHeadless, intlLocale: "en" },
+      kind: "same-language",
+      missed: { ...linuxHeadless, intlLocale: "de-DE" },
+      rule: expectation({
+        field: "intlLocale",
+        matcher: { kind: "same-language", locale: "en-US" },
+      }),
+      seen: "de-DE",
+      wanted: "en",
+    },
+    {
+      held: linuxHeadless,
+      kind: "zone-offsets",
+      missed: { ...linuxHeadless, zoneOffsets: ["GMT+00:00", "GMT+00:00"] },
+      rule: expectation({
+        field: "zoneOffsets",
+        matcher: { kind: "zone-offsets" },
+        surface: "timezone",
+      }),
+      seen: ["GMT+00:00", "GMT+00:00"],
+      wanted: ["GMT+05:30", "GMT+05:30"],
+    },
+    {
+      held: { ...linuxHeadless, outerWidth: 1680 },
+      kind: "at-most-field",
+      missed: { ...linuxHeadless, outerWidth: 1681 },
+      rule: expectation({
+        field: "outerWidth",
+        matcher: { field: "availWidth", kind: "at-most-field" },
+        surface: "window",
+      }),
+      seen: 1681,
+      wanted: 1680,
+    },
+    {
+      held: linuxHeadless,
+      kind: "no-headless-token",
+      missed: {
+        ...linuxHeadless,
+        userAgent:
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      },
+      rule: expectation({
+        field: "userAgent",
+        matcher: { kind: "no-headless-token" },
+        surface: "automation",
+      }),
+      seen: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      wanted:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    },
+    {
+      held: { ...linuxHeadless, webglExtensions: ["WEBGL_debug_renderer_info"] },
+      kind: "excludes-all",
+      missed: {
+        ...linuxHeadless,
+        webglExtensions: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+      },
+      rule: expectation({
+        field: "webglExtensions",
+        matcher: {
+          kind: "excludes-all",
+          values: ["WEBGL_compressed_texture_astc", "WEBGL_compressed_texture_etc"],
+        },
+        surface: "gpu",
+      }),
+      seen: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+      wanted: ["WEBGL_compressed_texture_astc", "WEBGL_compressed_texture_etc"],
+    },
+  ] as const)(
+    "$kind holds or names the field it missed",
+    ({ held, missed, rule, seen, wanted }) => {
+      expect(evaluate(planWith([rule]), held).mismatches).toStrictEqual([]);
+      expect(evaluate(planWith([rule]), missed).mismatches).toStrictEqual([
+        {
+          expected: wanted,
+          field: rule.field,
+          observed: seen,
+          surface: rule.surface,
+        },
+      ]);
+    },
+  );
+});
+
+describe("the excludes-all matcher", () => {
+  const rule = expectation({
+    field: "webglExtensions",
+    matcher: { kind: "excludes-all", values: ["WEBGL_compressed_texture_etc"] },
+    surface: "gpu",
+  });
+
+  it("does not hold for a page that read no extension list", () => {
+    expect(
+      evaluate(planWith([rule]), { ...linuxHeadless, webglExtensions: null }).mismatches,
+    ).toStrictEqual([
+      {
+        expected: ["WEBGL_compressed_texture_etc"],
+        field: "webglExtensions",
+        observed: null,
+        surface: "gpu",
+      },
+    ]);
+  });
+
+  it("holds for an empty extension list", () => {
+    expect(
+      evaluate(planWith([rule]), { ...linuxHeadless, webglExtensions: [] }).mismatches,
+    ).toStrictEqual([]);
+  });
+});
+
+const hideOnlyPlan = () => {
+  const capabilities = {
+    ...swiftShaderHost(forkWithGl([HIDE_ONLY], { knobs: {} })),
+    fontStack: CHECKED_FONT_STACK,
+  };
+
+  const { record } = planFor({ capabilities }).chosen;
+
+  if (record === null) {
+    throw new Error("A headless plan records its device.");
+  }
+
+  const gpu = {
+    backend: "swiftshader",
+    persona: { kind: "hide-only", name: HIDE_ONLY.name },
+  } as const;
+
+  return planFor({
+    capabilities,
+    device: { kind: "record", record: { ...record, device: { ...record.device, gpu } } },
+  });
+};
+
+const renoirPlan = () =>
+  planFor({
+    capabilities: {
+      ...gpuHost(forkWithGl([RENOIR], { knobs: {} }), RENOIR_RENDERER),
+      fontStack: CHECKED_FONT_STACK,
+    },
+  });
+
+const hidden = { ...linuxHeadless, webglExtensions: ["WEBGL_debug_renderer_info"] };
+
+describe("the GL persona expectations", () => {
+  it("holds when the page shows the artifact's renderer and none of its hidden extensions", () => {
+    expect([
+      evaluate(hideOnlyPlan(), hidden).mismatches,
+      evaluate(renoirPlan(), { ...hidden, webglRenderer: RENOIR_RENDERER }).mismatches,
+    ]).toStrictEqual([[], []]);
+  });
+
+  it("fails fatally on a native page that still lists one of a hardware persona's hidden extensions", () => {
+    const page = {
+      ...linuxHeadless,
+      webglExtensions: ["WEBGL_clip_cull_distance", "WEBGL_debug_renderer_info"],
+      webglRenderer: RENOIR_RENDERER,
+    };
+
+    expect(evaluate(renoirPlan(), page).mismatches).toStrictEqual([
+      {
+        expected: [
+          "WEBGL_clip_cull_distance",
+          "WEBGL_compressed_texture_astc",
+          "WEBGL_compressed_texture_etc",
+          "WEBGL_compressed_texture_etc1",
+        ],
+        field: "webglExtensions",
+        observed: ["WEBGL_clip_cull_distance", "WEBGL_debug_renderer_info"],
+        surface: "gpu",
+      },
+    ]);
+  });
+
+  it("fails fatally on a page whose renderer is not the artifact's", () => {
+    const { mismatches } = evaluate(renoirPlan(), hidden);
+
+    expect(
+      mismatches.map((mismatch) => ({ ...mismatch, named: describeMismatch(mismatch, hidden) })),
+    ).toStrictEqual([
+      {
+        expected: RENOIR_RENDERER,
+        field: "webglRenderer",
+        named: "gpu webglRenderer",
+        observed: SWIFTSHADER_RENDERER,
+        surface: "gpu",
+      },
+    ]);
+  });
+
+  it("fails fatally on a page that still lists a hidden extension", () => {
+    const { mismatches } = evaluate(hideOnlyPlan(), linuxHeadless);
+
+    expect(
+      mismatches.map((mismatch) => ({
+        ...mismatch,
+        named: describeMismatch(mismatch, linuxHeadless),
+      })),
+    ).toStrictEqual([
+      {
+        expected: [
+          "WEBGL_compressed_texture_astc",
+          "WEBGL_compressed_texture_etc",
+          "WEBGL_compressed_texture_etc1",
+        ],
+        field: "webglExtensions",
+        named: "gpu webglExtensions",
+        observed: ["WEBGL_compressed_texture_astc", "WEBGL_debug_renderer_info"],
+        surface: "gpu",
+      },
+    ]);
+  });
+});
+
+describe("severity", () => {
+  const germanLinux = { ...linuxHeadless, intlLocale: "de", languages: ["de-DE", "de"] };
+
+  it("fails a compatibility expectation on a measured Chrome major", () => {
+    expect(evaluate(planFor(), germanLinux)).toMatchObject({
+      mismatches: [
+        {
+          expected: ["en-US", "en"],
+          field: "languages",
+          observed: ["de-DE", "de"],
+          surface: "locale",
+        },
+        { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
+      ],
+      report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+    });
+  });
+
+  it("only notes a compatibility expectation on an unmeasured Chrome major", () => {
+    expect(evaluate(planFor(), { ...germanLinux, product: UNMEASURED })).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [
+          {
+            expected: ["en-US", "en"],
+            field: "languages",
+            observed: ["de-DE", "de"],
+            surface: "locale",
+          },
+          { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
+        ],
+        tells: ["unmeasured-chrome", "gl-persona-unavailable", "hardware-unhonored"],
+      },
+    });
+  });
+
+  it("fails a page with no WebGL context on a measured Chrome major and only notes it on another", () => {
+    const noWebgl = { ...linuxHeadless, webgl: false };
+    const mismatch = { expected: true, field: "webgl", observed: false, surface: "gpu" };
+
+    expect(evaluate(planFor(), noWebgl).mismatches).toStrictEqual([mismatch]);
+    expect(evaluate(planFor(), { ...noWebgl, product: UNMEASURED })).toMatchObject({
+      mismatches: [],
+      report: { notes: [mismatch] },
+    });
+  });
+
+  it("keeps the zone offsets fatal on an unmeasured Chrome major", () => {
+    const utc = { ...linuxHeadless, product: UNMEASURED, zoneOffsets: ["GMT+00:00", "GMT+00:00"] };
+
+    expect(evaluate(planFor(), utc).mismatches).toStrictEqual([
+      {
+        expected: ["GMT+05:30", "GMT+05:30"],
+        field: "zoneOffsets",
+        observed: ["GMT+00:00", "GMT+00:00"],
+        surface: "timezone",
+      },
+    ]);
+  });
+
+  it("only notes a zone the page's Intl cannot name while Chrome names a zone, reporting that zone", () => {
+    expect(
+      evaluate(planFor({ hostZone: "Antarctica/Coyhaique" }), {
+        ...linuxHeadless,
+        requestedOffsets: null,
+        requestedZone: "Antarctica/Coyhaique",
+        zone: "UTC",
+        zoneOffsets: ["GMT+00:00", "GMT+00:00"],
+      }),
+    ).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [
+          {
+            expected: "Antarctica/Coyhaique",
+            field: "zoneOffsets",
+            observed: ["UTC", "GMT+00:00", "GMT+00:00"],
+            surface: "timezone",
+          },
+        ],
+        tells: ["gl-persona-unavailable", "hardware-unhonored"],
+      },
+    });
+  });
+
+  it.each([null, "Etc/Unknown"])(
+    "fails a TZ for which Chrome reports the zone %j, on an unmeasured major too",
+    (zone) => {
+      expect(
+        evaluate(planFor({ hostZone: "UTC0" }), {
+          ...linuxHeadless,
+          product: UNMEASURED,
+          requestedOffsets: null,
+          requestedZone: "UTC0",
+          zone,
+          zoneOffsets: ["GMT+00:00", "GMT+00:00"],
+        }),
+      ).toMatchObject({
+        mismatches: [{ expected: "UTC0", field: "zone", observed: zone, surface: "timezone" }],
+        report: {
+          notes: [],
+          tells: ["unmeasured-chrome", "gl-persona-unavailable", "hardware-unhonored"],
+        },
+      });
+    },
+  );
+
+  it("only notes an Intl language off the plan on macOS", () => {
+    expect(
+      evaluate(planFor({ capabilities: { permittedCpus: 32, platform: "darwin" } }), {
+        ...linuxHeadless,
+        colorScheme: "dark",
+        intlLocale: "fr-CA",
+      }),
+    ).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [{ expected: "en", field: "intlLocale", observed: "fr-CA", surface: "locale" }],
+        tells: ["gl-persona-unavailable", "hardware-unhonored"],
+      },
+    });
+  });
+});
+
+const hardwarePlan = () =>
+  planFor({ capabilities: { ...forkWithKnobs(), fontStack: CHECKED_FONT_STACK } });
+
+const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
+  battery: true,
+  batteryState: { charging: true, kind: "state", level: 1 },
+  clientHints: null,
+  deviceMemory,
+  kind: "secure",
+  webgpu: false,
+  webgpuAdapter: { kind: "none" },
+});
+
+const announcedPlan = (persona = RENOIR) => {
+  const plan = planFor({
+    capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, persona])),
+    pins: { ...noPins, hardware: { gpuPolicy: "announce" } },
+  });
+
+  return { ...plan, expected: [] };
+};
+
+const BATTERYLESS_STATE = { charging: true, kind: "state", level: 1 } as const;
+
+const readingWith = (
+  overrides: Partial<Extract<Observation["afterCapture"], { kind: "secure" }>>,
+): Observation["afterCapture"] => ({
+  battery: true,
+  batteryState: { charging: false, kind: "state", level: 0.8 },
+  clientHints: null,
+  deviceMemory: 8,
+  kind: "secure",
+  webgpu: true,
+  webgpuAdapter: { kind: "none" },
+  ...overrides,
+});
+
+const afterCaptureTells = (
+  plan: ReturnType<typeof announcedPlan>,
+  afterCapture: Observation["afterCapture"],
+) =>
+  evaluate(plan, { ...linuxHeadless, afterCapture }).report.tells.filter(
+    (tell) => tell === "gpu-contradiction" || tell === "form-factor-battery-skew",
+  );
+
+describe("the announced persona's after-capture tells", () => {
+  it.each([
+    {
+      adapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+      why: "SwiftShader",
+    },
+    {
+      adapter: { architecture: "gen-12lp", kind: "adapter", vendor: "intel" },
+      why: "an Intel GPU",
+    },
+    { adapter: { architecture: "ada", kind: "adapter", vendor: "nvidia" }, why: "an NVIDIA GPU" },
+  ] as const)(
+    "tells gpu-contradiction when the adapter is $why under an AMD persona",
+    ({ adapter }) => {
+      expect(
+        afterCaptureTells(announcedPlan(), readingWith({ webgpuAdapter: adapter })),
+      ).toStrictEqual(["gpu-contradiction"]);
+    },
+  );
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "ATI Technologies" },
+      vendor: "Google Inc. (AMD)",
+      why: "an ATI-named adapter under AMD",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" },
+      vendor: "Google Inc. (ATI Technologies)",
+      why: "an AMD adapter under an ATI persona",
+    },
+    {
+      adapter: { architecture: "ada", kind: "adapter", vendor: "nvidia" },
+      vendor: "Google Inc. (NVIDIA Corporation)",
+      why: "an NVIDIA adapter under an NVIDIA Corporation persona",
+    },
+    {
+      adapter: { architecture: "gen-12lp", kind: "adapter", vendor: "intel" },
+      vendor: "Intel Inc.",
+      why: "an Intel adapter under an unbranded Intel Inc. persona",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd advanced micro devices" },
+      vendor: "Google Inc. (AMD)",
+      why: "an adapter whose vendor contains the persona's brand",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "" },
+      vendor: "Google Inc. (AMD)",
+      why: "an adapter that names no vendor",
+    },
+  ] as const)("tells no gpu-contradiction for $why", ({ adapter, vendor }) => {
+    expect(
+      afterCaptureTells(
+        announcedPlan({ ...RENOIR, vendor }),
+        readingWith({ webgpuAdapter: adapter }),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" },
+      vendor: "Intel Inc.",
+      why: "an AMD adapter under an unbranded Intel Inc. persona",
+    },
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" },
+      vendor: "Google Inc. (NVIDIA Corporation)",
+      why: "an AMD adapter under an NVIDIA Corporation persona",
+    },
+    {
+      adapter: { architecture: "gen-12lp", kind: "adapter", vendor: "intel" },
+      vendor: "Google Inc. (ATI Technologies)",
+      why: "an Intel adapter under an ATI persona",
+    },
+  ] as const)("tells gpu-contradiction for $why", ({ adapter, vendor }) => {
+    expect(
+      afterCaptureTells(
+        announcedPlan({ ...RENOIR, vendor }),
+        readingWith({ webgpuAdapter: adapter }),
+      ),
+    ).toStrictEqual(["gpu-contradiction"]);
+  });
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "swiftshader" },
+      why: "a vendor that names SwiftShader",
+    },
+    {
+      adapter: { architecture: "swiftshader", kind: "adapter", vendor: "" },
+      why: "an architecture that names SwiftShader beside an empty vendor",
+    },
+  ] as const)(
+    "tells gpu-contradiction for $why even when the persona claims no vendor",
+    ({ adapter }) => {
+      expect(
+        afterCaptureTells(
+          announcedPlan({ ...RENOIR, vendor: "" }),
+          readingWith({ webgpuAdapter: adapter }),
+        ),
+      ).toStrictEqual(["gpu-contradiction"]);
+    },
+  );
+
+  it.each(["matched", "announce"] as const)(
+    "judges nothing on a native GPU under %s, where the host's own GPU is presented",
+    (gpuPolicy) => {
+      const plan = {
+        ...planFor({
+          capabilities: gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER),
+          pins: { ...noPins, hardware: { gpuPolicy } },
+        }),
+        expected: [],
+      };
+
+      expect(
+        afterCaptureTells(
+          plan,
+          readingWith({
+            batteryState: BATTERYLESS_STATE,
+            webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+          }),
+        ),
+      ).toStrictEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      adapter: { architecture: "gcn-5", kind: "adapter", vendor: "amd" } as const,
+      why: "an AMD adapter",
+    },
+    { adapter: { kind: "none" } as const, why: "no adapter" },
+    { adapter: { kind: "timed-out" } as const, why: "an adapter read that timed out" },
+    { adapter: { kind: "failed" } as const, why: "an adapter read that failed" },
+  ])("tells no gpu-contradiction for $why", ({ adapter }) => {
+    expect(
+      afterCaptureTells(announcedPlan(), readingWith({ webgpuAdapter: adapter })),
+    ).toStrictEqual([]);
+  });
+
+  it("tells form-factor-battery-skew for a laptop persona on a batteryless page", () => {
+    expect(
+      afterCaptureTells(announcedPlan(), readingWith({ batteryState: BATTERYLESS_STATE })),
+    ).toStrictEqual(["form-factor-battery-skew"]);
+  });
+
+  it.each([
+    {
+      batteryState: { charging: false, kind: "state", level: 1 } as const,
+      why: "discharging at full",
+    },
+    {
+      batteryState: { charging: true, kind: "state", level: 0.99 } as const,
+      why: "charging below full",
+    },
+    { batteryState: { kind: "none" } as const, why: "no battery API" },
+    { batteryState: { kind: "timed-out" } as const, why: "a battery read that timed out" },
+    { batteryState: { kind: "failed" } as const, why: "a battery read that failed" },
+  ])("tells no form-factor-battery-skew for a battery $why", ({ batteryState }) => {
+    expect(afterCaptureTells(announcedPlan(), readingWith({ batteryState }))).toStrictEqual([]);
+  });
+
+  it("tells no form-factor-battery-skew for a desktop persona", () => {
+    expect(
+      afterCaptureTells(
+        announcedPlan({ ...RENOIR, formFactor: "desktop" }),
+        readingWith({ batteryState: BATTERYLESS_STATE }),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("tells both when the page contradicts the persona twice", () => {
+    expect(
+      afterCaptureTells(
+        announcedPlan(),
+        readingWith({
+          batteryState: BATTERYLESS_STATE,
+          webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+        }),
+      ),
+    ).toStrictEqual(["gpu-contradiction", "form-factor-battery-skew"]);
+  });
+
+  it("judges nothing without an announced persona, a secure origin or a launch that sent one", () => {
+    const contradicting = readingWith({
+      batteryState: BATTERYLESS_STATE,
+      webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+    });
+
+    const matched = {
+      ...planFor({
+        capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
+        pins: { ...noPins, hardware: { gpuPolicy: "matched" } },
+      }),
+      expected: [],
+    };
+
+    const stock = { ...planFor(), expected: [] };
+
+    expect([
+      afterCaptureTells(matched, contradicting),
+      afterCaptureTells(stock, contradicting),
+      afterCaptureTells(announcedPlan(), { kind: "insecure" }),
+      afterCaptureTells(announcedPlan(), { kind: "failed" }),
+    ]).toStrictEqual([[], [], [], []]);
+  });
+});
+
+describe("the hardware expectations", () => {
+  const seen = { ...linuxHeadless, hardwareConcurrency: 6 };
+
+  it("holds when the page reads the drawn cores and memory", () => {
+    expect(evaluate(hardwarePlan(), { ...seen, afterCapture: secure(16) })).toMatchObject({
+      mismatches: [],
+      report: { notes: [], tells: ["gl-persona-unavailable"] },
+    });
+  });
+
+  it("fails a scrape whose page reads other cores than the drawn ones", () => {
+    expect(
+      evaluate(hardwarePlan(), { ...linuxHeadless, afterCapture: secure(16) }).mismatches,
+    ).toStrictEqual([
+      { expected: 6, field: "hardwareConcurrency", observed: 32, surface: "hardware" },
+    ]);
+  });
+
+  it("notes other memory than the drawn one and tells hardware-drift, never failing the scrape", () => {
+    expect(evaluate(hardwarePlan(), { ...seen, afterCapture: secure(8) })).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [{ expected: 16, field: "deviceMemory", observed: 8, surface: "hardware" }],
+        tells: ["gl-persona-unavailable", "hardware-drift"],
+      },
+    });
+  });
+
+  it.each([
+    { afterCapture: { kind: "insecure" }, name: "an insecure page" },
+    { afterCapture: { kind: "failed" }, name: "a failed read" },
+    { afterCapture: { kind: "skipped" }, name: "a skipped read" },
+    { afterCapture: { kind: "not-navigated" }, name: "a scrape that never navigated" },
+    { afterCapture: secure(null), name: "a page with no deviceMemory" },
+  ] as const)("expects no memory from $name", ({ afterCapture }) => {
+    expect(evaluate(hardwarePlan(), { ...seen, afterCapture })).toMatchObject({
+      mismatches: [],
+      report: { notes: [], tells: ["gl-persona-unavailable"] },
+    });
+  });
+
+  it("expects nothing on stock Chrome, whatever cores and memory the host shows", () => {
+    expect(
+      evaluate(planFor(), { ...linuxHeadless, afterCapture: secure(32), hardwareConcurrency: 64 }),
+    ).toMatchObject({
+      mismatches: [],
+      report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+    });
+  });
+
+  it("only notes a core mismatch on an unmeasured Chrome major", () => {
+    expect(
+      evaluate(hardwarePlan(), { ...linuxHeadless, afterCapture: secure(16), product: UNMEASURED }),
+    ).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [{ expected: 6, field: "hardwareConcurrency", observed: 32, surface: "hardware" }],
+      },
+    });
+  });
+});
+
+describe("the colour scheme", () => {
+  it("is a note on Linux when Chrome reports dark", () => {
+    expect(evaluate(planFor(), { ...linuxHeadless, colorScheme: "dark" })).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [
+          { expected: "light", field: "colorScheme", observed: "dark", surface: "automation" },
+        ],
+        tells: ["gl-persona-unavailable", "hardware-unhonored"],
+      },
+    });
+  });
+});
+
+describe("the no-taskbar tell", () => {
+  const screenOnly = {
+    ...linuxHeadless,
+    availHeight: 1080,
+    availLeft: 0,
+    availTop: 0,
+    availWidth: 1920,
+    screenHeight: 1080,
+    screenWidth: 1920,
+  };
+
+  it.each([
+    { name: "a screen with no inset", observation: screenOnly, tells: ["no-taskbar"] },
+    {
+      name: "a dock on the left only",
+      observation: { ...screenOnly, availLeft: 64, availWidth: 1856 },
+      tells: [],
+    },
+    {
+      name: "a panel on the right only",
+      observation: { ...screenOnly, availWidth: 1872 },
+      tells: [],
+    },
+  ])("fires only when no edge is inset, not for $name", ({ observation, tells }) => {
+    expect(
+      evaluate(planFor(), observation).report.tells.filter((tell) => tell === "no-taskbar"),
+    ).toStrictEqual(tells);
+  });
+});
+
+describe("the headed window", () => {
+  it("notes a window wider than the observed work area and derives the display tells", () => {
+    const smallXvfb = {
+      ...linuxHeadless,
+      availHeight: 768,
+      availTop: 0,
+      availWidth: 1024,
+      colorDepth: 16,
+      outerHeight: 900,
+      outerWidth: 1600,
+      screenHeight: 768,
+      screenWidth: 1024,
+    };
+
+    expect(evaluate(planFor({ mode: "headed" }), smallXvfb)).toMatchObject({
+      mismatches: [],
+      report: {
+        notes: [
+          { expected: 1024, field: "outerWidth", observed: 1600, surface: "window" },
+          { expected: 768, field: "outerHeight", observed: 900, surface: "window" },
+        ],
+        tells: [
+          "no-taskbar",
+          "display-implausible",
+          "gl-persona-unavailable",
+          "hardware-unhonored",
+          "flag-infobar",
+        ],
+      },
+    });
+  });
+});
+
+describe("a pinned alias", () => {
+  it("passes on the zone Chrome names, which the report names as well", () => {
+    const kyiv = {
+      ...linuxHeadless,
+      requestedOffsets: ["GMT+02:00", "GMT+03:00"],
+      requestedZone: "Europe/Kiev",
+      zone: "Europe/Kiev",
+      zoneOffsets: ["GMT+02:00", "GMT+03:00"],
+    };
+
+    expect(evaluate(planFor({ pins: { ...noPins, timezone: "Europe/Kyiv" } }), kyiv)).toMatchObject(
+      {
+        mismatches: [],
+        report: {
+          notes: [],
+          observed: { timeZone: "Europe/Kiev" },
+          surfaces: { timezone: { source: "pin", zone: "Europe/Kiev" } },
+          tells: ["gl-persona-unavailable", "hardware-unhonored"],
+        },
+      },
+    );
+  });
+
+  it("fails when Chrome presents other offsets than the pinned zone's", () => {
+    const hostLeak = {
+      ...linuxHeadless,
+      requestedOffsets: ["GMT+02:00", "GMT+03:00"],
+      requestedZone: "Europe/Kiev",
+      zone: "Asia/Calcutta",
+    };
+
+    expect(
+      evaluate(planFor({ pins: { ...noPins, timezone: "Europe/Kyiv" } }), hostLeak).mismatches,
+    ).toStrictEqual([
+      {
+        expected: ["GMT+02:00", "GMT+03:00"],
+        field: "zoneOffsets",
+        observed: ["GMT+05:30", "GMT+05:30"],
+        surface: "timezone",
+      },
+    ]);
+  });
+});
+
+describe("tells", () => {
+  it("names stock headless Chrome's user agent token", () => {
+    const headless = {
+      ...linuxHeadless,
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.0.0 Safari/537.36",
+    };
+
+    expect(evaluate(planFor(), headless).report.tells).toStrictEqual([
+      "headless-token",
+      "gl-persona-unavailable",
+      "hardware-unhonored",
+    ]);
+  });
+
+  it("lists what the plan's facts show after what Chrome was observed to present", () => {
+    const headless = {
+      ...linuxHeadless,
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.0.0 Safari/537.36",
+    };
+
+    const proxied = planFor({ exit: { facts: { kind: "unknown" }, route: "proxy" } });
+
+    expect(evaluate(proxied, headless).report.tells).toStrictEqual([
+      "headless-token",
+      "exit-unknown",
+      "gl-persona-unavailable",
+      "hardware-unhonored",
+    ]);
+  });
+});
+
+describe("the fonts evidence", () => {
+  const sentinelOnly: Observation = {
+    ...linuxHeadless,
+    fontsDigest: null,
+    fontsSentinel: "c6755abb",
+  };
+
+  it("hands the digest and sentinel of a launch with no evidence to the store, as observed", () => {
+    const { fontEvidence, report } = evaluate(planFor(), linuxHeadless);
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+    }).toStrictEqual({
+      coverage: { state: "observed" },
+      digest: "c41f09a2",
+      fontEvidence: { digest: "c41f09a2", kind: "gathered", sentinel: "5e17a1b2" },
+    });
+  });
+
+  it("reports the stored digest as cached with its key and age when the sentinel agrees", () => {
+    const { fontEvidence, mismatches, report } = evaluate(planWithEvidence(), sentinelOnly);
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+      mismatches,
+      notes: report.notes,
+      tells: report.tells,
+    }).toStrictEqual({
+      coverage: { ageMs: 5_400_000, key: "5be0c7d2", state: "cached" },
+      digest: "2eeb6d13",
+      fontEvidence: { kind: "confirmed" },
+      mismatches: [],
+      notes: [],
+      tells: ["gl-persona-unavailable", "hardware-unhonored"],
+    });
+  });
+
+  it("notes a sentinel off the evidence and tells fonts-drift, never failing the launch, and reports no digest", () => {
+    const { fontEvidence, mismatches, report } = evaluate(planWithEvidence(), {
+      ...sentinelOnly,
+      fontsSentinel: "deadbeef",
+    });
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+      mismatches,
+      notes: report.notes,
+      tells: report.tells,
+    }).toStrictEqual({
+      coverage: { reason: "fonts-drift", state: "unchecked" },
+      digest: null,
+      fontEvidence: { kind: "drifted" },
+      mismatches: [],
+      notes: [
+        { expected: "c6755abb", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
+      ],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "fonts-drift"],
+    });
+  });
+
+  it("does not store the evidence of a gathering launch whose pinned stack's sentinel resolved nothing", () => {
+    const { fontEvidence, mismatches, report } = evaluate(planFor(), {
+      ...linuxHeadless,
+      fontsSentinelResolved: false,
+    });
+
+    expect({
+      coverage: report.coverage.fonts,
+      digest: report.observed.fontsDigest,
+      fontEvidence,
+      mismatches,
+      notes: report.notes,
+      tells: report.tells,
+    }).toStrictEqual({
+      coverage: { state: "observed" },
+      digest: "c41f09a2",
+      fontEvidence: { kind: "unproven" },
+      mismatches: [],
+      notes: [
+        { expected: true, field: "fontsSentinelResolved", observed: false, surface: "fonts" },
+      ],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "fonts-drift"],
+    });
+  });
+
+  it("expects the sentinel to resolve only where the stack is pinned", () => {
+    const hostFonts = planFor({ capabilities: { permittedCpus: 32, platform: "linux" } });
+    const unresolved = { ...linuxHeadless, fontsSentinelResolved: false };
+
+    expect([
+      evaluate(hostFonts, unresolved).report.notes,
+      evaluate(planFor({ capabilities: { permittedCpus: 32, platform: "darwin" } }), unresolved)
+        .report.notes,
+    ]).toStrictEqual([[], []]);
+  });
+
+  it("does not compare a sentinel when there is no evidence", () => {
+    expect(
+      evaluate(planFor(), { ...linuxHeadless, fontsSentinel: "deadbeef" }).report.notes,
+    ).toStrictEqual([]);
+  });
+});
+
+describe(readObservation, () => {
+  const { afterCapture: _afterCapture, product: _product, ...reading } = linuxHeadless;
+
+  it("adds the browser's product to a well-formed read, with nothing read after capture yet", () => {
+    expect(readObservation(MEASURED, JSON.stringify(reading))).toStrictEqual(linuxHeadless);
+  });
+
+  it.each([
+    { read: JSON.stringify({ ...reading, webdriver: "false" }), refusal: "webdriver" },
+    { read: JSON.stringify({ ...reading, webgl: undefined }), refusal: "webgl" },
+    { read: JSON.stringify({ ...reading, webglVendor: 7 }), refusal: "webglVendor" },
+    { read: JSON.stringify({ ...reading, webglRenderer: undefined }), refusal: "webglRenderer" },
+    { read: JSON.stringify({ ...reading, webglExtensions: [1] }), refusal: "webglExtensions" },
+    { read: JSON.stringify({ ...reading, fontsDigest: 7 }), refusal: "fontsDigest" },
+    { read: JSON.stringify({ ...reading, fontsSentinel: null }), refusal: "fontsSentinel" },
+    {
+      read: JSON.stringify({ ...reading, hardwareConcurrency: "8" }),
+      refusal: "hardwareConcurrency",
+    },
+    { read: JSON.stringify({ ...reading, languages: undefined }), refusal: "languages" },
+    { read: JSON.stringify({ ...reading, zoneOffsets: [0, 0] }), refusal: "zoneOffsets" },
+    { read: "null", refusal: "anyPointer, availHeight" },
+  ])(
+    "refuses a read with a malformed $refusal on an unmeasured Chrome major too",
+    ({ read, refusal }) => {
+      expect(() => readObservation(UNMEASURED, read)).toThrow(
+        `The identity read returned a malformed ${refusal}`,
+      );
+    },
+  );
+
+  it("refuses a read that is not JSON", () => {
+    expect(() => readObservation(UNMEASURED, "<html>")).toThrow(SyntaxError);
+  });
+});
+
+const SENTINEL_MEASURES = 9;
+
+const FULL_MEASURES = 120;
+
+interface PageOptions {
+  readonly canCreateWebgl?: boolean;
+  readonly webglContext?: object;
+  readonly fallsBack?: boolean;
+  readonly measured?: string[];
+}
+
+const widthOf = (font: string): number =>
+  (font.split("").reduce((sum, character) => sum + (character.codePointAt(0) ?? 0), 0) % 977) / 8;
+
+const genericOf = (font: string): string => `72px ${font.slice(font.lastIndexOf(" ") + 1)}`;
+
+const canvasDocument = ({
+  canCreateWebgl = true,
+  webglContext = {},
+  fallsBack = false,
+  measured = [],
+}: PageOptions) => ({
+  createElement: () => ({
+    getContext: (kind: string) => {
+      if (kind === "webgl") {
+        return canCreateWebgl ? webglContext : null;
+      }
+
+      const context = {
+        font: "",
+        measureText: () => {
+          measured.push(context.font);
+
+          return { width: widthOf(fallsBack ? genericOf(context.font) : context.font) };
+        },
+      };
+
+      return context;
+    },
+  }),
+});
+
+const pageGlobals = (matching: ReadonlySet<string>, options: PageOptions) => ({
+  devicePixelRatio: 1,
+  document: canvasDocument(options),
+  matchMedia: (query: string) => ({ matches: matching.has(query) }),
+  navigator: {
+    hardwareConcurrency: 12,
+    languages: ["en-US", "en"],
+    maxTouchPoints: 0,
+    userAgent: "Mozilla/5.0 Chrome/154.0.0.0",
+    webdriver: false,
+  },
+  outerHeight: 900,
+  outerWidth: 1600,
+  screen: {
+    availHeight: 1040,
+    availLeft: 0,
+    availTop: 32,
+    availWidth: 1920,
+    colorDepth: 24,
+    height: 1080,
+    width: 1920,
+  },
+  screenX: 22,
+  screenY: 44,
+});
+
+const runRead = (read: string, matching: ReadonlySet<string>, options: PageOptions = {}): string =>
+  String(runInNewContext(read, pageGlobals(matching, options)));
+
+const readInPage = (
+  hostZone: string,
+  matching: ReadonlySet<string>,
+  measured: string[] = [],
+  fontEvidence?: FontEvidence,
+): string => {
+  const capabilities: HostCapabilities =
+    fontEvidence === undefined
+      ? { permittedCpus: 32, platform: "linux" }
+      : { fontEvidence, permittedCpus: 32, platform: "linux" };
+
+  return runRead(
+    planIdentity(contextOf({ capabilities, hostZone })).read.beforeNavigation,
+    matching,
+    { measured },
+  );
+};
+
+describe(identityRead, () => {
+  const lightDesktop = new Set([
+    "(prefers-color-scheme: light)",
+    "(prefers-reduced-motion: no-preference)",
+    "(pointer: fine)",
+    "(hover: hover)",
+    "(any-pointer: fine)",
+  ]);
+
+  it("reads every field the observation needs, with the requested zone's offsets", () => {
+    expect(readObservation(MEASURED, readInPage("Asia/Kolkata", lightDesktop))).toMatchObject({
+      anyPointer: "fine",
+      availTop: 32,
+      colorScheme: "light",
+      hardwareConcurrency: 12,
+      hover: "hover",
+      languages: ["en-US", "en"],
+      outerWidth: 1600,
+      pointer: "fine",
+      reducedMotion: "no-preference",
+      requestedOffsets: ["GMT+05:30", "GMT+05:30"],
+      screenHeight: 1080,
+      screenY: 44,
+      webdriver: false,
+      webgl: true,
+    });
+  });
+
+  it.each([true, false])("reads webgl %s as the page's canvas gives it", (webgl) => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    expect(
+      readObservation(MEASURED, runRead(read, lightDesktop, { canCreateWebgl: webgl })),
+    ).toMatchObject({ webgl });
+  });
+
+  it("reads the unmasked vendor and renderer and the supported extensions from the one context", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    const webglContext = {
+      getExtension: (name: string) =>
+        name === "WEBGL_debug_renderer_info"
+          ? { UNMASKED_RENDERER_WEBGL: 37_446, UNMASKED_VENDOR_WEBGL: 37_445 }
+          : null,
+      getParameter: (parameter: number) =>
+        parameter === 37_445 ? "Google Inc. (Google)" : "ANGLE (Google, SwiftShader)",
+      getSupportedExtensions: () => ["WEBGL_compressed_texture_etc", "WEBGL_debug_renderer_info"],
+    };
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, { webglContext }))).toMatchObject({
+      webgl: true,
+      webglExtensions: ["WEBGL_compressed_texture_etc", "WEBGL_debug_renderer_info"],
+      webglRenderer: "ANGLE (Google, SwiftShader)",
+      webglVendor: "Google Inc. (Google)",
+    });
+  });
+
+  it("reads the extension list but no strings from a context without the debug extension", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    const webglContext = {
+      getExtension: () => null,
+      getSupportedExtensions: () => ["OES_texture_float"],
+    };
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, { webglContext }))).toMatchObject({
+      webgl: true,
+      webglExtensions: ["OES_texture_float"],
+      webglRenderer: null,
+      webglVendor: null,
+    });
+  });
+
+  it("reads nothing from a context whose reads throw, without throwing", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    const webglContext = {
+      getExtension: () => {
+        throw new Error("lost context");
+      },
+      getSupportedExtensions: () => {
+        throw new Error("lost context");
+      },
+    };
+
+    expect(readObservation(MEASURED, runRead(read, lightDesktop, { webglContext }))).toMatchObject({
+      webgl: true,
+      webglExtensions: null,
+      webglRenderer: null,
+      webglVendor: null,
+    });
+  });
+
+  it("reads all three as null without a context", () => {
+    const read = planIdentity(contextOf()).read.beforeNavigation;
+
+    expect(
+      readObservation(MEASURED, runRead(read, lightDesktop, { canCreateWebgl: false })),
+    ).toMatchObject({
+      webgl: false,
+      webglExtensions: null,
+      webglRenderer: null,
+      webglVendor: null,
+    });
+  });
+
+  it("without evidence, measures the sentinel and 40 families against each generic and reports both digests", () => {
+    const measured: string[] = [];
+    const reading = readObservation(MEASURED, readInPage("UTC", new Set(), measured));
+
+    expect({
+      count: measured.length,
+      digest: reading.fontsDigest,
+      first: measured.slice(0, 4),
+      last: measured.at(-1),
+      resolved: reading.fontsSentinelResolved,
+      sentinel: reading.fontsSentinel,
+    }).toStrictEqual({
+      count: SENTINEL_MEASURES + FULL_MEASURES,
+      digest: "2eeb6d13",
+      first: ["72px monospace", "72px sans-serif", "72px serif", '72px "Ubuntu", monospace'],
+      last: '72px "Amiri", serif',
+      resolved: true,
+      sentinel: "c6755abb",
+    });
+  });
+
+  it("reports a sentinel that no family resolves, because every width equals the generic fallback", () => {
+    const pinned = planIdentity(contextOf());
+
+    const reading = readObservation(
+      MEASURED,
+      runRead(pinned.read.beforeNavigation, new Set(), { fallsBack: true }),
+    );
+
+    expect([reading.fontsSentinelResolved, reading.fontsDigest]).toStrictEqual([false, "046bc60b"]);
+  });
+
+  it("with evidence, measures only the sentinel and reports no digest", () => {
+    const measured: string[] = [];
+    const reading = readObservation(MEASURED, readInPage("UTC", new Set(), measured, EVIDENCE));
+
+    expect({
+      count: measured.length,
+      digest: reading.fontsDigest,
+      last: measured.at(-1),
+      sentinel: reading.fontsSentinel,
+    }).toStrictEqual({
+      count: SENTINEL_MEASURES,
+      digest: null,
+      last: '72px "KACSTOffice", serif',
+      sentinel: "c6755abb",
+    });
+  });
+
+  it("requests the pinned zone, not the host's", () => {
+    const pinned = planIdentity(
+      contextOf({ hostZone: "America/Chicago", pins: { ...noPins, timezone: "Asia/Kolkata" } }),
+    );
+
+    expect(
+      readObservation(MEASURED, runRead(pinned.read.beforeNavigation, lightDesktop)),
+    ).toMatchObject({
+      requestedOffsets: ["GMT+05:30", "GMT+05:30"],
+      requestedZone: "Asia/Calcutta",
+    });
+  });
+
+  it("reads no requested offsets for a zone Intl refuses", () => {
+    expect(
+      readObservation(MEASURED, runRead(identityRead("Mars/Olympus", "full"), new Set())),
+    ).toMatchObject({ colorScheme: null, requestedOffsets: null, requestedZone: "Mars/Olympus" });
+  });
+});
+
+const zoneCheckUnder = (hostZone: string, requestedZone = hostZone) => {
+  vi.stubEnv("TZ", hostZone);
+
+  const observation = readObservation(MEASURED, readInPage(requestedZone, new Set()));
+
+  const zoneExpectations = planFor({ hostZone: requestedZone }).expected.filter(
+    ({ surface }) => surface === "timezone",
+  );
+
+  return { observation, ...evaluate(planWith(zoneExpectations), observation) };
+};
+
+describe("the zone check run against the host's Intl", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["UTC", "America/Chicago", "Europe/Berlin", "Asia/Calcutta"])(
+    "accepts TZ=%s, comparing the zone it names",
+    (zone) => {
+      expect(zoneCheckUnder(zone)).toMatchObject({
+        mismatches: [],
+        observation: { requestedZone: zone },
+        report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+      });
+    },
+  );
+
+  it.each(["UTC0", "Mars/Olympus", " America/Chicago"])(
+    "fails TZ=%j, for which Intl names no default zone",
+    (zone) => {
+      const { mismatches, observation, report } = zoneCheckUnder(zone);
+
+      expect({
+        described: mismatches.map((mismatch) => describeMismatch(mismatch, observation)),
+        mismatches,
+        report,
+      }).toMatchObject({
+        described: [`timezone zone (TZ=${zone}; Chrome named no zone)`],
+        mismatches: [{ expected: zone, field: "zone", observed: null, surface: "timezone" }],
+        report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+      });
+    },
+  );
+
+  it("names the requested TZ when it describes a zone mismatch", () => {
+    const { mismatches, observation } = zoneCheckUnder("America/Bogota", "America/Chicago");
+
+    expect(mismatches.map((mismatch) => describeMismatch(mismatch, observation))).toStrictEqual([
+      "timezone zoneOffsets (TZ=America/Chicago)",
+    ]);
+  });
+
+  it("tells apart zones that share summer time but not winter time", () => {
+    expect(zoneCheckUnder("America/Bogota", "America/Chicago").mismatches).toStrictEqual([
+      {
+        expected: ["GMT-06:00", "GMT-05:00"],
+        field: "zoneOffsets",
+        observed: ["GMT-05:00", "GMT-05:00"],
+        surface: "timezone",
+      },
+    ]);
+  });
+});
+
+const SWIFTSHADER_ADAPTER = { info: { architecture: "swiftshader", vendor: "google" } };
+
+const BATTERYLESS = { charging: true, level: 1 };
+
+const batteryOffering = (getBattery: () => Promise<object | null>) => getBattery;
+
+const gpuOffering = (requestAdapter: () => Promise<object | null>) => ({ requestAdapter });
+
+const securePage = {
+  getBattery: batteryOffering(async () => await Promise.resolve(BATTERYLESS)),
+  gpu: gpuOffering(async () => await Promise.resolve(null)),
+  userAgentData: {
+    getHighEntropyValues: async () =>
+      await Promise.resolve({
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        wow64: false,
+      }),
+  },
+};
+
+type TimerHandle = number | ReturnType<typeof setTimeout>;
+
+interface Timers {
+  readonly clearTimeout: (timer: TimerHandle) => void;
+  readonly setTimeout: (fire: () => void, ms: number) => TimerHandle;
+}
+
+const realTimers: Timers = { clearTimeout, setTimeout };
+
+const readAfterCaptureIn = async (
+  isSecureContext: boolean,
+  navigator: Partial<typeof securePage> & { readonly deviceMemory?: number },
+  { budgetMs = 250, timers = realTimers }: { budgetMs?: number; timers?: Timers } = {},
+): Promise<string> => {
+  const read: unknown = await runInNewContext(afterCaptureRead(budgetMs), {
+    clearTimeout: timers.clearTimeout,
+    isSecureContext,
+    navigator,
+    setTimeout: timers.setTimeout,
+  });
+
+  return String(read);
+};
+
+const neverSettles = async (): Promise<null> => await Promise.withResolvers<null>().promise;
+
+const firesAtOnce: Timers = {
+  clearTimeout: () => {},
+  setTimeout: (fire) => {
+    queueMicrotask(fire);
+
+    return 0;
+  },
+};
+
+const recordingTimers = (delays: number[]): Timers => ({
+  clearTimeout: () => {},
+  setTimeout: (_fire, ms) => {
+    delays.push(ms);
+
+    return 0;
+  },
+});
+
+describe("the after-capture read", () => {
+  it("reads the secure-context surfaces on a secure origin", async () => {
+    expect(
+      readAfterCapture(await readAfterCaptureIn(true, { ...securePage, deviceMemory: 8 })),
+    ).toStrictEqual({
+      battery: true,
+      batteryState: { charging: true, kind: "state", level: 1 },
+      clientHints: {
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        wow64: false,
+      },
+      deviceMemory: 8,
+      kind: "secure",
+      webgpu: true,
+      webgpuAdapter: { kind: "none" },
+    });
+  });
+
+  it("reports what a page without the APIs exposes as null, false or none", async () => {
+    expect(readAfterCapture(await readAfterCaptureIn(true, {}))).toStrictEqual({
+      battery: false,
+      batteryState: { kind: "none" },
+      clientHints: null,
+      deviceMemory: null,
+      kind: "secure",
+      webgpu: false,
+      webgpuAdapter: { kind: "none" },
+    });
+  });
+
+  it("reads nothing on a non-secure origin", async () => {
+    expect(readAfterCapture(await readAfterCaptureIn(false, securePage))).toStrictEqual({
+      kind: "insecure",
+    });
+  });
+
+  it.each([
+    {
+      expected: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
+      gpu: gpuOffering(async () => await Promise.resolve(SWIFTSHADER_ADAPTER)),
+      kind: "adapter",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "none" },
+      gpu: gpuOffering(async () => await Promise.resolve(null)),
+      kind: "none",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      gpu: gpuOffering(async () => await Promise.reject(new Error("no adapter"))),
+      kind: "rejecting",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      gpu: gpuOffering(() => {
+        throw new Error("no adapter");
+      }),
+      kind: "throwing",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      gpu: gpuOffering(async () => await Promise.resolve({})),
+      kind: "adapter without info",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "timed-out" },
+      gpu: gpuOffering(neverSettles),
+      kind: "pending",
+      timers: firesAtOnce,
+    },
+  ])("reads the WebGPU adapter of a $kind request", async ({ expected, gpu, timers }) => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(true, { ...securePage, gpu }, { timers }),
+    );
+
+    expect(reading).toMatchObject({ kind: "secure", webgpu: true, webgpuAdapter: expected });
+  });
+
+  it("still reads the client hints when the adapter request never settles", async () => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(
+        true,
+        { ...securePage, deviceMemory: 4, gpu: gpuOffering(neverSettles) },
+        { timers: firesAtOnce },
+      ),
+    );
+
+    expect(reading).toMatchObject({
+      battery: true,
+      clientHints: { architecture: "x86", platform: "Linux" },
+      deviceMemory: 4,
+      webgpuAdapter: { kind: "timed-out" },
+    });
+  });
+
+  it.each([
+    { bound: 30, budgetMs: 60, call: ")(30)" },
+    { bound: 100, budgetMs: 250, call: ")(100)" },
+    { bound: 100, budgetMs: 200, call: ")(100)" },
+    { bound: 25, budgetMs: 50, call: ")(25)" },
+  ])(
+    "bounds the adapter and battery reads at $bound ms under a $budgetMs ms budget",
+    async ({ bound, budgetMs, call }) => {
+      const delays: number[] = [];
+
+      await readAfterCaptureIn(true, securePage, { budgetMs, timers: recordingTimers(delays) });
+      expect(delays).toStrictEqual([bound, bound]);
+      expect(afterCaptureRead(budgetMs).slice(-call.length)).toBe(call);
+    },
+  );
+
+  it("starts no timer on a page without WebGPU", async () => {
+    const delays: number[] = [];
+
+    await readAfterCaptureIn(true, {}, { timers: recordingTimers(delays) });
+    expect(delays).toStrictEqual([]);
+  });
+
+  it.each([
+    { reading: "{}", why: "no kind" },
+    { reading: JSON.stringify({ kind: "secure" }), why: "missing fields" },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "none" },
+        clientHints: { architecture: 64 },
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "a malformed client hint",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "none" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+      }),
+      why: "no adapter reading",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "none" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "adapter", vendor: "google" },
+      }),
+      why: "an adapter with no architecture",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "none" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: 7 },
+      }),
+      why: "an adapter with a numeric vendor",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "none" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "slow" },
+      }),
+      why: "an unknown adapter kind",
+    },
+  ])("refuses a reading with $why", ({ reading }) => {
+    expect(() => readAfterCapture(reading)).toThrow(
+      "The after-capture read returned a malformed reading.",
+    );
+  });
+});
+
+describe("the after-capture battery read", () => {
+  it.each([
+    {
+      expected: { charging: false, kind: "state", level: 0.42 },
+      getBattery: batteryOffering(
+        async () => await Promise.resolve({ charging: false, level: 0.42 }),
+      ),
+      kind: "discharging",
+      timers: realTimers,
+    },
+    {
+      expected: { charging: true, kind: "state", level: 1 },
+      getBattery: batteryOffering(async () => await Promise.resolve(BATTERYLESS)),
+      kind: "batteryless",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(async () => await Promise.reject(new Error("blocked"))),
+      kind: "rejecting",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(() => {
+        throw new Error("blocked");
+      }),
+      kind: "throwing",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(async () => await Promise.resolve({ charging: "yes", level: 1 })),
+      kind: "malformed",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "timed-out" },
+      getBattery: batteryOffering(neverSettles),
+      kind: "pending",
+      timers: firesAtOnce,
+    },
+  ])("reads the battery state of a $kind page", async ({ expected, getBattery, timers }) => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(true, { ...securePage, getBattery }, { timers }),
+    );
+
+    expect(reading).toMatchObject({ battery: true, batteryState: expected, kind: "secure" });
+  });
+
+  it("asks only getBattery, never the battery-status permission", () => {
+    expect(afterCaptureRead(250)).not.toContain("battery-status");
+    expect(afterCaptureRead(250)).not.toContain("permissions");
+  });
+
+  it("reads no battery state on a page without getBattery", async () => {
+    const { getBattery: _getBattery, ...withoutBattery } = securePage;
+    const reading = readAfterCapture(await readAfterCaptureIn(true, withoutBattery));
+
+    expect(reading).toMatchObject({ battery: false, batteryState: { kind: "none" } });
+  });
+
+  it("still reads the client hints when the battery never settles", async () => {
+    const reading = readAfterCapture(
+      await readAfterCaptureIn(
+        true,
+        { ...securePage, getBattery: batteryOffering(neverSettles) },
+        { timers: firesAtOnce },
+      ),
+    );
+
+    expect(reading).toMatchObject({
+      batteryState: { kind: "timed-out" },
+      clientHints: { platform: "Linux" },
+    });
+  });
+
+  it.each([
+    {
+      reading: JSON.stringify({
+        battery: true,
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "no battery reading",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { charging: true, kind: "state", level: "full" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "a battery level that is not a number",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { charging: "yes", kind: "state", level: 1 },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "a battery charging flag that is not a boolean",
+    },
+    {
+      reading: JSON.stringify({
+        battery: true,
+        batteryState: { kind: "charged" },
+        clientHints: null,
+        deviceMemory: 8,
+        kind: "secure",
+        webgpu: true,
+        webgpuAdapter: { kind: "none" },
+      }),
+      why: "an unknown battery kind",
+    },
+  ])("refuses a reading with $why", ({ reading }) => {
+    expect(() => readAfterCapture(reading)).toThrow(
+      "The after-capture read returned a malformed reading.",
+    );
+  });
+});

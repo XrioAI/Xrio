@@ -17,6 +17,9 @@
         "examples/*.ts"
       ],
       "project": ["src/**/*.ts!", "scripts/*.ts!", "examples/*.ts", "!src/testing/**!"]
+    },
+    ".": {
+      "entry": ["lint/*.ts!", "!lint/*.test.ts!"]
     }
   }
 }

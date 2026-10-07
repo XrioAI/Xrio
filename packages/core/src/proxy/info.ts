@@ -7,7 +7,7 @@ import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
 import { isXrioError, XrioError } from "../errors.ts";
 import { parseProxy } from "../options.ts";
-import { startRelay } from "../relay/relay.ts";
+import { startRelay } from "./relay.ts";
 
 export interface ProxyInfo {
   exitIp: string;
@@ -119,7 +119,7 @@ const requestProxyJson = async (
   connection: string,
   deadline: Deadline,
 ): Promise<{ status: number; body: unknown }> => {
-  await using relay = await startRelay(parseProxy(connection), deadline);
+  await using relay = await startRelay(parseProxy(connection), deadline, "token");
 
   try {
     await using session = await createSession({ proxy: relay.url, timeout: 0 });

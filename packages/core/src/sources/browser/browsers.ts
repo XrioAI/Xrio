@@ -1,117 +1,81 @@
-import { availableParallelism, totalmem } from "node:os";
-import { constrainedMemory } from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 
-import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
-import { clientClosed, XrioError } from "../../errors.ts";
-import type { DocumentRequest, SourceDocument } from "../../types.ts";
-import type { ScratchDir } from "./browser-process.ts";
+import { clientClosed, isXrioError, XrioError } from "../../errors.ts";
+import type { AfterCapture, HostCapabilities, Observation } from "../../humanizer/contracts.ts";
+import type { IdentityPlan } from "../../humanizer/humanizer.ts";
 import {
-  createScratchDir,
-  findBrowserPid,
-  killProcessGroup,
-  prepareProfile,
-  PROCESS_SCAN_BUDGET_MS,
-  removeScratchDir,
-  scratchRoot,
-  sweepAbandonedScratch,
-  waitForExit,
-} from "./browser-process.ts";
+  describeMismatch,
+  evaluate,
+  readAfterCapture,
+  readObservation,
+} from "../../humanizer/verify.ts";
+import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
+import type { HeldDeadline } from "../../lifetime.ts";
+import { startRelay } from "../../proxy/relay.ts";
+import type { Relay } from "../../proxy/relay.ts";
+import type { Slot } from "../../slot.ts";
+import type { SourceDocument } from "../../types.ts";
+import type { Visit, VisitPlan } from "../visit.ts";
+import type { ScratchDir } from "./browser-process.ts";
+import { prepareProfile } from "./browser-process.ts";
+import { ChromeScope } from "./chrome-scope.ts";
+import type { Closed, RetireSteps } from "./chrome-scope.ts";
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
-import { settleWithin, withinSignal } from "./lifetime.ts";
-import { CLEANUP_BUDGET_MS, CLOSE_BUDGET_MS, DriverError, TEARDOWN_BUDGET_MS } from "./port.ts";
-import type { BrowserDriver, CleanupSink, DriverBrowser } from "./port.ts";
+import { DriverError } from "./port.ts";
+import type { BrowserDriver, ChromeProduct, DriverBrowser } from "./port.ts";
 import { renderDocument } from "./render.ts";
-
-const BYTES_PER_BROWSER = 512 * 1024 * 1024;
+import { ScratchRegistry } from "./scratch-registry.ts";
 
 const STDERR_TAIL_CHARS = 8192;
 
 const MIN_CHROME_MAJOR = 150;
 
-const CHROME_MAJOR = /(?<major>\d+)\./u;
+const VERIFY_TIMEOUT_MS = 10_000;
 
-type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
+const UNSIZED_RETRY_MS = 250;
 
-interface TeardownSteps {
-  readonly findBrowserPid: typeof findBrowserPid;
-  readonly waitForExit: typeof waitForExit;
-  readonly removeScratchDir: typeof removeScratchDir;
-}
+const AFTER_CAPTURE_CAP_MS = 250;
 
-const defaultSteps: TeardownSteps = { findBrowserPid, removeScratchDir, waitForExit };
-
-export interface Browsers {
-  readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
-  readonly close: () => Promise<void>;
-}
-
-const availableMemory = (): number => {
-  const limit = constrainedMemory();
-
-  return limit > 0 ? Math.min(limit, totalmem()) : totalmem();
-};
-
-const defaultMaxBrowsers = (): number =>
-  Math.max(1, Math.min(availableParallelism(), Math.floor(availableMemory() / BYTES_PER_BROWSER)));
-
-let swept: Promise<void> | undefined;
+const AFTER_CAPTURE_FLOOR_MS = 50;
 
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
-const sweepReportingFailure = async (): Promise<void> => {
-  try {
-    await sweepAbandonedScratch(scratchRoot(), Date.now());
-  } catch (error) {
-    publishInternalEvent({
-      detail: `The startup sweep failed: ${messageOf(error)}`,
-      event: "sweep-incomplete",
-    });
+const launchFailed = (message: string, stderr: string, cause?: unknown): XrioError =>
+  new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { mismatches: [], stderr } });
+
+const assertSupported = ({ major, version }: ChromeProduct): void => {
+  if (major < MIN_CHROME_MAJOR) {
+    throw launchFailed(`Chrome ${version} is older than ${MIN_CHROME_MAJOR}.`, "");
   }
 };
 
-const sweepOnce = async (): Promise<void> => {
-  swept ??= sweepReportingFailure();
-  await swept;
-};
-
-const launchFailed = (message: string, stderr: string, cause?: unknown): XrioError =>
-  new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { stderr } });
-
-const assertSupported = (product: string): void => {
-  const major = Number(CHROME_MAJOR.exec(product)?.groups?.major);
-
-  if (!(major >= MIN_CHROME_MAJOR)) {
+const assertProbedVersion = ({ version }: ChromeProduct, { fork }: HostCapabilities): void => {
+  if (fork !== undefined && version !== fork.version) {
     throw launchFailed(
-      `Chrome ${product || "of unknown version"} is older than ${MIN_CHROME_MAJOR}.`,
+      `Chrome launched as version ${version}, but the Xrio fork package at ${fork.packageDir} reported ${fork.version} to its version probe.`,
       "",
     );
   }
 };
 
-const createOwnedScratch = async (deadline: Deadline): Promise<ScratchDir> => {
-  await untilDeadline(sweepOnce, deadline);
-
+const createOwnedScratch = async (
+  registry: ScratchRegistry,
+  deadline: Deadline,
+): Promise<ScratchDir> => {
   try {
-    return await createScratchDir(Date.now());
+    return await registry.create(deadline);
   } catch (error) {
+    if (deadline.signal.aborted) {
+      throw error;
+    }
+
     throw launchFailed("Xrio could not create a scratch directory for Chrome.", "", error);
   }
 };
-
-const planFor = (request: BrowserRequest, scratch: ScratchDir): LaunchPlan =>
-  planLaunch({
-    browserPath: request.browserPath,
-    display: process.env.DISPLAY,
-    headless: request.mode === "headless",
-    platform: process.platform,
-    scratchDir: scratch.path,
-    timezone: process.env.TZ,
-    xauthority: process.env.XAUTHORITY,
-  });
 
 const writeProfile = async (plan: LaunchPlan): Promise<void> => {
   try {
@@ -123,18 +87,22 @@ const writeProfile = async (plan: LaunchPlan): Promise<void> => {
 
 const startBrowser = async (
   driver: BrowserDriver,
+  scope: ChromeScope,
   plan: LaunchPlan,
+  slot: Slot,
   deadline: Deadline,
-  deferCleanup: CleanupSink,
 ): Promise<DriverBrowser> => {
   await writeProfile(plan);
+  slot.assertHeld();
 
   try {
-    return await timeStage("launch", async () => await driver.launch(plan, deadline, deferCleanup));
+    return await timeStage(
+      "launch",
+      async () => await scope.launch(driver, plan, deadline),
+      deadline,
+    );
   } catch (error) {
-    deadline.throwIfExpired();
-
-    if (error instanceof XrioError) {
+    if (isXrioError(error) || deadline.signal.aborted) {
       throw error;
     }
 
@@ -146,254 +114,219 @@ const startBrowser = async (
   }
 };
 
-const stopBrowser = async (
-  plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
-  cleanups: readonly Promise<void>[],
-  steps: TeardownSteps,
-  signal: AbortSignal,
-): Promise<boolean> => {
-  await withinSignal(async () => {
-    await settleWithin(Promise.allSettled(cleanups), CLEANUP_BUDGET_MS);
-  }, signal);
+const isText = (value: unknown): value is string => typeof value === "string";
 
-  if (browser !== undefined) {
-    await withinSignal(async () => {
-      await settleWithin(browser.close(CLOSE_BUDGET_MS), CLOSE_BUDGET_MS);
-    }, signal);
-  }
-
-  const scanSignal = AbortSignal.any([signal, AbortSignal.timeout(PROCESS_SCAN_BUDGET_MS)]);
-
-  const [scan] = await Promise.allSettled([
-    withinSignal(
-      async () =>
-        await steps.findBrowserPid(plan.directories.profile, PROCESS_SCAN_BUDGET_MS, scanSignal),
-      scanSignal,
-    ),
-  ]);
-
-  signal.throwIfAborted();
-  const group = (scan.status === "fulfilled" ? scan.value : undefined) ?? browser?.pid;
-
-  if (group === undefined) {
-    return scan.status === "fulfilled" && !scanSignal.aborted;
-  }
-
-  killProcessGroup(group);
-
-  return await withinSignal(async () => await steps.waitForExit(group, signal), signal);
-};
-
-const tearDown = async (
-  scratch: ScratchDir,
-  plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
-  cleanups: readonly Promise<void>[],
-  steps: TeardownSteps,
-): Promise<void> => {
-  const signal = AbortSignal.timeout(TEARDOWN_BUDGET_MS);
-  let exited = false;
-
+const observeLaunch = async (
+  browser: DriverBrowser,
+  read: string,
+  deadline: Deadline,
+): Promise<Observation> => {
   try {
-    exited = await timeStage(
-      "teardown",
-      async () =>
-        await withinSignal(
-          async () => await stopBrowser(plan, browser, cleanups, steps, signal),
-          signal,
-        ),
-    );
+    using stage = deadline.startStage(VERIFY_TIMEOUT_MS);
+    const reading = deadline.boundTo(stage.signal);
 
-    if (exited) {
-      await withinSignal(async () => {
-        await steps.removeScratchDir(scratch, signal);
-      }, signal);
+    const readOnce = async (): Promise<Observation> =>
+      readObservation(browser.product, await browser.evaluateIsolated(read, isText, reading));
 
-      return;
+    const first = await readOnce();
+
+    if (first.outerWidth > 0) {
+      return first;
     }
 
-    publishInternalEvent({
-      detail: `Chrome outlived its teardown; ${scratch.path} is left for the sweep.`,
-      event: "teardown-incomplete",
-    });
+    await delay(UNSIZED_RETRY_MS, undefined, { signal: reading.signal });
+
+    return await readOnce();
   } catch (error) {
-    if (!exited && browser !== undefined) {
-      killProcessGroup(browser.pid);
+    if (isXrioError(error) || deadline.signal.aborted) {
+      throw error;
     }
 
-    publishInternalEvent({
-      detail: `Teardown of ${scratch.path} failed: ${messageOf(error)}`,
-      event: "teardown-incomplete",
-    });
+    throw launchFailed(
+      `Xrio could not read Chrome's launch identity: ${messageOf(error)}`,
+      "",
+      error,
+    );
   }
 };
 
-const renderInScratch = async (
-  driver: BrowserDriver,
-  request: BrowserRequest,
-  scratch: ScratchDir,
-  result: PromiseWithResolvers<SourceDocument>,
-  steps: TeardownSteps,
-): Promise<void> => {
-  const plan = planFor(request, scratch);
-  const cleanups: Promise<void>[] = [];
-  let browser: DriverBrowser | undefined;
+const verifyLaunch = async (
+  browser: DriverBrowser,
+  identity: IdentityPlan,
+  deadline: Deadline,
+): Promise<{ readonly observation: Observation; readonly fontEvidence: FontEvidenceOutcome }> => {
+  const observation = await observeLaunch(browser, identity.read.beforeNavigation, deadline);
+  const { fontEvidence, mismatches } = evaluate(identity, observation);
+
+  if (mismatches.length > 0) {
+    const fields = mismatches.map((mismatch) => describeMismatch(mismatch, observation)).join(", ");
+
+    throw new XrioError(
+      "BROWSER_LAUNCH_FAILED",
+      `Chrome's launch identity does not match Xrio's plan: ${fields}.`,
+      { details: { mismatches, stderr: "" } },
+    );
+  }
+
+  return { fontEvidence, observation };
+};
+
+const observeAfterCapture = async (
+  browser: DriverBrowser,
+  read: (budgetMs: number) => string,
+  deadline: Deadline,
+): Promise<AfterCapture> => {
+  const budgetMs = Math.min(AFTER_CAPTURE_CAP_MS, Math.floor(deadline.remainingMs() / 2));
+
+  if (budgetMs < AFTER_CAPTURE_FLOOR_MS) {
+    return { kind: "skipped" };
+  }
 
   try {
-    browser = await startBrowser(driver, plan, request.deadline, (cleanup) => {
-      cleanups.push(cleanup);
+    using stage = deadline.startStage(budgetMs);
+
+    return readAfterCapture(
+      await browser.evaluateIsolated(read(budgetMs), isText, deadline.boundTo(stage.signal)),
+    );
+  } catch {
+    return { kind: "failed" };
+  }
+};
+
+type BrowserVisitPlan = Extract<VisitPlan, { kind: "browser" }>;
+
+export interface Browsers {
+  readonly start: (plan: BrowserVisitPlan, slot: Slot, deadline: HeldDeadline) => Visit;
+  readonly close: () => Promise<void>;
+}
+
+const settleFonts = async ({ fonts }: BrowserVisitPlan): Promise<void> => {
+  try {
+    await fonts.settle(null);
+  } catch (error) {
+    publishInternalEvent({ detail: messageOf(error), event: "font-settlement-failed" });
+  }
+};
+
+const proxyRelayFor = async (
+  { proxy }: BrowserVisitPlan,
+  deadline: HeldDeadline,
+): Promise<Relay | undefined> =>
+  proxy === undefined ? undefined : await startRelay(proxy, deadline, "loopback");
+
+const renderInScope = async (
+  driver: BrowserDriver,
+  plan: BrowserVisitPlan,
+  slot: Slot,
+  deadline: HeldDeadline,
+  scope: ChromeScope,
+  document: PromiseWithResolvers<SourceDocument>,
+  relay: Relay | undefined,
+): Promise<Closed> => {
+  const { capabilities, fonts, identity } = plan;
+
+  try {
+    publishInternalEvent({ detail: JSON.stringify(identity.chosen), event: "identity-chosen" });
+
+    const launch = planLaunch({
+      browserArgs: plan.browserArgs,
+      browserPath: plan.browserPath,
+      display: process.env.DISPLAY,
+      headless: plan.mode === "headless",
+      identity: identity.inputs,
+      proxyServer: relay?.url,
+      scratchDir: scope.scratch.path,
+      xauthority: process.env.XAUTHORITY,
     });
-    publishInternalEvent({ detail: String(browser.pid), event: "browser-launched" });
+
+    const browser = await startBrowser(driver, scope, launch, slot, deadline);
     assertSupported(browser.product);
-    result.resolve(await renderDocument(browser, request.url, request.deadline));
-  } catch (error) {
-    result.reject(error);
-  } finally {
-    await tearDown(scratch, plan, browser, cleanups, steps);
-  }
-};
+    assertProbedVersion(browser.product, capabilities);
 
-const runInBrowser = async (
-  driver: BrowserDriver,
-  request: BrowserRequest,
-  result: PromiseWithResolvers<SourceDocument>,
-  steps: TeardownSteps,
-): Promise<void> => {
-  try {
-    await renderInScratch(
-      driver,
-      request,
-      await createOwnedScratch(request.deadline),
-      result,
-      steps,
+    const { fontEvidence, observation } = await timeStage(
+      "verify",
+      async () => await verifyLaunch(browser, identity, deadline),
+      deadline,
     );
+
+    await fonts.settle(fontEvidence);
+
+    const { afterCapture, source } = await renderDocument(
+      browser,
+      plan.url,
+      relay,
+      deadline,
+      async () => await observeAfterCapture(browser, identity.read.afterCapture, deadline),
+    );
+
+    document.resolve({
+      ...source,
+      identity: evaluate(identity, { ...observation, afterCapture }).report,
+    });
   } catch (error) {
-    result.reject(error);
+    document.reject(error);
+  } finally {
+    await settleFonts(plan);
   }
+
+  return await scope.retire();
 };
 
 export const createBrowsers = (
   driver: BrowserDriver,
-  maxBrowsers = defaultMaxBrowsers(),
-  overrides: Partial<TeardownSteps> = {},
+  steps: Partial<RetireSteps> = {},
+  registry = new ScratchRegistry(),
 ): Browsers => {
-  const steps = { ...defaultSteps, ...overrides };
-  const queue = new Set<() => void>();
-  const accepted = new Set<Promise<SourceDocument>>();
-  const idleWaiters = new Set<() => void>();
-  let active = 0;
+  const visits = new Set<Promise<Closed>>();
   let closed = false;
 
-  const acquire = async (deadline: Deadline): Promise<void> => {
-    deadline.throwIfExpired();
-
-    if (active < maxBrowsers && queue.size === 0) {
-      active += 1;
-
-      return;
-    }
-
-    const { promise, resolve, reject } = Promise.withResolvers<"started">();
-
-    const start = () => {
-      resolve("started");
-    };
-
-    const abort = () => {
-      queue.delete(start);
-      reject(deadline.signal.reason);
-    };
-
-    queue.add(start);
-    deadline.signal.addEventListener("abort", abort, { once: true });
-
+  const visit = async (
+    plan: BrowserVisitPlan,
+    slot: Slot,
+    deadline: HeldDeadline,
+    document: PromiseWithResolvers<SourceDocument>,
+  ): Promise<Closed> => {
     try {
-      await promise;
-    } finally {
-      deadline.signal.removeEventListener("abort", abort);
-    }
-  };
+      slot.assertHeld();
+      deadline.throwIfExpired();
 
-  const release = () => {
-    const [next] = queue;
-
-    if (next !== undefined) {
-      queue.delete(next);
-      next();
-
-      return;
-    }
-
-    active -= 1;
-
-    if (active === 0) {
-      for (const wake of idleWaiters) {
-        wake();
+      if (closed) {
+        throw clientClosed();
       }
 
-      idleWaiters.clear();
+      await using relay = await proxyRelayFor(plan, deadline);
+      const scope = new ChromeScope(await createOwnedScratch(registry, deadline), steps);
+
+      return await renderInScope(driver, plan, slot, deadline, scope, document, relay);
+    } catch (error) {
+      document.reject(error);
+      await settleFonts(plan);
+
+      return { exited: true };
     }
   };
 
-  const occupySlot = async (
-    request: BrowserRequest,
-    result: PromiseWithResolvers<SourceDocument>,
-  ): Promise<void> => {
-    try {
-      await runInBrowser(driver, request, result, steps);
-    } finally {
-      release();
-    }
+  const trackUntilClosed = async (closing: Promise<Closed>): Promise<void> => {
+    visits.add(closing);
+    await closing;
+    visits.delete(closing);
   };
 
-  const runWhenAdmitted = async (request: BrowserRequest): Promise<SourceDocument> => {
-    await timeStage("queue", async () => {
-      await acquire(request.deadline);
-    });
+  const start: Browsers["start"] = (plan, slot, deadline) => {
+    const document = Promise.withResolvers<SourceDocument>();
+    const closing = visit(plan, slot, deadline, document);
 
-    const result = Promise.withResolvers<SourceDocument>();
+    void trackUntilClosed(closing);
+    void Promise.allSettled([document.promise]);
 
-    void occupySlot(request, result);
-
-    return await result.promise;
-  };
-
-  const browsersExited = async (): Promise<void> => {
-    if (active === 0) {
-      return;
-    }
-
-    const { promise, resolve } = Promise.withResolvers<"idle">();
-
-    idleWaiters.add(() => {
-      resolve("idle");
-    });
-    await promise;
-  };
-
-  const load = async (request: BrowserRequest): Promise<SourceDocument> => {
-    if (closed) {
-      throw clientClosed();
-    }
-
-    const work = runWhenAdmitted(request);
-
-    accepted.add(work);
-
-    try {
-      return await work;
-    } finally {
-      accepted.delete(work);
-    }
+    return { closed: closing, document: document.promise };
   };
 
   const close = async () => {
     closed = true;
-    await Promise.allSettled(accepted);
-    await browsersExited();
-    await swept;
+    await Promise.allSettled(visits);
+    await registry.settle();
   };
 
-  return { close, load };
+  return { close, start };
 };

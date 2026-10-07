@@ -13,6 +13,12 @@ import type { Deadline } from "../deadline.ts";
 import { XrioError } from "../errors.ts";
 import type { ProxyEndpoint } from "../types.ts";
 
+declare module "node:tls" {
+  interface ConnectionOptions {
+    readonly allowHalfOpen?: boolean;
+  }
+}
+
 const DIAL_TIMEOUT_MS = 10_000;
 
 const CONNECT_REPLY_TIMEOUT_MS = 10_000;
@@ -59,6 +65,13 @@ interface Target {
 interface ForwardingConnection {
   socket: Duplex;
   absoluteForm: boolean;
+}
+
+type RelayAdmission = "token" | "loopback";
+
+interface ClientAdmission {
+  readonly authorization: Buffer | undefined;
+  readonly userinfo: string;
 }
 
 export interface Relay extends AsyncDisposable {
@@ -168,6 +181,19 @@ const forwardedHeaders = (
 const basicAuthorization = (username: string, password: string): string =>
   `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 
+const clientAdmissionFor = (admission: RelayAdmission): ClientAdmission => {
+  if (admission === "loopback") {
+    return { authorization: undefined, userinfo: "" };
+  }
+
+  const token = randomBytes(RELAY_TOKEN_BYTES).toString("hex");
+
+  return {
+    authorization: Buffer.from(basicAuthorization(RELAY_USER, token)),
+    userinfo: `${RELAY_USER}:${token}@`,
+  };
+};
+
 const relayBody = async (
   upstreamResponse: IncomingMessage,
   response: ServerResponse,
@@ -253,15 +279,19 @@ class ProxyRelay {
   readonly #upstream: ProxyEndpoint | undefined;
   readonly #deadline: Deadline;
   readonly #proxyAuthorization: string | undefined;
-  readonly #clientAuthorization: Buffer;
+  readonly #clientAuthorization: Buffer | undefined;
   readonly #sockets = new Set<Duplex>();
   readonly #hostFailures = new Map<string, XrioError>();
   #proxyFailure: XrioError | undefined;
 
-  constructor(upstream: ProxyEndpoint | undefined, deadline: Deadline, token: string) {
+  constructor(
+    upstream: ProxyEndpoint | undefined,
+    deadline: Deadline,
+    clientAuthorization: Buffer | undefined,
+  ) {
     this.#upstream = upstream;
     this.#deadline = deadline;
-    this.#clientAuthorization = Buffer.from(basicAuthorization(RELAY_USER, token));
+    this.#clientAuthorization = clientAuthorization;
 
     const credentials = upstream?.credentials;
 
@@ -272,12 +302,15 @@ class ProxyRelay {
   }
 
   admits(request: IncomingMessage): boolean {
+    const expected = this.#clientAuthorization;
+
+    if (expected === undefined) {
+      return true;
+    }
+
     const presented = Buffer.from(request.headers["proxy-authorization"] ?? "");
 
-    return (
-      presented.byteLength === this.#clientAuthorization.byteLength &&
-      timingSafeEqual(presented, this.#clientAuthorization)
-    );
+    return presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
   }
 
   failureFor(hostname: string): XrioError | undefined {
@@ -453,6 +486,7 @@ class ProxyRelay {
     const socket = this.track(
       useTls
         ? connectTls({
+            allowHalfOpen: true,
             host,
             port,
             servername: isIP(host) === 0 ? host : undefined,
@@ -617,9 +651,10 @@ const listen = async (server: Server): Promise<number> => {
 export const startRelay = async (
   upstream: ProxyEndpoint | undefined,
   deadline: Deadline,
+  admission: RelayAdmission,
 ): Promise<Relay> => {
-  const token = randomBytes(RELAY_TOKEN_BYTES).toString("hex");
-  const relay = new ProxyRelay(upstream, deadline, token);
+  const { authorization, userinfo } = clientAdmissionFor(admission);
+  const relay = new ProxyRelay(upstream, deadline, authorization);
   const server = createServer();
 
   server.on("connection", (socket: Socket) => {
@@ -655,6 +690,6 @@ export const startRelay = async (
       await closed;
     },
     failureFor: (hostname) => relay.failureFor(hostname),
-    url: `http://${RELAY_USER}:${token}@127.0.0.1:${port}`,
+    url: `http://${userinfo}127.0.0.1:${port}`,
   };
 };

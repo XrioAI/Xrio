@@ -1,19 +1,24 @@
 import { once } from "node:events";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { inspect } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../deadline.ts";
 import { resolveClientOptions } from "../options.ts";
-import { startFakeHttpProxy, startFakeSocksProxy } from "../testing/fake-proxies.ts";
+import {
+  startFakeHttpProxy,
+  startFakeSocksProxy,
+  TEST_ONLY_CERT,
+} from "../testing/fake-proxies.ts";
 import { closedLoopbackPort, listenOnLoopback } from "../testing/fixture-server.ts";
 import { manualClock } from "../testing/manual-clock.ts";
 import { startRelay } from "./relay.ts";
 
 const proxyEndpoint = (url: string) => {
-  const { proxy } = resolveClientOptions({ mode: "http", proxy: url });
+  const { route: proxy } = resolveClientOptions({ mode: "http", proxy: url });
 
   if (proxy === undefined) {
     throw new Error("Expected a proxy endpoint.");
@@ -82,7 +87,7 @@ describe(startRelay, () => {
   });
 
   it("tunnels directly, forwarding bytes sent with the CONNECT and half-closing each direction", async () => {
-    await using relay = await startRelay(undefined, startDeadline(10_000));
+    await using relay = await startRelay(undefined, startDeadline(10_000), "token");
     const socket = await sendConnect(relay.url, `127.0.0.1:${echoPort}`, "client-hello");
     const received = readAll(socket);
 
@@ -103,7 +108,7 @@ describe(startRelay, () => {
     });
 
     const proxy = proxyEndpoint(withCredentials(fake.url, "us:er:p%40ss"));
-    await using relay = await startRelay(proxy, startDeadline(10_000));
+    await using relay = await startRelay(proxy, startDeadline(10_000), "token");
     const socket = await sendConnect(relay.url, "origin.test:443", "hello");
     const received = readAll(socket);
 
@@ -118,6 +123,36 @@ describe(startRelay, () => {
     ]);
   });
 
+  it("keeps the client's half open after the target half-closes through an HTTPS proxy", async () => {
+    const trusted = getCACertificates("default");
+    const afterTargetEnd = Promise.withResolvers<string>();
+
+    const closesFirst = createServer({ allowHalfOpen: true }, (socket) => {
+      socket.end("target-done");
+      void readAll(socket).then(afterTargetEnd.resolve);
+    });
+
+    setDefaultCACertificates([...trusted, TEST_ONLY_CERT.toString()]);
+
+    try {
+      await using fake = await startFakeHttpProxy({
+        secure: true,
+        tunnelTo: await listenOnLoopback(closesFirst),
+      });
+
+      await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000), "token");
+      const socket = await sendConnect(relay.url, "origin.test:443");
+
+      await expect(readAll(socket)).resolves.toMatch(/^HTTP\/1\.1 200 .*target-done$/su);
+      socket.end("client-late");
+
+      await expect(afterTargetEnd.promise).resolves.toBe("client-late");
+    } finally {
+      setDefaultCACertificates(trusted);
+      closesFirst.close();
+    }
+  });
+
   it("tunnels through SOCKS5 with credentials and leaves DNS to the proxy", async () => {
     await using fake = await startFakeSocksProxy({
       requireCredentials: "user:secret",
@@ -125,7 +160,7 @@ describe(startRelay, () => {
     });
 
     const proxy = proxyEndpoint(withCredentials(fake.url, "user:secret"));
-    await using relay = await startRelay(proxy, startDeadline(10_000));
+    await using relay = await startRelay(proxy, startDeadline(10_000), "token");
     const socket = await sendConnect(relay.url, "origin.test:443", "hello");
     const received = readAll(socket);
 
@@ -135,7 +170,9 @@ describe(startRelay, () => {
     socket.end();
 
     await expect(received).resolves.toMatch(/hellobye$/u);
-    expect(fake.requests).toStrictEqual([{ authority: "origin.test", authorization: undefined }]);
+    expect(fake.requests).toStrictEqual([
+      { authority: "origin.test", authorization: "user:secret" },
+    ]);
   });
 
   it.each([
@@ -148,7 +185,7 @@ describe(startRelay, () => {
     async ({ code, connectStatus, proxyWide }) => {
       await using fake = await startFakeHttpProxy({ connectStatus, tunnelTo: echoPort });
 
-      await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000));
+      await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000), "token");
 
       const reply = await readAll(await sendConnect(relay.url, "origin.test:443"));
 
@@ -165,7 +202,7 @@ describe(startRelay, () => {
     });
 
     const proxy = proxyEndpoint(withCredentials(fake.url, "user:wrong"));
-    await using relay = await startRelay(proxy, startDeadline(10_000));
+    await using relay = await startRelay(proxy, startDeadline(10_000), "token");
     const reply = await readAll(await sendConnect(relay.url, "origin.test:443"));
 
     expect(statusOf(reply)).toBe(502);
@@ -179,6 +216,7 @@ describe(startRelay, () => {
     await using relay = await startRelay(
       proxyEndpoint(`http://user:secret@127.0.0.1:${port}`),
       startDeadline(10_000),
+      "token",
     );
 
     const reply = await readAll(await sendConnect(relay.url, "origin.test:443"));
@@ -196,6 +234,7 @@ describe(startRelay, () => {
     await using relay = await startRelay(
       proxyEndpoint(fake.url),
       startDeadline(60_000, undefined, clock),
+      "token",
     );
 
     const reply = readAll(await sendConnect(relay.url, "origin.test:443"));
@@ -218,22 +257,61 @@ describe(startRelay, () => {
     "169.254.169.254:80",
   ])("refuses to send the local target %s through a proxy", async (authority) => {
     await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
-    await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000));
+    await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000), "token");
     const reply = await readAll(await sendConnect(relay.url, authority));
 
     expect(statusOf(reply)).toBe(403);
     expect(fake.requests).toHaveLength(0);
   });
 
+  it("admits a client without a token under loopback admission and tunnels through the proxy", async () => {
+    await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
+
+    await using relay = await startRelay(
+      proxyEndpoint(fake.url),
+      startDeadline(10_000),
+      "loopback",
+    );
+
+    const { hostname, password, username } = new URL(relay.url);
+    const socket = await sendConnect(relay.url, "origin.test:443", "hello", false);
+    const received = readAll(socket);
+
+    await vi.waitFor(() => {
+      expect(socket.bytesRead).toBeGreaterThan(40);
+    });
+    socket.end();
+
+    await expect(received).resolves.toBe("HTTP/1.1 200 Connection Established\r\n\r\nhellobye");
+    expect({ hostname, password, username }).toStrictEqual({
+      hostname: "127.0.0.1",
+      password: "",
+      username: "",
+    });
+    expect(fake.requests).toStrictEqual([
+      { authority: "origin.test:443", authorization: undefined },
+    ]);
+  });
+
+  it("answers 407 to the same client without a token under token admission", async () => {
+    await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
+    await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000), "token");
+    const reply = await readAll(await sendConnect(relay.url, "origin.test:443", "hello", false));
+
+    expect(reply).toBe("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n");
+    expect(new URL(relay.url).username).toBe("xrio");
+    expect(fake.requests).toStrictEqual([]);
+  });
+
   it("refuses local clients that do not present the relay's token", async () => {
-    await using relay = await startRelay(undefined, startDeadline(10_000));
+    await using relay = await startRelay(undefined, startDeadline(10_000), "token");
     const reply = await readAll(await sendConnect(relay.url, `127.0.0.1:${echoPort}`, "", false));
 
     expect(statusOf(reply)).toBe(407);
   });
 
   it("refuses a token of the right length that does not match", async () => {
-    await using relay = await startRelay(undefined, startDeadline(10_000));
+    await using relay = await startRelay(undefined, startDeadline(10_000), "token");
     const forged = new URL(relay.url);
 
     forged.password = "0".repeat(forged.password.length);

@@ -326,7 +326,9 @@ describe("http mode", () => {
         url: "http://origin.test/",
       }),
     ).resolves.toMatchObject({ status: 200 });
-    expect(proxy.requests).toStrictEqual([{ authority: "origin.test", authorization: undefined }]);
+    expect(proxy.requests).toStrictEqual([
+      { authority: "origin.test", authorization: "user:secret" },
+    ]);
   });
 
   it.each([
@@ -473,5 +475,52 @@ describe("http mode edge responses", () => {
 
     expect(requestHeads.map(headerNames)).toStrictEqual([CHROME_HTTP1_HEADER_ORDER]);
     expect(requestHeads[0]).toContain("\r\nConnection: keep-alive\r\n");
+    expect(requestHeads[0]).toContain("\r\nAccept-Language: en-US,en;q=0.9\r\n");
   });
+
+  it.each([
+    {
+      clientLocale: "de-DE",
+      header: "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+      locale: undefined,
+      reported: "de-DE",
+    },
+    {
+      clientLocale: "ja-JP",
+      header: "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+      locale: "fr-FR",
+      reported: "fr-FR",
+    },
+    {
+      clientLocale: undefined,
+      header: "en-AU,en-US;q=0.9,en;q=0.8",
+      locale: "en-AU",
+      reported: "en-AU",
+    },
+  ])(
+    "sends the pinned locale's Accept-Language in Chrome's position and reports $reported",
+    async ({ clientLocale, header, locale, reported }) => {
+      const requestHeads: string[] = [];
+
+      const { origin, server } = await startRawOrigin((socket, requestHead) => {
+        requestHeads.push(requestHead);
+        socket.end("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+      });
+
+      try {
+        const result = await new XrioClient({ locale: clientLocale, mode: "http" }).scrape({
+          format: "html",
+          locale,
+          url: `${origin}/`,
+        });
+
+        expect(result.identity).toMatchObject({ locale: reported, mode: "http" });
+      } finally {
+        server.close();
+      }
+
+      expect(requestHeads.map(headerNames)).toStrictEqual([CHROME_HTTP1_HEADER_ORDER]);
+      expect(requestHeads[0]).toContain(`\r\nAccept-Language: ${header}\r\n`);
+    },
+  );
 });

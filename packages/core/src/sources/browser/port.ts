@@ -25,9 +25,14 @@ export type DriverListener = (event: DriverEvent) => void;
 
 export type ResultGuard<Result> = (value: unknown) => value is Result;
 
+export interface ChromeProduct {
+  readonly major: number;
+  readonly version: string;
+  readonly headless: boolean;
+}
+
 export interface DriverBrowser {
-  readonly pid: number;
-  readonly product: string;
+  readonly product: ChromeProduct;
   readonly onEvent: (listener: DriverListener) => () => void;
   readonly navigate: (url: string, deadline: Deadline) => Promise<void>;
   readonly evaluateIsolated: <Result>(
@@ -44,12 +49,15 @@ export const CLEANUP_BUDGET_MS = 2000;
 
 export const TEARDOWN_BUDGET_MS = 10_000;
 
-export type CleanupSink = (cleanup: Promise<void>) => void;
+type ProcessSink = (pid: number) => void;
+
+type CleanupSink = (cleanup: Promise<void>) => void;
 
 export interface BrowserDriver {
   readonly launch: (
     plan: LaunchPlan,
     deadline: Deadline,
+    owned: ProcessSink,
     deferCleanup: CleanupSink,
   ) => Promise<DriverBrowser>;
 }
@@ -82,3 +90,24 @@ export class DriverError extends Error {
     this.reason = reason;
   }
 }
+
+const CHROME_PRODUCT = /^(?<token>HeadlessChrome|Chrome)\/(?<major>\d+)\.\d+\.\d+\.\d+$/u;
+
+export const parseChromeProduct = (product: string): ChromeProduct => {
+  const match = CHROME_PRODUCT.exec(product);
+  const token = match?.groups?.token;
+  const major = Number(match?.groups?.major);
+
+  if (token === undefined || !Number.isSafeInteger(major) || major <= 0) {
+    throw new DriverError({
+      kind: "launch-failed",
+      problem: `Chrome reported a malformed product ${product}.`,
+    });
+  }
+
+  return {
+    headless: token === "HeadlessChrome",
+    major,
+    version: product.slice(token.length + 1),
+  };
+};

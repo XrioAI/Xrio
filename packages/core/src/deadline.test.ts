@@ -3,21 +3,33 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { manualClock } from "./testing/manual-clock.ts";
 
-describe(startDeadline, () => {
-  it.each([
-    { elapsedMs: 0, remainingMs: 1000, stageTimeoutMs: 250 },
-    { elapsedMs: 900, remainingMs: 100, stageTimeoutMs: 100 },
-    { elapsedMs: 999.5, remainingMs: 1, stageTimeoutMs: 1 },
-  ])(
-    "after $elapsedMs ms, $remainingMs ms remain and a 250 ms stage gets $stageTimeoutMs ms",
-    ({ elapsedMs, remainingMs, stageTimeoutMs }) => {
-      const { advance, clock } = manualClock();
-      const deadline = startDeadline(1000, undefined, clock);
+const deadlineAfter = (elapsedMs: number) => {
+  const { advance, clock } = manualClock();
+  const deadline = startDeadline(1000, undefined, clock);
 
-      advance(elapsedMs);
+  advance(elapsedMs);
+
+  return deadline;
+};
+
+describe(startDeadline, () => {
+  it("after 0 ms, 1000 ms remain and a 250 ms stage keeps its own 250 ms timer", () => {
+    const deadline = deadlineAfter(0);
+
+    expect(deadline.remainingMs()).toBe(1000);
+    expect(deadline.stageTimeout(250)).toBe(250);
+  });
+
+  it.each([
+    { elapsedMs: 900, remainingMs: 100 },
+    { elapsedMs: 999.5, remainingMs: 1 },
+  ])(
+    "after $elapsedMs ms, $remainingMs ms remain and a 250 ms stage is left to the deadline",
+    ({ elapsedMs, remainingMs }) => {
+      const deadline = deadlineAfter(elapsedMs);
 
       expect(deadline.remainingMs()).toBe(remainingMs);
-      expect(deadline.stageTimeout(250)).toBe(stageTimeoutMs);
+      expect(deadline.stageTimeout(250)).toBeUndefined();
     },
   );
 
@@ -58,6 +70,29 @@ describe(startDeadline, () => {
     expect(startDeadline(1000, AbortSignal.abort(reason), clock).signal.reason).toBe(reason);
   });
 
+  it("ends a bound deadline when either its own signal or the bound one aborts", () => {
+    const { advance, clock } = manualClock();
+    const owner = new AbortController();
+    const reason = new Error("Ownership lost");
+    const deadline = startDeadline(1000, undefined, clock);
+    const bound = deadline.boundTo(owner.signal);
+
+    owner.abort(reason);
+
+    expect(bound.signal.reason).toBe(reason);
+    expect(() => {
+      bound.throwIfExpired();
+    }).toThrow(reason);
+    expect(deadline.signal.aborted).toBeFalsy();
+
+    const timed = deadline.boundTo(new AbortController().signal);
+
+    advance(1000);
+
+    expect(timed.signal.reason).toMatchObject({ code: "TIMEOUT" });
+    expect(timed.remainingMs()).toBe(0);
+  });
+
   it("cancels its timer when disposed", () => {
     const { clock, pendingTimers } = manualClock();
 
@@ -95,6 +130,33 @@ describe("deadline stages", () => {
       message: "The stage did not finish within 250 ms.",
     });
     expect(deadline.signal.reason).toMatchObject({ code: "TIMEOUT" });
+  });
+
+  it("aborts a deadline-capped stage with TIMEOUT when timers fire just before the deadline", () => {
+    let now = 0;
+    const timers: (() => void)[] = [];
+
+    const clock = {
+      now: () => now,
+      setTimer: (_delayMs: number, onTimeout: () => void) => {
+        timers.push(onTimeout);
+
+        return () => {};
+      },
+    };
+
+    const deadline = startDeadline(1000, undefined, clock);
+
+    now = 900;
+    using stage = deadline.startStage(250);
+
+    now = 999.5;
+
+    for (const onTimeout of timers.toReversed()) {
+      onTimeout();
+    }
+
+    expect(stage.signal.reason).toMatchObject({ code: "TIMEOUT" });
   });
 
   it("aborts a stage with TIMEOUT when the deadline caps it", () => {
@@ -201,5 +263,54 @@ describe(untilDeadline, () => {
     await expect(untilDeadline(async () => await Promise.reject(failure), deadline)).rejects.toBe(
       failure,
     );
+  });
+});
+
+describe("the reason a deadline aborted", () => {
+  it("is undefined while the deadline runs, and expired once it ends", () => {
+    const { advance, clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+
+    expect(deadline.abortReason()).toBeUndefined();
+    advance(1000);
+    expect(() => {
+      deadline.throwIfExpired();
+    }).toThrow("The scrape did not finish within 1000 ms.");
+    expect(deadline.abortReason()).toBe("expired");
+  });
+
+  it("names the caller when the caller's signal ends the deadline", () => {
+    const { clock } = manualClock();
+    const controller = new AbortController();
+    const deadline = startDeadline(1000, controller.signal, clock);
+
+    controller.abort(new Error("Stopped by caller"));
+    expect(deadline.abortReason()).toBe("caller");
+  });
+
+  it("names the reason a bound signal was given, and leaves the original deadline running", () => {
+    const { clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+    const ownership = new AbortController();
+    const held = deadline.boundTo(ownership.signal, "ownership");
+
+    ownership.abort(new Error("Ownership lost"));
+    expect([held.abortReason(), deadline.abortReason()]).toStrictEqual(["ownership", undefined]);
+    expect(deadline.boundTo(new AbortController().signal).abortReason()).toBeUndefined();
+  });
+
+  it("keeps the first reason when the bound signal aborts after the deadline expired", () => {
+    const { advance, clock } = manualClock();
+    const deadline = startDeadline(1000, undefined, clock);
+    const ownership = new AbortController();
+    const held = deadline.boundTo(ownership.signal, "ownership");
+
+    advance(1000);
+    held.remainingMs();
+    expect(() => {
+      held.throwIfExpired();
+    }).toThrow("The scrape did not finish within 1000 ms.");
+    ownership.abort(new Error("Ownership lost"));
+    expect(held.abortReason()).toBe("expired");
   });
 });
