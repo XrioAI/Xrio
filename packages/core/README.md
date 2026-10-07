@@ -47,8 +47,6 @@ Configure a client default with `new XrioClient({ mode: "http" })` or override i
 
 ### Proxy configuration and identity
 
-See the [core interface integration guideline](INTEGRATION.md) for ownership, validation, and deferred work.
-
 Proxy selection is **scrape argument → client argument → `config.proxy.url`**. Overrides select a complete concrete URL without changing the file or inheriting provider session settings. A `{session}` template is supported only in the config; passing one to the client or scrape method rejects with `INVALID_OPTIONS`.
 
 `XrioClient` loads config once when constructed. The internal loader discovers one `xrio.config.ts`, `.mts`, `.js`, or `.mjs` in the process's working directory. It does not search parents or use the calling script's directory. No file means no configured proxy; multiple files or invalid configuration fail with `INVALID_OPTIONS`. Config files default-export a synchronous object. TypeScript uses Node's native type stripping: use erasable types, explicit relative import extensions, and no top-level `await` or tsconfig path aliases. Use `.mts` or `.mjs` for an ESM config inside a CommonJS project. Config modules follow Node's module cache; there is no hot reload. The package exports `XrioConfig` for typing this file.
