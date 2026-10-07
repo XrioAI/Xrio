@@ -1,6 +1,6 @@
 import type { CacheDir } from "./cache-dir.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
-import type { ProxyEndpoint, ScrapeFormat } from "./types.ts";
+import type { ProxyEndpoint, ScrapeFormat, WaitFor } from "./types.ts";
 
 type SourceIntent =
   | { readonly mode: "http" }
@@ -8,6 +8,7 @@ type SourceIntent =
       readonly mode: "headless" | "headed";
       readonly browserPath: string;
       readonly browserArgs: readonly string[];
+      readonly waitFor?: WaitFor;
     };
 
 interface SessionIntent {

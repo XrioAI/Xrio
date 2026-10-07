@@ -24,6 +24,8 @@ const LATE_ROUND = { rule: "cf_challenge_platform_request", vendor: "cloudflare"
 
 const CHALLENGE_SCRIPT_URL = `${PAGE_URL}cdn-cgi/challenge-platform/h/g/orchestrate/test`;
 
+const READY = { selector: "#ready" };
+
 const requestChallengeScript = (document: DocumentHop): DriverEvent => ({
   ...document,
   type: "request",
@@ -211,6 +213,70 @@ describe("challenge waits", () => {
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
+  });
+});
+
+describe("late challenges and selector waits", () => {
+  it("records a late challenge that passes before the selector wait begins", async () => {
+    const first = served(1);
+    const run = startedRender(first, 60_000, READY);
+    using _deadline = run.deadline;
+    run.setHtml(CHALLENGE);
+    run.onCapture(() => {
+      run.emit(requestChallengeScript(first));
+    });
+    await nextTurn();
+    run.commit(served(2));
+    run.setSelector("matched");
+    await run.tick();
+    await run.tick();
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed",
+      rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
+    });
+    expect(source.html).toBe(CONTENT);
+  });
+
+  it("returns a late challenge that never passes as budget_exhausted without waiting for the selector", async () => {
+    const first = served(1);
+    const run = startedRender(first, 30_000, READY);
+    using _deadline = run.deadline;
+    run.setHtml(CHALLENGE);
+    run.onCapture(() => {
+      run.emit(requestChallengeScript(first));
+    });
+    await nextTurn();
+    await run.tick(20_000);
+    await run.tick(9000);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "budget_exhausted",
+      rounds: [{ ...LATE_ROUND, waitedMs: 20_000 }],
+    });
+    expect(source.html).toBe(CHALLENGE);
+    expect(source.block.verdict).toBe("blocked");
+  });
+});
+
+describe("selector waits after a challenge", () => {
+  it("still waits for the selector after an in-place pass that outlasted its round", async () => {
+    const run = startedRender(
+      served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
+      30_000,
+      READY,
+    );
+
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.setHtml(CONTENT);
+    await run.tick(20_000);
+    await run.tick(9000);
+    await expect(run.result).rejects.toMatchObject({
+      code: "WAIT_FOR_TIMEOUT",
+      details: { html: CONTENT, selector: "#ready", status: 403 },
+    });
   });
 });
 

@@ -41,11 +41,14 @@ export const documentHop = (overrides: Partial<DocumentHop> = {}): DocumentHop =
   ...overrides,
 });
 
+type SelectorState = "matched" | "absent" | "invalid";
+
 const bodyOf = (hop: DocumentHop): string => (hop.headers.length > 1 ? CHALLENGE : CONTENT);
 
 const controlledBrowser = (first: DocumentHop) => {
   const listeners = new Set<DriverListener>();
   let html = bodyOf(first);
+  let selector: SelectorState = "absent";
   let afterCapture: (() => void) | undefined;
 
   const emit = (event: DriverEvent) => {
@@ -69,7 +72,7 @@ const controlledBrowser = (first: DocumentHop) => {
       expression: string,
       guard: ResultGuard<Result>,
     ): Promise<Result> => {
-      const value: unknown = html;
+      const value: unknown = expression.includes("querySelectorAll") ? selector : html;
 
       if (!guard(value)) {
         throw new Error("Unexpected capture or selector reply.");
@@ -110,10 +113,17 @@ const controlledBrowser = (first: DocumentHop) => {
     setHtml: (body: string) => {
       html = body;
     },
+    setSelector: (value: SelectorState) => {
+      selector = value;
+    },
   };
 };
 
-export const startedRender = (first: DocumentHop, timeoutMs = 60_000) => {
+export const startedRender = (
+  first: DocumentHop,
+  timeoutMs = 60_000,
+  waitFor?: { selector: string },
+) => {
   const time = manualClock();
   const deadline = startDeadline(timeoutMs, undefined, time.clock);
   const control = controlledBrowser(first);
@@ -124,6 +134,7 @@ export const startedRender = (first: DocumentHop, timeoutMs = 60_000) => {
     undefined,
     deadline,
     async () => await Promise.resolve(null),
+    waitFor,
   );
 
   void Promise.allSettled([result]);

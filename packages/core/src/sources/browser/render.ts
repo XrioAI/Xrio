@@ -4,7 +4,7 @@ import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { XrioError } from "../../errors.ts";
 import type { Relay } from "../../proxy/relay.ts";
-import type { ResponseDetails, SourceDocument } from "../../types.ts";
+import type { ResponseDetails, SourceDocument, WaitFor } from "../../types.ts";
 import { isHtmlContentType, unsupportedContentType } from "../content-type.ts";
 import { networkFailure } from "../net-error.ts";
 import { waitForChallenge } from "./challenge.ts";
@@ -22,6 +22,7 @@ import {
 } from "./documents.ts";
 import { DriverError } from "./port.ts";
 import type { DocumentHop, DriverBrowser, DriverErrorReason } from "./port.ts";
+import { waitForSelector } from "./wait-for.ts";
 
 const SLICE_CODE_UNITS = 4 * 1024 * 1024;
 
@@ -432,6 +433,40 @@ const captureCurrentDocument = async (
   return rebound;
 };
 
+const captureHeldDocument = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  waitFor: WaitFor,
+  deadline: Deadline,
+): Promise<CapturedDocument> => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- the selector hold must belong to the document captured in this attempt.
+    const ready = await waitForSelector(browser, tracker, waitFor, deadline, async () => {
+      const captured = await captureCurrentDocument(browser, tracker, deadline);
+
+      return { ...tracker.responseOf(captured.document), html: captured.html };
+    });
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- capture follows the completed selector hold.
+    const captured = await captureIfCurrent(browser, tracker, deadline);
+
+    if (captured !== undefined && documentKey(captured.document) === documentKey(ready)) {
+      return captured;
+    }
+
+    publishInternalEvent({
+      detail: "The document changed after its selector hold; waiting on its replacement.",
+      event: "document-rebind",
+    });
+  }
+
+  throw new XrioError(
+    "NETWORK_ERROR",
+    "The page kept replacing its document after the selector hold.",
+    { details: undefined },
+  );
+};
+
 const GAVE_UP: ReadonlySet<ChallengeOutcome> = new Set([
   "budget_exhausted",
   "deadline",
@@ -470,6 +505,7 @@ interface Render<Reading> {
   readonly browser: DriverBrowser;
   readonly tracker: PageTracker;
   readonly deadline: Deadline;
+  readonly waitFor: WaitFor | undefined;
   readonly readAfterCapture: () => Promise<Reading>;
 }
 
@@ -484,15 +520,20 @@ type FirstCapture<Reading> =
   | { readonly kind: "late-challenge"; readonly evidence: BlockInput };
 
 const finishCapture = async <Reading>(
-  { readAfterCapture, tracker }: Render<Reading>,
+  { browser, deadline, readAfterCapture, tracker, waitFor }: Render<Reading>,
   challenge: ChallengeWait,
   captured: CapturedDocument,
 ): Promise<Rendered<Reading>> => {
-  const settled = settledChallenge(tracker, challenge, captured);
+  const final =
+    waitFor === undefined || challengeGaveUp(settledChallenge(tracker, challenge, captured))
+      ? captured
+      : await captureHeldDocument(browser, tracker, waitFor, deadline);
+
+  const settled = settledChallenge(tracker, challenge, final);
 
   tracker.stop();
 
-  return { afterCapture: await readAfterCapture(), captured, challenge: settled };
+  return { afterCapture: await readAfterCapture(), captured: final, challenge: settled };
 };
 
 const captureUnlessLateChallenge = async <Reading>(
@@ -557,9 +598,10 @@ export const renderDocument = async <Reading>(
   relay: RelayFailures,
   deadline: Deadline,
   readAfterCapture: () => Promise<Reading>,
+  waitFor?: WaitFor,
 ): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
   const tracker = new PageTracker(browser, (document) => relayFailureFor(relay, document));
-  const render: Render<Reading> = { browser, deadline, readAfterCapture, tracker };
+  const render: Render<Reading> = { browser, deadline, readAfterCapture, tracker, waitFor };
 
   try {
     await timeStage(
@@ -590,6 +632,8 @@ export const renderDocument = async <Reading>(
         : await recaptureAfterLateChallenge(render, challenge, first.evidence);
 
     return { afterCapture: rendered.afterCapture, source: sourceOf(relay, tracker, rendered) };
+  } catch (error) {
+    throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
   } finally {
     tracker.reportDropped();
     tracker.stop();

@@ -85,10 +85,6 @@ In browser modes `locale` sets `navigator.languages`, the `Accept-Language` head
 
 Both modes accept HTML and XHTML. Browser modes reject JSON, XML, PDF, and denied downloads with `UNSUPPORTED_CONTENT_TYPE` before capturing Chrome's viewer. An HTTP 204 that aborts navigation still produces `NETWORK_ERROR` with `details.netError` `net::ERR_ABORTED`.
 
-Current limits, lifted in later releases:
-
-- `waitFor` is not available yet.
-
 A browser scrape with `proxy` sends Chrome through a local relay on 127.0.0.1 that lives for that one visit. The relay holds the proxy credentials and dials the proxy itself, so Chrome's argv and profile never carry them. Chrome cannot send the relay a token, so the relay admits any client on 127.0.0.1 while the visit lasts. Chrome resolves no names itself (`--host-resolver-rules=MAP * ^NOTFOUND,EXCLUDE 127.0.0.1`), so target names reach only the proxy. It sends loopback addresses through the relay too (`--proxy-bypass-list=<-loopback>`), and the relay refuses them. WebRTC is limited to proxied traffic, because the profile sets `webrtc.ip_handling_policy` to `disable_non_proxied_udp`. A browser scrape without a proxy starts no relay. The relay records why a tunnel or request failed, so a browser scrape reports a 407, an unreachable proxy and a refused tunnel with the same codes as http mode. That holds when Chrome's navigation fails with a proxy or tunnel net error, and when the relay recorded a failure for the host of a plain `http://` document, whose error response Chrome would otherwise return as the page. A `net::ERR_PROXY_*` or `net::ERR_TUNNEL_*` the relay cannot attribute stays `NETWORK_ERROR` with `details.netError`.
 
 Chrome's own background requests, such as network time and component checks, go through the proxy too, as they would for a Chrome behind a system proxy, rather than leaving from the host's address. Because the relay admits any local client for the length of the visit, on a host shared with untrusted local users another process could send traffic out through the caller's proxy during that time without reading its credentials.
@@ -154,6 +150,18 @@ Browser modes wait for recognised challenges after DOMContentLoaded. Each round 
 - `budget_exhausted`: a round used its full 20-second budget.
 - `deadline`: the scrape deadline shortened a round.
 
+For content that appears after scripts run, set a selector:
+
+```ts
+const result = await xrio.scrape({
+  url: "https://example.com/products",
+  format: "markdown",
+  waitFor: { selector: "#prices li" },
+});
+```
+
+The selector must match for 500 ms within one document. A scrape whose challenge wait ended in `rounds_exhausted`, `budget_exhausted` or `deadline` skips the selector wait and returns the captured challenge with its block report. Invalid selectors and `waitFor` in http mode produce `INVALID_OPTIONS`. If the selector does not hold before the capture reserve, `WAIT_FOR_TIMEOUT` includes the response details, `selector`, and captured `html`. If the overall deadline expires first, the error is `TIMEOUT`.
+
 ### Identity report
 
 `identity` says what Xrio configured for the scrape and how much of it was observed. It is not evidence that a site accepted the browser. Checking `identity.mode` narrows its type in TypeScript. A scrape that rejects carries no report, and the `identity-chosen` event (see the diagnostics channels above) names the identity its browser was launched with. In headed mode that event's `record` and `digests.device` are `null`, because the record holds what Chrome presented, which only the launch read knows.
@@ -211,6 +219,7 @@ try {
 | --------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `INVALID_OPTIONS`                 | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, `maxBrowsers`, `browserArgs`, or a URL that is relative, not HTTP(S), or has credentials.                       |
 | `UNSUPPORTED_CONTENT_TYPE`        | `XrioError` | The response is not HTML. `details` holds the response details, a body preview, and the block report.                                                                             |
+| `WAIT_FOR_TIMEOUT`                | `XrioError` | A browser selector did not hold for 500 ms. `details` includes the response details, `selector`, and captured `html`.                                                             |
 | `TIMEOUT`                         | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                         |
 | `NETWORK_ERROR`                   | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504). Browser modes add `details.netError`, Chrome's `net::ERR_*` name. |
 | `TLS_CERTIFICATE_INVALID`         | `XrioError` | The certificate was rejected.                                                                                                                                                     |

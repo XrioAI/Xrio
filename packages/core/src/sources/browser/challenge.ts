@@ -12,7 +12,7 @@ const ROUND_BUDGET_MS = 20_000;
 
 const MAX_ROUNDS = 3;
 
-const CAPTURE_RESERVE_MS = 1000;
+export const CAPTURE_RESERVE_MS = 1000;
 
 export interface ChallengeDocuments {
   readonly documentLoaded: (deadline: Deadline) => Promise<DocumentHop>;

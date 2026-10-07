@@ -303,6 +303,7 @@ const load = async (
   browserArgs: readonly string[] = [],
   pins: IdentityIntent = noPins,
   random: () => Uint8Array = fixedRandom,
+  waitFor?: { selector: string },
 ): Promise<SourceDocument> => {
   const browsers = plannedScrapes(cdpDriver, 1, { random });
   using deadline = startDeadline(timeoutMs, signal);
@@ -316,6 +317,7 @@ const load = async (
       pins,
       proxy: undefined,
       url: new URL(route, server.origin),
+      waitFor,
     }).document;
   } finally {
     await browsers.close();
@@ -665,6 +667,14 @@ describe.each(MODES)("documents captured whatever their URL or readiness, %s", (
       headers: { "content-type": "text/html", "x-page": "empty-html-403" },
       status: 403,
     });
+  });
+
+  it("captures a document left loading by document.open() without close()", async () => {
+    const source = await load(mode, "/document-open", 20_000, undefined, [], noPins, fixedRandom, {
+      selector: "#written",
+    });
+
+    expect(markerOf(source.html)).toBe("document-written");
   });
 });
 
@@ -1285,5 +1295,32 @@ describe.each(MODES)("challenge waits, %s", (mode) => {
     const source = await load(mode, `/challenge/${route}`, timeoutMs);
     expect(source.block.challenge?.outcome).toBe(outcome);
     expect(source.block.challenge?.rounds).toHaveLength(rounds);
+  });
+});
+
+describe.each(MODES)("selector waits, %s", (mode) => {
+  serveFixturePages();
+
+  it("waits for a late selector for 500 ms", async () => {
+    const source = await load(mode, "/late-selector", 20_000, undefined, [], noPins, fixedRandom, {
+      selector: "#ready",
+    });
+
+    expect(source.html).toContain('id="ready"');
+  });
+
+  it("rejects an invalid selector", async () => {
+    await expect(
+      load(mode, "/static", 20_000, undefined, [], noPins, fixedRandom, { selector: "[" }),
+    ).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+  });
+
+  it("captures HTML when the selector never matches", async () => {
+    await expect(
+      load(mode, "/static", 10_000, undefined, [], noPins, fixedRandom, { selector: "#missing" }),
+    ).rejects.toMatchObject({
+      code: "WAIT_FOR_TIMEOUT",
+      details: { selector: "#missing", status: 200 },
+    });
   });
 });

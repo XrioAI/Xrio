@@ -6,6 +6,7 @@ export type ScrapeFormat = "html" | "markdown" | "json";
 interface HttpMode {
   mode: "http";
   browserPath?: never;
+  waitFor?: never;
 }
 
 interface BrowserMode {
@@ -13,9 +14,16 @@ interface BrowserMode {
   browserPath: string;
 }
 
+export interface WaitFor {
+  selector: string;
+}
+
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
-type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
+type ModeOverride =
+  | HttpMode
+  | (BrowserMode & { waitFor?: WaitFor })
+  | { mode?: never; browserPath?: never; waitFor?: WaitFor };
 
 export type ClientOptions = (
   | { mode: "http"; browserPath?: string }

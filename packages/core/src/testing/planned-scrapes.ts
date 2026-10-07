@@ -13,7 +13,7 @@ import type { HostFacts } from "../sources/browser/host-facts.ts";
 import type { BrowserDriver } from "../sources/browser/port.ts";
 import { createSources } from "../sources/source.ts";
 import type { Sources } from "../sources/visit.ts";
-import type { ProxyEndpoint, SourceDocument } from "../types.ts";
+import type { ProxyEndpoint, SourceDocument, WaitFor } from "../types.ts";
 
 type Dependencies = Parameters<typeof createScrapes>[0];
 
@@ -32,6 +32,7 @@ interface TestScrape {
   readonly mode: "headed" | "headless";
   readonly proxy?: ProxyEndpoint;
   readonly url: URL;
+  readonly waitFor?: WaitFor;
 }
 
 export interface PlannedScrapes {
@@ -112,6 +113,7 @@ export const plannedScrapes = (
           browserArgs: request.browserArgs,
           browserPath: request.browserPath,
           mode: request.mode,
+          waitFor: request.waitFor,
         },
         timeoutMs: deadline.remainingMs(),
         url: request.url,

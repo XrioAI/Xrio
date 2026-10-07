@@ -368,6 +368,15 @@ const sendFilledPage = (response: ServerResponse, marker: string, filler: number
   );
 };
 
+const DOCUMENT_LEFT_OPEN = `<script>
+addEventListener("load", () => {
+  setTimeout(() => {
+    document.open();
+    document.write('<html><head><meta name="xrio-page" content="document-written"></head><body><p id="written">written</p></body></html>');
+  });
+});
+</script>`;
+
 const ARTICLE = `<article>${"The fixture contains ordinary article content and useful prose. ".repeat(120)}</article>`;
 
 const routes = new Map<
@@ -660,6 +669,22 @@ const routes = new Map<
         "x-page": "empty-html-403",
       });
       response.end();
+    },
+  ],
+  [
+    "/document-open",
+    (response) => {
+      sendPage(response, "document-open", "", DOCUMENT_LEFT_OPEN);
+    },
+  ],
+  [
+    "/late-selector",
+    (response) => {
+      sendPage(
+        response,
+        "late-selector",
+        `${ARTICLE}<script>setTimeout(() => { const p = document.createElement("p"); p.id = "ready"; document.body.append(p); }, 300);</script>`,
+      );
     },
   ],
   [

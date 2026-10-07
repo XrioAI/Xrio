@@ -10,11 +10,19 @@ import type {
   ProxyEndpoint,
   ResolvedMode,
   ScrapeOptions,
+  WaitFor,
 } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
+
+const isWaitFor = (value: unknown): value is WaitFor =>
+  typeof value === "object" &&
+  value !== null &&
+  "selector" in value &&
+  typeof value.selector === "string" &&
+  value.selector.trim() !== "";
 
 const proxyProtocols = new Map<string, ProxyEndpoint["protocol"]>([
   ["http:", "http"],
@@ -185,6 +193,32 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   };
 };
 
+const sourceIntent = (
+  options: ScrapeOptions,
+  defaults: ClientDefaults,
+  mode: ResolvedMode,
+): ScrapeIntent["source"] => {
+  if (mode.mode === "http") {
+    if (options.waitFor !== undefined) {
+      throw invalidOptions("waitFor is only supported in browser modes.");
+    }
+
+    return mode;
+  }
+
+  const source = { ...mode, browserArgs: defaults.browser.browserArgs };
+
+  if (options.waitFor === undefined) {
+    return source;
+  }
+
+  if (!isWaitFor(options.waitFor)) {
+    throw invalidOptions("waitFor must contain a non-empty selector string.");
+  }
+
+  return { ...source, waitFor: options.waitFor };
+};
+
 export const resolveScrapeIntent = (
   options: ScrapeOptions,
   defaults: ClientDefaults,
@@ -214,8 +248,7 @@ export const resolveScrapeIntent = (
     throw invalidOptions("browserArgs is a client option.");
   }
 
-  const source =
-    mode.mode === "http" ? mode : { ...mode, browserArgs: defaults.browser.browserArgs };
+  const source = sourceIntent(options, defaults, mode);
 
   return {
     format,
