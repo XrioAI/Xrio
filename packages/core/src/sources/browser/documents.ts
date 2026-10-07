@@ -4,6 +4,10 @@ import type { DocumentHop, DocumentIdentity, DriverEvent, RawHeaders } from "./p
 
 const MAX_DOCUMENTS = 4;
 
+export const MAX_REQUEST_URLS = 2000;
+
+const MAX_REQUEST_URL_CHARS = 2048;
+
 const MAX_RESPONSE_REQUESTS = 128;
 
 const MAX_HOPS = 32;
@@ -13,6 +17,8 @@ interface DocumentRecord {
   readonly identity: DocumentIdentity;
   readonly response: DocumentHop | undefined;
   readonly loaded: boolean;
+  readonly requestUrls: readonly string[];
+  readonly droppedUrls: number;
 }
 
 interface ExtraHeaders {
@@ -30,6 +36,8 @@ export interface Documents {
   readonly records: ReadonlyMap<string, DocumentRecord>;
   readonly responses: ReadonlyMap<string, RequestResponses>;
   readonly droppedState: number;
+  readonly droppedUrls: number;
+  readonly lastRequestUrl: string | undefined;
   readonly failed: boolean;
 }
 
@@ -42,15 +50,19 @@ const requestKey = ({ sessionId, requestId }: { sessionId: string; requestId: st
 export const emptyDocuments = (): Documents => ({
   current: undefined,
   droppedState: 0,
+  droppedUrls: 0,
   failed: false,
+  lastRequestUrl: undefined,
   records: new Map(),
   responses: new Map(),
 });
 
 const emptyRecord = (identity: DocumentIdentity): DocumentRecord => ({
+  droppedUrls: 0,
   identity,
   loaded: false,
   navigation: undefined,
+  requestUrls: [],
   response: undefined,
 });
 
@@ -121,6 +133,50 @@ const recordRawHeaders = (
   };
 };
 
+const owningDocumentKey = (
+  { current: currentKey, records }: Documents,
+  event: Extract<DriverEvent, { type: "request" }>,
+): string => {
+  const ownKey = documentKey(event);
+  const current = currentKey === undefined ? undefined : records.get(currentKey);
+
+  if (currentKey === undefined || current === undefined) {
+    return ownKey;
+  }
+
+  const sameFrame =
+    current.identity.sessionId === event.sessionId && current.identity.frameId === event.frameId;
+
+  const knownLoader = event.loaderId !== "" && (records.has(ownKey) || sameFrame);
+
+  return knownLoader ? ownKey : currentKey;
+};
+
+const recordRequest = (
+  state: Documents,
+  event: Extract<DriverEvent, { type: "request" }>,
+): Documents => {
+  const records = new Map(state.records);
+  const key = owningDocumentKey(state, event);
+  const record = records.get(key) ?? emptyRecord(event);
+  const full = record.requestUrls.length >= MAX_REQUEST_URLS;
+  records.set(key, {
+    ...record,
+    droppedUrls: record.droppedUrls + Number(full),
+    requestUrls: full
+      ? record.requestUrls
+      : [...record.requestUrls, event.url.slice(0, MAX_REQUEST_URL_CHARS)],
+  });
+
+  return {
+    ...state,
+    droppedState: state.droppedState + bounded(records, MAX_DOCUMENTS, state.current),
+    droppedUrls: state.droppedUrls + Number(full),
+    lastRequestUrl: event.url,
+    records,
+  };
+};
+
 export const recordDocumentEvent = (state: Documents, event: DriverEvent): Documents => {
   switch (event.type) {
     case "document-request": {
@@ -145,7 +201,7 @@ export const recordDocumentEvent = (state: Documents, event: DriverEvent): Docum
     }
 
     case "request": {
-      return state;
+      return recordRequest(state, event);
     }
 
     case "commit":
@@ -182,6 +238,9 @@ export const recordDocumentEvent = (state: Documents, event: DriverEvent): Docum
 
 export const currentDocument = (state: Documents): DocumentRecord | undefined =>
   state.current === undefined ? undefined : state.records.get(state.current);
+
+export const requestUrlsOf = (state: Documents, document: DocumentIdentity): readonly string[] =>
+  state.records.get(documentKey(document))?.requestUrls ?? [];
 
 const receivesRawHeaders = ({ fromCache, hasExtraInfo }: DocumentHop): boolean =>
   hasExtraInfo && !fromCache;

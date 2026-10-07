@@ -6,6 +6,7 @@ import {
   documentResponse,
   emptyDocuments,
   recordDocumentEvent,
+  requestUrlsOf,
 } from "./documents.ts";
 import type { DocumentHop, DriverEvent, RawHeaders } from "./port.ts";
 
@@ -152,6 +153,68 @@ describe("document identity", () => {
     });
   });
 
+  it("caps each document's request log and retains only that document's URLs", () => {
+    const first = documentHop();
+    let state = recorded(loaded(first));
+
+    for (let index = 0; index < 2010; index += 1) {
+      state = recordDocumentEvent(state, {
+        ...first,
+        type: "request",
+        url: `https://example.test/${index}`,
+      });
+    }
+
+    const second = documentHop({ loaderId: "L2" });
+
+    for (const event of loaded(second)) {
+      state = recordDocumentEvent(state, event);
+    }
+
+    state = recordDocumentEvent(state, {
+      ...second,
+      type: "request",
+      url: "https://example.test/next",
+    });
+    state = recordDocumentEvent(state, {
+      ...first,
+      type: "request",
+      url: "https://example.test/late-old",
+    });
+    expect(requestUrlsOf(state, first)).toHaveLength(2000);
+    expect(requestUrlsOf(state, second)).toStrictEqual(["https://example.test/next"]);
+    expect(state.droppedUrls).toBe(11);
+  });
+
+  it("retains at most four documents' request logs", () => {
+    let state = emptyDocuments();
+
+    for (let index = 0; index < 6; index += 1) {
+      const document = documentHop({ loaderId: `L${index}`, requestId: `R${index}` });
+
+      for (const event of loaded(document)) {
+        state = recordDocumentEvent(state, event);
+      }
+
+      for (let request = 0; request <= 2000; request += 1) {
+        state = recordDocumentEvent(state, {
+          ...document,
+          type: "request",
+          url: `https://example.test/${request}`,
+        });
+      }
+    }
+
+    let retained = 0;
+
+    for (const record of state.records.values()) {
+      retained += record.requestUrls.length;
+    }
+
+    expect(retained).toBe(8000);
+    expect(requestUrlsOf(state, documentHop({ loaderId: "L5" }))).toHaveLength(2000);
+  });
+
   it("bounds document and response maps and counts evictions", () => {
     let state = emptyDocuments();
 
@@ -165,5 +228,27 @@ describe("document identity", () => {
     expect(state.responses.size).toBe(128);
     expect(state.droppedState).toBe(188);
     expect(currentDocument(state)?.response?.loaderId).toBe("L159");
+  });
+
+  it("attaches loader-less worker scripts to the document that issued them", () => {
+    const document = documentHop();
+
+    const state = recorded([
+      ...loaded(document),
+      { ...document, loaderId: "", type: "request", url: "https://example.test/worker.js" },
+      {
+        ...document,
+        frameId: "worker",
+        loaderId: "",
+        sessionId: "worker-session",
+        type: "request",
+        url: "https://example.test/from-worker",
+      },
+    ]);
+
+    expect(requestUrlsOf(state, document)).toStrictEqual([
+      "https://example.test/worker.js",
+      "https://example.test/from-worker",
+    ]);
   });
 });

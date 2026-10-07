@@ -10,8 +10,10 @@ import {
   documentKey,
   documentResponse,
   emptyDocuments,
+  MAX_REQUEST_URLS,
   rawHeadersOf,
   recordDocumentEvent,
+  requestUrlsOf,
 } from "./documents.ts";
 import { DriverError } from "./port.ts";
 import type { DocumentHop, DriverBrowser, DriverErrorReason } from "./port.ts";
@@ -86,11 +88,7 @@ const isCaptureReply = (value: unknown): value is string | TooLarge | Parked =>
 
 const isSlice = (value: unknown): value is string | null => value === null || isHtml(value);
 
-const MAX_REQUEST_URLS = 4000;
-
 const COMMITTED_ERROR_PAGE = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
-
-const MAX_REQUEST_URL_CHARS = 2048;
 
 const PROXY_NET_ERROR = /^net::ERR_(?:PROXY|TUNNEL)_/u;
 
@@ -109,8 +107,6 @@ const isDriverFailure = <Kind extends DriverErrorReason["kind"]>(
   error instanceof DriverError && error.reason.kind === kind;
 
 class PageTracker {
-  readonly requestUrls: string[] = [];
-  droppedRequestUrls = 0;
   #state = emptyDocuments();
   readonly #waiters = new Set<() => void>();
   readonly #fallbacks = new Set<string>();
@@ -122,10 +118,6 @@ class PageTracker {
     this.#stop = browser.onEvent((event) => {
       this.#state = recordDocumentEvent(this.#state, event);
 
-      if (event.type === "request") {
-        this.#recordRequest(event.url);
-      }
-
       for (const wake of this.#waiters) {
         wake();
       }
@@ -134,6 +126,9 @@ class PageTracker {
 
   stop(): void {
     this.#stop();
+  }
+  get lastRequestUrl(): string | undefined {
+    return this.#state.lastRequestUrl;
   }
 
   loadedDocument(): DocumentHop | undefined {
@@ -203,6 +198,10 @@ class PageTracker {
     return this.#state.current === documentKey(document);
   }
 
+  requestUrls(document: DocumentHop): readonly string[] {
+    return requestUrlsOf(this.#state, document);
+  }
+
   responseOf(document: DocumentHop): ResponseDetails {
     const hop = JSON.stringify([document.requestId, document.hopIndex]);
 
@@ -218,9 +217,9 @@ class PageTracker {
   }
 
   reportDropped(): void {
-    if (this.droppedRequestUrls > 0) {
+    if (this.#state.droppedUrls > 0) {
       publishInternalEvent({
-        detail: `The request log kept ${MAX_REQUEST_URLS} URLs and dropped ${this.droppedRequestUrls}.`,
+        detail: `Each document kept at most ${MAX_REQUEST_URLS} URLs; dropped ${this.#state.droppedUrls}.`,
         event: "request-log-dropped",
       });
     }
@@ -230,14 +229,6 @@ class PageTracker {
         detail: `Dropped ${this.#state.droppedState} entries of document or response state.`,
         event: "document-state-dropped",
       });
-    }
-  }
-
-  #recordRequest(url: string): void {
-    if (this.requestUrls.length < MAX_REQUEST_URLS) {
-      this.requestUrls.push(url.slice(0, MAX_REQUEST_URL_CHARS));
-    } else {
-      this.droppedRequestUrls += 1;
     }
   }
 }
@@ -284,7 +275,7 @@ const navigateTo = async (
         return;
       }
 
-      const failingHop = tracker.requestUrls.at(-1);
+      const failingHop = tracker.lastRequestUrl;
 
       throw (
         relayFailureBehind(relay, failingHop, url, netError) ?? networkFailure(url, netError, error)
@@ -441,11 +432,11 @@ export const renderDocument = async <Reading>(
         ...details,
         block: classifyResponse({
           html,
-          requestUrls: tracker.requestUrls,
+          requestUrls: tracker.requestUrls(document),
           response: details,
         }),
         html,
-        requestUrls: tracker.requestUrls,
+        requestUrls: tracker.requestUrls(document),
       },
     };
   } finally {

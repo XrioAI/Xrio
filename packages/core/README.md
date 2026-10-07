@@ -174,7 +174,7 @@ Evidence has tiers. E0 decides alone. E1 decides alone. Its markup rules fire on
 
 Responses that are not HTML are classified without a body, and the report rides on the `UNSUPPORTED_CONTENT_TYPE` error's `details.block`. Only E0 evidence that needs no body, such as a challenge header or a waiting-room URL, can decide them; status and request-log evidence is listed but does not decide, and the challenge cookie, which needs an HTML response, is not checked.
 
-In browser modes the classifier sees every request URL from the page's frames and workers. In http mode the request URLs are only the redirect chain, so two limits apply:
+In browser modes the classifier sees the captured document's request URLs from the page's frames and workers, capped at 2,000 entries per document. In http mode the request URLs are only the redirect chain, so two limits apply:
 
 - a single-page-app shell (a small document with little text and a lot of script) can read as `suspect`;
 - a challenge issued by a page's scripts, or seen only in its subresource requests, is invisible without a browser.
