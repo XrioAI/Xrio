@@ -1,14 +1,18 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { inspect } from "node:util";
+import { inspect, promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { loadXrioConfig } from "./config.ts";
+import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 
 const directories: string[] = [];
+
+// oxlint-disable-next-line typescript/strict-void-return -- Node explicitly provides the promisify overload for execFile.
+const execute = promisify(execFile);
 
 const workspace = () => {
   const directory = mkdtempSync(path.join(tmpdir(), "xrio-config-"));
@@ -23,6 +27,56 @@ describe("configuration discovery", () => {
     for (const directory of directories.splice(0)) {
       rmSync(directory, { force: true, recursive: true });
     }
+  });
+
+  it("connects config to the public client once, with method and client proxy precedence", async () => {
+    await using configured = await startFakeHttpProxy({ connectStatus: 407, tunnelTo: 0 });
+    await using clientProxy = await startFakeHttpProxy({ connectStatus: 407, tunnelTo: 0 });
+    await using methodProxy = await startFakeHttpProxy({ connectStatus: 407, tunnelTo: 0 });
+    const directory = workspace();
+    const elsewhere = workspace();
+    const clientModule = new URL("client.ts", import.meta.url).href;
+    const url = configured.url.replace("://", "://configured-{session}:secret@");
+    const source = `export default ${JSON.stringify({ proxy: { url } })};`;
+
+    writeFileSync(path.join(directory, "xrio.config.mjs"), source);
+    writeFileSync(
+      path.join(elsewhere, "xrio.config.mjs"),
+      "throw new Error('Config was rediscovered during a scrape');",
+    );
+
+    const { stdout } = await execute(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import { XrioClient } from ${JSON.stringify(clientModule)};
+      await using configured = new XrioClient({ mode: "http" });
+      await using overridden = new XrioClient({ mode: "http", proxy: ${JSON.stringify(clientProxy.url)} });
+      process.chdir(${JSON.stringify(elsewhere)});
+      const codes = [];
+      for (const [client, proxy] of [[configured], [overridden], [overridden, ${JSON.stringify(methodProxy.url)}], [configured]]) {
+        try { await client.scrape({ url: "http://target.invalid/", format: "html", proxy, timeoutMs: 5000 }); }
+        catch (error) { codes.push(error.code); }
+      }
+      process.stdout.write(JSON.stringify(codes));
+    `,
+      ],
+      { cwd: directory, encoding: "utf-8", timeout: 20_000 },
+    );
+
+    expect(JSON.parse(stdout)).toStrictEqual(Array.from({ length: 4 }, () => "PROXY_AUTH_FAILED"));
+    expect([
+      configured.requests.length,
+      clientProxy.requests.length,
+      methodProxy.requests.length,
+    ]).toStrictEqual([2, 1, 1]);
+    expect(configured.requests[0]).toStrictEqual(configured.requests[1]);
+    expect(
+      Buffer.from(configured.requests[0].authorization?.slice(6) ?? "", "base64").toString(),
+    ).toMatch(/^configured-\d{8}:secret$/u);
+    expect(loadXrioConfig(directory).proxy?.url).toBe(url);
   });
 
   it.each(["ts", "mts", "js", "mjs"])(

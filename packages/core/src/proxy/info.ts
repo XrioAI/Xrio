@@ -7,6 +7,7 @@ import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
 import { isXrioError, XrioError } from "../errors.ts";
 import { parseProxy } from "../options.ts";
+import type { ProxyEndpoint } from "../types.ts";
 import { startRelay } from "./relay.ts";
 
 export interface ProxyInfo {
@@ -17,6 +18,12 @@ export interface ProxyInfo {
   timezone: string;
   /** Likely locale inferred from country, not an observed language preference. */
   locale: string;
+}
+
+export interface ProxyObservation extends ProxyInfo {
+  readonly provider: string;
+  readonly destination: string;
+  readonly observedAt: number;
 }
 
 const EXIT_BUDGET_MS = 5000;
@@ -116,27 +123,31 @@ const services = [
 
 const requestProxyJson = async (
   url: string,
-  connection: string,
+  connection: string | ProxyEndpoint,
   deadline: Deadline,
 ): Promise<{ status: number; body: unknown }> => {
-  await using relay = await startRelay(parseProxy(connection), deadline, "token");
+  const endpoint = typeof connection === "string" ? parseProxy(connection) : connection;
+  await using relay = await startRelay(endpoint, deadline, "token");
 
   try {
     await using session = await createSession({ proxy: relay.url, timeout: 0 });
-    // Fixed HTTPS endpoints only; rejecting redirects also prevents a redirect to a local target.
-    const response = await session.fetch(url, { redirect: "error", signal: deadline.signal });
 
-    return { body: response.ok ? await response.json() : undefined, status: response.status };
+    // Fixed HTTPS endpoints only; rejecting redirects also prevents a redirect to a local target.
+    return await untilDeadline(async () => {
+      const response = await session.fetch(url, { redirect: "error", signal: deadline.signal });
+
+      return { body: response.ok ? await response.json() : undefined, status: response.status };
+    }, deadline);
   } catch (error) {
     throw relay.failureFor(new URL(url).hostname) ?? error;
   }
 };
 
 export const lookupProxyInfo = async (
-  connection: string,
+  connection: string | ProxyEndpoint,
   deadline: Deadline,
   requestJson = requestProxyJson,
-): Promise<ProxyInfo> => {
+): Promise<ProxyObservation> => {
   deadline.throwIfExpired();
   using budget = deadline.startStage(EXIT_BUDGET_MS);
 
@@ -151,10 +162,7 @@ export const lookupProxyInfo = async (
 
     try {
       // oxlint-disable-next-line eslint/no-await-in-loop -- only call the fallback when the primary fails.
-      const response = await untilDeadline(
-        async () => await requestJson(service.url, connection, attempt),
-        attempt,
-      );
+      const response = await requestJson(service.url, connection, attempt);
 
       deadline.throwIfExpired();
       attempt.throwIfExpired();
@@ -163,7 +171,12 @@ export const lookupProxyInfo = async (
         response.status >= 200 && response.status < 300 ? service.parse(response.body) : undefined;
 
       if (info !== undefined) {
-        return info;
+        return {
+          ...info,
+          destination: service.url,
+          observedAt: Date.now(),
+          provider: new URL(service.url).hostname,
+        };
       }
     } catch (error) {
       deadline.throwIfExpired();

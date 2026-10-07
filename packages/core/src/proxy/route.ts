@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { ExitFacts } from "../humanizer/contracts.ts";
 import type { ProxyEndpoint } from "../types.ts";
+import type { ProxyObservation } from "./info.ts";
 
 type RouteKey = string;
 
@@ -35,4 +36,17 @@ export const routeFor = (proxy?: ProxyEndpoint): Route =>
         kind: "proxy",
       };
 
-export const exitFactsFor = (_route: Route): ExitFacts => ({ kind: "unknown" });
+export const exitFactsFor = (route: Route, observation?: ProxyObservation): ExitFacts =>
+  route.kind === "direct" || observation === undefined
+    ? { kind: "unknown" }
+    : {
+        address: observation.exitIp,
+        country: observation.country,
+        destination: observation.destination,
+        generation: route.generation,
+        kind: "observed",
+        observedAt: observation.observedAt,
+        provider: observation.provider,
+        route: route.key,
+        zone: observation.timezone,
+      };

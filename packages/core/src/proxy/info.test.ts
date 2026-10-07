@@ -3,8 +3,10 @@ import { inspect } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { startDeadline } from "../deadline.ts";
+import type { Deadline } from "../deadline.ts";
+import { startDeadline, untilDeadline } from "../deadline.ts";
 import { XrioError } from "../errors.ts";
+import type { ProxyEndpoint } from "../types.ts";
 import { lookupProxyInfo } from "./info.ts";
 
 const connection = "http://user-session-12345678:secret@proxy.test:8000";
@@ -23,7 +25,7 @@ describe("proxy information lookup", () => {
 
   it("looks up the exact connection and infers locale", async () => {
     using deadline = startDeadline(10_000);
-    const requests: string[] = [];
+    const requests: (string | ProxyEndpoint)[] = [];
 
     const info = await lookupProxyInfo(connection, deadline, async (url, proxy, attempt) => {
       requests.push(proxy);
@@ -35,11 +37,15 @@ describe("proxy information lookup", () => {
 
     expect(info).toStrictEqual({
       country: "US",
+      destination: "https://ipwho.is/",
       exitIp: "203.0.113.1",
       locale: "en-US",
+      observedAt: info.observedAt,
+      provider: "ipwho.is",
       timezone: "America/New_York",
     });
     expect(requests).toStrictEqual([connection]);
+    expect(info.observedAt).toBeGreaterThan(0);
   });
 
   it.each([
@@ -53,7 +59,7 @@ describe("proxy information lookup", () => {
   ])("uses ipapi for an unusable primary response: %j", async (primary) => {
     using deadline = startDeadline(10_000);
     const urls: string[] = [];
-    const connections: string[] = [];
+    const connections: (string | ProxyEndpoint)[] = [];
 
     const info = await lookupProxyInfo(connection, deadline, async (url, proxy) => {
       urls.push(url);
@@ -74,8 +80,11 @@ describe("proxy information lookup", () => {
 
     expect(info).toStrictEqual({
       country: "FR",
+      destination: "https://api.ipapi.is/",
       exitIp: "203.0.113.2",
       locale: "fr-FR",
+      observedAt: info.observedAt,
+      provider: "api.ipapi.is",
       timezone: "Europe/Paris",
     });
     expect(urls).toStrictEqual(["https://ipwho.is/", "https://api.ipapi.is/"]);
@@ -88,7 +97,7 @@ describe("proxy information lookup", () => {
 
     try {
       await lookupProxyInfo(connection, deadline, async (_url, proxy) => {
-        throw new Error(proxy);
+        throw new Error(JSON.stringify(proxy));
       });
     } catch (error) {
       failure = error;
@@ -120,11 +129,11 @@ describe("proxy information lookup", () => {
     const controller = new AbortController();
     using deadline = startDeadline(10_000, controller.signal);
 
-    const requestJson = async (url: string) => {
+    const requestJson = async (url: string, _proxy: string | ProxyEndpoint, attempt: Deadline) => {
       urls.push(url);
       started.resolve(true);
 
-      return await pending.promise;
+      return await untilDeadline(async () => await pending.promise, attempt);
     };
 
     const info = lookupProxyInfo(connection, deadline, requestJson);
@@ -164,11 +173,11 @@ describe("proxy information lookup", () => {
     const stalled = Promise.withResolvers<{ status: number; body: unknown }>();
     const urls: string[] = [];
 
-    const info = lookupProxyInfo(connection, deadline, async (url) => {
+    const info = lookupProxyInfo(connection, deadline, async (url, _proxy, attempt) => {
       urls.push(url);
 
       if (urls.length === 1) {
-        return await stalled.promise;
+        return await untilDeadline(async () => await stalled.promise, attempt);
       }
 
       return {
@@ -190,10 +199,10 @@ describe("proxy information lookup", () => {
     const stalled = Promise.withResolvers<{ status: number; body: unknown }>();
     const starts: number[] = [];
 
-    const info = lookupProxyInfo(connection, deadline, async () => {
+    const info = lookupProxyInfo(connection, deadline, async (_url, _proxy, attempt) => {
       starts.push(performance.now());
 
-      return await stalled.promise;
+      return await untilDeadline(async () => await stalled.promise, attempt);
     });
 
     await Promise.all([
@@ -211,10 +220,10 @@ describe("proxy information lookup", () => {
     const stalled = Promise.withResolvers<{ status: number; body: unknown }>();
     const urls: string[] = [];
 
-    const info = lookupProxyInfo(connection, deadline, async (url) => {
+    const info = lookupProxyInfo(connection, deadline, async (url, _proxy, attempt) => {
       urls.push(url);
 
-      return await stalled.promise;
+      return await untilDeadline(async () => await stalled.promise, attempt);
     });
 
     await Promise.all([

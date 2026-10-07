@@ -277,7 +277,7 @@ const acceptLanguageHeader = (languages: readonly string[]): string =>
     )
     .join(",");
 
-export const presentedLocale = ({ locale }: IdentityIntent) => {
+export const presentedLocale = ({ locale }: Pick<IdentityIntent, "locale">) => {
   const tag = locale ?? DEFAULT_LOCALE;
   const languages = chromeAcceptLanguages(tag);
 
@@ -286,6 +286,23 @@ export const presentedLocale = ({ locale }: IdentityIntent) => {
   }
 
   return { header: acceptLanguageHeader(languages), languages, tag };
+};
+
+export const identityForVisit = (
+  pins: IdentityIntent,
+  device: DeviceChoice,
+  inferredLocale: string | undefined,
+): IdentityIntent => {
+  if (device.kind === "record") {
+    return { ...pins, locale: device.record.policy.locale };
+  }
+
+  const supported =
+    inferredLocale !== undefined && chromeAcceptLanguages(inferredLocale) !== undefined;
+
+  const locale = pins.locale ?? (supported ? inferredLocale : DEFAULT_LOCALE);
+
+  return { ...pins, locale };
 };
 
 const resolveLocale = ({

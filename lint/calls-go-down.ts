@@ -6,7 +6,7 @@ import type { ESTree } from "vite-plus/lint/plugins";
 const DOWNSTREAM = /\/packages\/core\/src\/(?:sources|humanizer)\//u;
 
 const MANAGER =
-  /\/packages\/core\/src\/(?:sessions\/|proxy\/(?:route|routes|exit)\.ts$|coordinator\.ts$)/u;
+  /\/packages\/core\/src\/(?:sessions\/|proxy\/(?:route|routes|exit|manager|info)\.ts$|coordinator\.ts$)/u;
 
 const isText = (value: unknown): value is string => typeof value === "string";
 

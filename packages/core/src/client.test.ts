@@ -516,23 +516,62 @@ describe("the identity report's secrets", () => {
     vi.unstubAllEnvs();
   });
 
-  it("holds no proxy credential or relay token in an http scrape through a proxy", async () => {
-    await using fixture = await startFixtureServer(routes);
-    const fixturePort = Number(new URL(fixture.origin).port);
+  it.each(["abort", "timeout"] as const)(
+    "closes metadata sockets and prevents browser launch on %s",
+    async (ending) => {
+      await using proxy = await startFakeHttpProxy({ silent: true, tunnelTo: 0 });
 
-    await using proxy = await startFakeHttpProxy({
-      requireCredentials: "user:secret",
-      tunnelTo: fixturePort,
-    });
+      await using client = new XrioClient({
+        browserPath: "/must-not-launch",
+        mode: "headless",
+        proxy: proxy.url,
+      });
 
-    const client = new XrioClient({
+      const controller = new AbortController();
+      const stopped = new Error("Caller stopped metadata lookup.");
+
+      const pending = client.scrape({
+        format: "html",
+        signal: controller.signal,
+        timeoutMs: ending === "abort" ? 5000 : 500,
+        url: "http://target.invalid",
+      });
+
+      const settled = Promise.allSettled([pending]);
+      await vi.waitFor(() => {
+        expect(proxy.requests).toHaveLength(1);
+      });
+      const closing = client.close();
+
+      if (ending === "abort") {
+        controller.abort(stopped);
+      }
+
+      const expected = ending === "abort" ? { message: stopped.message } : { code: "TIMEOUT" };
+      await expect(settled).resolves.toMatchObject([{ reason: expected, status: "rejected" }]);
+      await closing;
+      await vi.waitFor(() => {
+        expect(proxy.openConnections).toBe(0);
+      });
+      expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["ipwho.is:443"]);
+    },
+  );
+
+  it("preserves proxy authentication failures without exposing credentials", async () => {
+    await using proxy = await startFakeHttpProxy({ connectStatus: 407, tunnelTo: 0 });
+
+    await using client = new XrioClient({
       mode: "http",
       proxy: proxy.url.replace("://", "://user:secret@"),
     });
 
-    const { identity } = await client.scrape({ format: "html", url: "http://origin.test/" });
+    const result = client.scrape({ format: "html", url: "http://origin.test/" });
 
-    expect(fullDepth(identity)).not.toMatch(/secret|xrio:|127\.0\.0\.1/u);
+    await expect(result).rejects.toMatchObject({ code: "PROXY_AUTH_FAILED" });
+    await expect(result).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Infinity }).includes("secret"),
+    );
+    expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["ipwho.is:443"]);
   });
 
   it("holds no scratch path in a browser report or a launch error", async () => {
