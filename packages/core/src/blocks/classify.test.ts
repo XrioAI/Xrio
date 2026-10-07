@@ -1,116 +1,17 @@
-import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vite-plus/test";
 
+import {
+  blockInputOf,
+  classifiedCases,
+  decisionPathOf,
+  failingCases,
+} from "../testing/block-cases.ts";
 import type { ResponseDetails } from "../types.ts";
 import { classifyResponse } from "./classify.ts";
-import type { BlockInput, BlockReport, BlockVerdict } from "./classify.ts";
+import type { BlockInput, BlockReport } from "./classify.ts";
 import { gates, rules } from "./rules.ts";
 
-interface Fixture {
-  id: string;
-  url: string;
-  status: number;
-  headers: Record<string, string>;
-  cookies: string[];
-  requestUrls: string[];
-  htmlSha256: string;
-  internalFailure?: boolean;
-  expect: {
-    verdict: BlockVerdict;
-    vendor: string | null;
-    ruleIds: string[];
-    passedChallenges: string[];
-  };
-}
-
-const FIXTURES = new URL("fixtures/", import.meta.url);
-
-const VERDICTS = new Set(["ok", "suspect", "blocked", "queued", "unknown"]);
-
-const isString = (value: unknown): value is string => typeof value === "string";
-
-const isStringList = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every(isString);
-
-const isExpectation = (value: unknown): value is Fixture["expect"] =>
-  typeof value === "object" &&
-  value !== null &&
-  "verdict" in value &&
-  typeof value.verdict === "string" &&
-  VERDICTS.has(value.verdict) &&
-  "vendor" in value &&
-  (value.vendor === null || typeof value.vendor === "string") &&
-  "ruleIds" in value &&
-  isStringList(value.ruleIds) &&
-  "passedChallenges" in value &&
-  isStringList(value.passedChallenges);
-
-const isFixture = (value: unknown): value is Fixture =>
-  typeof value === "object" &&
-  value !== null &&
-  "id" in value &&
-  typeof value.id === "string" &&
-  "url" in value &&
-  typeof value.url === "string" &&
-  "status" in value &&
-  typeof value.status === "number" &&
-  "headers" in value &&
-  typeof value.headers === "object" &&
-  value.headers !== null &&
-  Object.values(value.headers).every(isString) &&
-  "cookies" in value &&
-  isStringList(value.cookies) &&
-  "requestUrls" in value &&
-  isStringList(value.requestUrls) &&
-  "htmlSha256" in value &&
-  typeof value.htmlSha256 === "string" &&
-  "expect" in value &&
-  isExpectation(value.expect);
-
-const loadFixture = (file: string): Fixture & { html: string } => {
-  const fixture: unknown = JSON.parse(readFileSync(new URL(file, FIXTURES), "utf-8"));
-
-  if (!isFixture(fixture)) {
-    throw new Error(`${file} is not a block fixture.`);
-  }
-
-  return { ...fixture, html: readFileSync(new URL(`${fixture.id}.html`, FIXTURES), "utf-8") };
-};
-
-const fixtures = readdirSync(FIXTURES)
-  .filter((file) => file.endsWith(".json") && file !== "non-signals.json")
-  .toSorted()
-  .map(loadFixture);
-
-const inputFor = (fixture: Fixture & { html: string }): BlockInput => {
-  const response: ResponseDetails = {
-    cookies: fixture.cookies,
-    headers: fixture.headers,
-    status: fixture.status,
-    url: fixture.url,
-  };
-
-  if (fixture.internalFailure === true) {
-    return {
-      html: fixture.html,
-      get requestUrls(): string[] {
-        throw new Error("The facts could not be read.");
-      },
-      response,
-    };
-  }
-
-  return { html: fixture.html, requestUrls: fixture.requestUrls, response };
-};
-
-const summarize = (report: BlockReport) => ({
-  passedChallenges: report.passedChallenges.toSorted(),
-  ruleIds: [...new Set(report.evidence.map((entry) => entry.rule))].toSorted(),
-  vendor: report.vendor,
-  verdict: report.verdict,
-});
+const everyCase = [...classifiedCases, ...failingCases];
 
 const page = (body: string) =>
   `<!doctype html><html><head><title>Catalog</title></head><body>${body}</body></html>`;
@@ -180,14 +81,15 @@ const CHALLENGES_WITHOUT_FIXTURES = new Map<string, BlockInput>([
 ]);
 
 const challengeInputFor = (rule: string): BlockInput | undefined => {
-  const fixture = fixtures.find(
-    (candidate) =>
-      candidate.internalFailure !== true &&
-      candidate.expect.verdict === "blocked" &&
-      candidate.expect.ruleIds.includes(rule),
+  const named = classifiedCases.find(
+    ({ blockCase }) =>
+      blockCase.expect.verdict === "blocked" &&
+      blockCase.expect.ruleIds.some((ruleId) => ruleId === rule),
   );
 
-  return fixture === undefined ? CHALLENGES_WITHOUT_FIXTURES.get(rule) : inputFor(fixture);
+  return named === undefined
+    ? CHALLENGES_WITHOUT_FIXTURES.get(rule)
+    : blockInputOf(named.blockCase);
 };
 
 const challengeCases = () =>
@@ -201,37 +103,38 @@ const challengeCases = () =>
     return { input, rule };
   });
 
-describe("the block fixture corpus", () => {
-  it("holds every fixture case", () => {
-    expect(fixtures).toHaveLength(52);
+describe("the block cases", () => {
+  it.each(classifiedCases)("decides $id along its recorded path", ({ blockCase }) => {
+    expect(decisionPathOf(blockCase)).toStrictEqual(blockCase.expect);
   });
 
-  it.each(fixtures)("classifies $id", (fixture) => {
-    const report = summarize(classifyResponse(inputFor(fixture)));
-
-    expect(report).toStrictEqual({
-      ...fixture.expect,
-      ruleIds: fixture.expect.ruleIds.toSorted(),
+  it.each(failingCases)("reports $id as unknown with a classifier failure", ({ blockCase }) => {
+    expect(classifyResponse(blockInputOf(blockCase))).toMatchObject({
+      evidence: [{ rule: "classifier_failure" }],
+      vendor: null,
+      verdict: "unknown",
     });
   });
 
   it("keeps at most one evidence item per rule", () => {
-    const duplicated = fixtures.flatMap((fixture) => {
-      const rulesSeen = classifyResponse(inputFor(fixture)).evidence.map((entry) => entry.rule);
+    const duplicated = everyCase.flatMap(({ blockCase, id }) => {
+      const rulesSeen = classifyResponse(blockInputOf(blockCase)).evidence.map(
+        (entry) => entry.rule,
+      );
 
-      return rulesSeen.length === new Set(rulesSeen).size ? [] : [fixture.id];
+      return rulesSeen.length === new Set(rulesSeen).size ? [] : [id];
     });
 
     expect(duplicated).toStrictEqual([]);
   });
 
   it.each(
-    fixtures.filter((fixture) =>
-      fixture.expect.ruleIds.some((rule) => SELF_NAMING_RULES.has(rule)),
+    classifiedCases.filter(({ blockCase }) =>
+      blockCase.expect.ruleIds.some((rule) => SELF_NAMING_RULES.has(rule)),
     ),
-  )("decides $id at a served page's size, past the interstitial gate", (fixture) => {
-    const served = fixture.html.replace(/<\/body>/iu, `${prose.repeat(10)}</body>`);
-    const report = classifyResponse({ ...inputFor(fixture), html: served });
+  )("decides $id at a served page's size, past the interstitial gate", ({ blockCase }) => {
+    const served = blockCase.html.replace(/<\/body>/iu, `${prose.repeat(10)}</body>`);
+    const report = classifyResponse({ ...blockInputOf(blockCase), html: served });
 
     expect(served.length).toBeGreaterThan(gates.interstitialMaxHtmlChars);
     expect(report.verdict).toBe("blocked");
@@ -251,16 +154,8 @@ describe("the block fixture corpus", () => {
     },
   );
 
-  it("keeps every fixture document byte for byte as converted", () => {
-    const changed = fixtures.filter(
-      (fixture) => createHash("sha256").update(fixture.html).digest("hex") !== fixture.htmlSha256,
-    );
-
-    expect(changed.map((fixture) => fixture.id)).toStrictEqual([]);
-  });
-
   it("orders evidence by tier and keeps every detail within 160 characters", () => {
-    const reports = fixtures.map((fixture) => classifyResponse(inputFor(fixture)));
+    const reports = everyCase.map(({ blockCase }) => classifyResponse(blockInputOf(blockCase)));
 
     const misordered = reports.filter((report) => {
       const tiers = report.evidence.map((entry) => entry.tier);
