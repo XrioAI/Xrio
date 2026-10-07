@@ -19,6 +19,8 @@ const page = (body: string) =>
 
 const prose = `<main>${"<p>A long paragraph about the products this shop sells, written for people.</p>".repeat(80)}</main>`;
 
+const challengeRequest = "https://geo.captcha-delivery.com/captcha/?initialCid=REDACTED";
+
 const SELF_NAMING_RULES = new Set(["ticketmaster_eps_block", "linkedin_authwall_canonical"]);
 
 const EMPTY_SHELL = "<!doctype html><html><head></head><body></body></html>";
@@ -30,6 +32,28 @@ const MAXIMUM_INPUT_BUDGET_MS = 2000;
 const CHROME_MAX_URL_CHARS = 2_097_152;
 
 const COOKIE_HEADER_CHARS = 262_144;
+
+const INTERSTITIAL_HTML_LIMIT = 50_000;
+
+const INTERSTITIAL_TEXT_LIMIT = 5000;
+
+const NO_PROSE_TEXT_LIMIT = 100;
+
+const HEAVY_SCRIPT_HTML_LIMIT = 10_000;
+
+const HEAVY_SCRIPT_MIN_CHARS = 200;
+
+const HEAVY_SCRIPT_TEXT_RATIO = 10;
+
+const DOM_SCAN_LIMIT = 1_048_576;
+
+const EMPTY_SCRIPT_ELEMENT_CHARS = 17;
+
+const AMPLE_SCRIPT_CHARS = 1000;
+
+const RATIO_PROBE_TEXT_CHARS = 30;
+
+const ABUSE_BLOCK_MARKER = '<abuse-component action="block"';
 
 const atTextPassLimit = (unit: string, codePoints = unit.length): string =>
   unit.repeat(Math.floor(gates.interstitialMaxHtmlChars / codePoints));
@@ -46,6 +70,25 @@ const paddedTo = (length: number, head: string): string => {
   const shell = `<html><head>${head}</head><body><!----></body></html>`;
 
   return shell.replace("<!---->", `<!--${"x".repeat(length - shell.length)}-->`);
+};
+
+const sensorPageAtHtmlLimit = (textChars: number): string => {
+  const shell = sensorPage(`${"a".repeat(textChars)}<!---->`);
+
+  return shell.replace("<!---->", `<!--${"x".repeat(INTERSTITIAL_HTML_LIMIT - shell.length)}-->`);
+};
+
+const scriptElementOf = (chars: number): string =>
+  `<script>${"x".repeat(chars - EMPTY_SCRIPT_ELEMENT_CHARS)}</script>`;
+
+const scriptAndTextPage = (scriptChars: number, textChars: number): string =>
+  `<html><body><p>${"a".repeat(textChars)}</p>${scriptElementOf(scriptChars)}</body></html>`;
+
+const blockMarkerEndingAt = (end: number): string => {
+  const opener = "<html><body>";
+  const filler = "x".repeat(end - opener.length - ABUSE_BLOCK_MARKER.length);
+
+  return `${opener}${filler}${ABUSE_BLOCK_MARKER}</body></html>`;
 };
 
 const challengeRules = new Set(
@@ -165,9 +208,151 @@ describe("the block cases", () => {
   });
 });
 
-describe(classifyResponse, () => {
-  const challengeRequest = "https://geo.captcha-delivery.com/captcha/?initialCid=REDACTED";
+describe("the page limits", () => {
+  it.each([
+    { decides: true, htmlChars: INTERSTITIAL_HTML_LIMIT },
+    { decides: false, htmlChars: INTERSTITIAL_HTML_LIMIT + 1 },
+  ])(
+    "treats a $htmlChars character document as interstitial-shaped: $decides",
+    ({ decides, htmlChars }) => {
+      const report = classifyResponse({
+        html: paddedTo(htmlChars, "<script>window._cf_chl_opt = {};</script>"),
+        requestUrls: [],
+        response: htmlResponse(),
+      });
 
+      expect(ruleIdsOf(report).includes("cf_chl_opt")).toBe(decides);
+    },
+  );
+
+  it.each([
+    {
+      expected: { passedChallenges: [], verdict: "blocked" },
+      textChars: INTERSTITIAL_TEXT_LIMIT,
+    },
+    {
+      expected: { passedChallenges: ["datadome_captcha_delivery_request"], verdict: "ok" },
+      textChars: INTERSTITIAL_TEXT_LIMIT + 1,
+    },
+  ])(
+    "decides a page of $textChars text characters as $expected.verdict",
+    ({ expected, textChars }) => {
+      const report = classifyResponse({
+        html: page(`<p>${"a".repeat(textChars)}</p>`),
+        requestUrls: [challengeRequest],
+        response: htmlResponse(),
+      });
+
+      expect(report).toMatchObject(expected);
+    },
+  );
+
+  it.each([
+    { decides: true, textChars: NO_PROSE_TEXT_LIMIT - 1 },
+    { decides: false, textChars: NO_PROSE_TEXT_LIMIT },
+  ])(
+    "lets a sensor decide only below 100 text characters ($textChars)",
+    ({ decides, textChars }) => {
+      const report = classifyResponse({
+        html: sensorPage("a".repeat(textChars)),
+        requestUrls: [],
+        response: htmlResponse(),
+      });
+
+      expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
+    },
+  );
+
+  it.each([
+    { decides: true, textChars: NO_PROSE_TEXT_LIMIT - 1 },
+    { decides: false, textChars: NO_PROSE_TEXT_LIMIT },
+  ])("counts $textChars text characters on a page at the HTML limit", ({ decides, textChars }) => {
+    const report = classifyResponse({
+      html: sensorPageAtHtmlLimit(textChars),
+      requestUrls: [],
+      response: htmlResponse(),
+    });
+
+    expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
+  });
+
+  it.each([
+    { decides: true, label: "99 named entities", text: "&eacute;".repeat(NO_PROSE_TEXT_LIMIT - 1) },
+    { decides: false, label: "100 named entities", text: "&eacute;".repeat(NO_PROSE_TEXT_LIMIT) },
+    { decides: true, label: "99 emoji", text: "\u{1F600}".repeat(NO_PROSE_TEXT_LIMIT - 1) },
+    { decides: false, label: "20 unknown entities", text: "&zzzz;".repeat(20) },
+    { decides: true, label: "99 legacy entities", text: "&copy".repeat(NO_PROSE_TEXT_LIMIT - 1) },
+  ])("counts $label as visible characters", ({ decides, text }) => {
+    const report = classifyResponse({
+      html: sensorPage(text),
+      requestUrls: [],
+      response: htmlResponse(),
+    });
+
+    expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
+  });
+
+  it.each([
+    { fires: true, htmlChars: HEAVY_SCRIPT_HTML_LIMIT },
+    { fires: false, htmlChars: HEAVY_SCRIPT_HTML_LIMIT + 1 },
+  ])("flags a $htmlChars character page as heavy script: $fires", ({ fires, htmlChars }) => {
+    const report = classifyResponse({
+      html: paddedTo(htmlChars, scriptElementOf(AMPLE_SCRIPT_CHARS)),
+      requestUrls: [],
+      response: htmlResponse(),
+    });
+
+    expect(ruleIdsOf(report).includes("thin_text_heavy_script")).toBe(fires);
+  });
+
+  it.each([
+    { emoji: HEAVY_SCRIPT_MIN_CHARS - EMPTY_SCRIPT_ELEMENT_CHARS - 1, fires: false },
+    { emoji: HEAVY_SCRIPT_MIN_CHARS - EMPTY_SCRIPT_ELEMENT_CHARS, fires: true },
+  ])("counts $emoji emoji of script as code points: heavy script $fires", ({ emoji, fires }) => {
+    const report = classifyResponse({
+      html: `<html><body><script>${"\u{1F600}".repeat(emoji)}</script></body></html>`,
+      requestUrls: [],
+      response: htmlResponse({ status: 403 }),
+    });
+
+    expect(ruleIdsOf(report).includes("thin_text_heavy_script")).toBe(fires);
+  });
+
+  it.each([
+    { fires: true, scriptChars: HEAVY_SCRIPT_TEXT_RATIO * RATIO_PROBE_TEXT_CHARS },
+    { fires: false, scriptChars: HEAVY_SCRIPT_TEXT_RATIO * RATIO_PROBE_TEXT_CHARS - 1 },
+  ])(
+    "flags $scriptChars script characters over 30 text characters as heavy script: $fires",
+    ({ fires, scriptChars }) => {
+      const report = classifyResponse({
+        html: scriptAndTextPage(scriptChars, RATIO_PROBE_TEXT_CHARS),
+        requestUrls: [],
+        response: htmlResponse(),
+      });
+
+      expect(ruleIdsOf(report).includes("thin_text_heavy_script")).toBe(fires);
+    },
+  );
+
+  it.each([
+    { markerEnd: DOM_SCAN_LIMIT, ruleIds: ["ticketmaster_eps_block"], verdict: "blocked" },
+    { markerEnd: DOM_SCAN_LIMIT + 1, ruleIds: [], verdict: "ok" },
+  ])(
+    "lets DOM rules see a marker that ends at character $markerEnd: $verdict",
+    ({ markerEnd, ruleIds, verdict }) => {
+      const report = classifyResponse({
+        html: blockMarkerEndingAt(markerEnd),
+        requestUrls: [],
+        response: htmlResponse(),
+      });
+
+      expect(report.verdict).toBe(verdict);
+      expect(ruleIdsOf(report)).toStrictEqual(ruleIds);
+    },
+  );
+});
+
+describe(classifyResponse, () => {
   it("withholds a passed challenge on a page with content and decides on an interstitial", () => {
     const served = classifyResponse({
       html: page(prose),
@@ -323,51 +508,6 @@ describe(classifyResponse, () => {
     expect(performance.now() - started).toBeLessThan(MAXIMUM_INPUT_BUDGET_MS);
   });
 
-  it.each([
-    { decides: true, textChars: gates.minProseChars - 1 },
-    { decides: false, textChars: gates.minProseChars },
-  ])(
-    "lets a sensor decide only below 100 text characters ($textChars)",
-    ({ decides, textChars }) => {
-      const report = classifyResponse({
-        html: sensorPage("a".repeat(textChars)),
-        requestUrls: [],
-        response: htmlResponse(),
-      });
-
-      expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
-    },
-  );
-
-  it.each([
-    { decides: true, label: "99 named entities", text: "&eacute;".repeat(gates.minProseChars - 1) },
-    { decides: false, label: "100 named entities", text: "&eacute;".repeat(gates.minProseChars) },
-    { decides: true, label: "99 emoji", text: "\u{1F600}".repeat(gates.minProseChars - 1) },
-    { decides: false, label: "20 unknown entities", text: "&zzzz;".repeat(20) },
-    { decides: true, label: "99 legacy entities", text: "&copy".repeat(gates.minProseChars - 1) },
-  ])("counts $label as visible characters", ({ decides, text }) => {
-    const report = classifyResponse({
-      html: sensorPage(text),
-      requestUrls: [],
-      response: htmlResponse(),
-    });
-
-    expect(ruleIdsOf(report).includes("perimeterx_app_id")).toBe(decides);
-  });
-
-  it.each([
-    { emoji: gates.minScriptChars - "<script></script>".length - 1, fires: false },
-    { emoji: gates.minScriptChars - "<script></script>".length, fires: true },
-  ])("counts $emoji emoji of script as code points: heavy script $fires", ({ emoji, fires }) => {
-    const report = classifyResponse({
-      html: `<html><body><script>${"\u{1F600}".repeat(emoji)}</script></body></html>`,
-      requestUrls: [],
-      response: htmlResponse({ status: 403 }),
-    });
-
-    expect(ruleIdsOf(report).includes("thin_text_heavy_script")).toBe(fires);
-  });
-
   it("lets nothing weak decide when the response was not captured as HTML", () => {
     const report = classifyResponse({
       html: undefined,
@@ -382,22 +522,6 @@ describe(classifyResponse, () => {
     expect(report.verdict).toBe("ok");
     expect(ruleIdsOf(report)).toContain("waf_status");
   });
-
-  it.each([
-    { decides: true, htmlChars: gates.interstitialMaxHtmlChars },
-    { decides: false, htmlChars: gates.interstitialMaxHtmlChars + 1 },
-  ])(
-    "treats a $htmlChars character document as interstitial-shaped: $decides",
-    ({ decides, htmlChars }) => {
-      const report = classifyResponse({
-        html: paddedTo(htmlChars, "<script>window._cf_chl_opt = {};</script>"),
-        requestUrls: [],
-        response: htmlResponse(),
-      });
-
-      expect(ruleIdsOf(report).includes("cf_chl_opt")).toBe(decides);
-    },
-  );
 
   it("keeps query values and token headers out of evidence", () => {
     const report = classifyResponse({
