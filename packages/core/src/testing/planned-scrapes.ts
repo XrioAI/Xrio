@@ -17,7 +17,9 @@ import type { ProxyEndpoint, SourceDocument } from "../types.ts";
 
 type Dependencies = Parameters<typeof createScrapes>[0];
 
-export type PlanningDependencies = Partial<Pick<Dependencies, "fonts" | "sessions" | "random">> & {
+export type PlanningDependencies = Partial<
+  Pick<Dependencies, "fonts" | "sessions" | "random" | "proxyInfo">
+> & {
   readonly host?: HostFacts["snapshotFor"];
   readonly retire?: Partial<RetireSteps>;
 };
@@ -75,6 +77,7 @@ export const plannedScrapes = (
       overrides.host === undefined
         ? hostFactsFor(defaultCacheDir())
         : { snapshotFor: overrides.host },
+    proxyInfo: overrides.proxyInfo,
     random: overrides.random,
     sessions: {
       hold: async (intent, checks, deadline) => {

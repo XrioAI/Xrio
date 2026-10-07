@@ -1,5 +1,6 @@
 import { createAdmission } from "./admission.ts";
 import { hostCacheRoot } from "./cache-dir.ts";
+import { loadXrioConfig } from "./config.ts";
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
 import { createScrapes } from "./coordinator.ts";
 import type { Scrapes } from "./coordinator.ts";
@@ -31,6 +32,8 @@ export type {
 
 export { isXrioError, XrioError } from "./errors.ts";
 
+export type { XrioConfig } from "./config.ts";
+
 export type {
   BrowserIdentityReport,
   Coverage,
@@ -50,16 +53,11 @@ export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts"
 
 export type {
   ClientOptions,
-  DisplayOptions,
-  HardwareOptions,
   ModeOptions,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
-  ScreenSize,
   StructuredContent,
-  Taskbar,
-  WindowSize,
 } from "./types.ts";
 
 const formats = {
@@ -84,6 +82,7 @@ export class XrioClient {
     this.#scrapes = createScrapes({
       admission: createAdmission(this.#defaults.maxBrowsers),
       comparisonBinary: this.#defaults.browser.browserPath,
+      config: loadXrioConfig(),
       fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
       host: this.#hostFacts,
       sessions: anonymousSessions(),

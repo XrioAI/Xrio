@@ -9,6 +9,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { resolveProfile } from "wreq-js";
 
 import { XrioClient } from "../client.ts";
+import { startDeadline } from "../deadline.ts";
+import { httpIdentity } from "../humanizer/humanizer.ts";
+import { parseProxy } from "../options.ts";
 import { startFakeHttpProxy, startFakeSocksProxy } from "../testing/fake-proxies.ts";
 import {
   closedLoopbackPort,
@@ -16,6 +19,22 @@ import {
   startFixtureServer,
 } from "../testing/fixture-server.ts";
 import type { FixtureServer } from "../testing/fixture-server.ts";
+import { loadHttpDocument } from "./http.ts";
+
+const fetchThroughProxy = async (url: string, proxy?: string, locale = "en-US") => {
+  using deadline = startDeadline(10_000);
+
+  return await loadHttpDocument(
+    {
+      capabilities: null,
+      identity: httpIdentity({ locale }),
+      kind: "http",
+      proxy: proxy === undefined ? undefined : parseProxy(proxy),
+      url: new URL(url),
+    },
+    deadline,
+  );
+};
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
@@ -297,13 +316,8 @@ describe("http mode", () => {
       tunnelTo: fixturePort,
     });
 
-    const proxied = new XrioClient({
-      mode: "http",
-      proxy: proxy.url.replace("://", "://user:p%40ss@"),
-    });
-
     await expect(
-      proxied.scrape({ format: "html", url: "http://origin.test/" }),
+      fetchThroughProxy("http://origin.test/", proxy.url.replace("://", "://user:p%40ss@")),
     ).resolves.toMatchObject({
       status: 200,
       url: "http://origin.test/",
@@ -320,11 +334,7 @@ describe("http mode", () => {
     });
 
     await expect(
-      client.scrape({
-        format: "html",
-        proxy: proxy.url.replace("://", "://user:secret@"),
-        url: "http://origin.test/",
-      }),
+      fetchThroughProxy("http://origin.test/", proxy.url.replace("://", "://user:secret@")),
     ).resolves.toMatchObject({ status: 200 });
     expect(proxy.requests).toStrictEqual([
       { authority: "origin.test", authorization: "user:secret" },
@@ -340,9 +350,9 @@ describe("http mode", () => {
     async ({ code, connectStatus }) => {
       await using proxy = await startFakeHttpProxy({ connectStatus, tunnelTo: fixturePort });
 
-      await expect(
-        client.scrape({ format: "html", proxy: proxy.url, url: "https://origin.test/" }),
-      ).rejects.toMatchObject({ code });
+      await expect(fetchThroughProxy("https://origin.test/", proxy.url)).rejects.toMatchObject({
+        code,
+      });
     },
   );
 
@@ -480,26 +490,23 @@ describe("http mode edge responses", () => {
 
   it.each([
     {
-      clientLocale: "de-DE",
       header: "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
-      locale: undefined,
+      locale: "de-DE",
       reported: "de-DE",
     },
     {
-      clientLocale: "ja-JP",
       header: "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
       locale: "fr-FR",
       reported: "fr-FR",
     },
     {
-      clientLocale: undefined,
       header: "en-AU,en-US;q=0.9,en;q=0.8",
       locale: "en-AU",
       reported: "en-AU",
     },
   ])(
-    "sends the pinned locale's Accept-Language in Chrome's position and reports $reported",
-    async ({ clientLocale, header, locale, reported }) => {
+    "sends the planned locale's Accept-Language in Chrome's position and reports $reported",
+    async ({ header, locale, reported }) => {
       const requestHeads: string[] = [];
 
       const { origin, server } = await startRawOrigin((socket, requestHead) => {
@@ -508,11 +515,7 @@ describe("http mode edge responses", () => {
       });
 
       try {
-        const result = await new XrioClient({ locale: clientLocale, mode: "http" }).scrape({
-          format: "html",
-          locale,
-          url: `${origin}/`,
-        });
+        const result = await fetchThroughProxy(`${origin}/`, undefined, locale);
 
         expect(result.identity).toMatchObject({ locale: reported, mode: "http" });
       } finally {

@@ -12,6 +12,7 @@ import { listenOnLoopback } from "./fixture-server.ts";
 export interface FakeProxy extends AsyncDisposable {
   readonly url: string;
   readonly requests: { authority: string; authorization: string | undefined }[];
+  readonly openConnections: number;
 }
 
 export interface FakeProxyBehaviour {
@@ -101,6 +102,11 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
     });
 
     if (behaviour.silent === true) {
+      socket.resume();
+      socket.once("end", () => {
+        socket.destroy();
+      });
+
       return;
     }
 
@@ -162,6 +168,9 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
 
   return {
     [Symbol.asyncDispose]: disposeServer(server, sockets),
+    get openConnections() {
+      return sockets.size;
+    },
     requests,
     url: `${behaviour.secure === true ? "https" : "http"}://127.0.0.1:${port}`,
   };
@@ -296,6 +305,9 @@ export const startFakeSocksProxy = async (behaviour: FakeProxyBehaviour): Promis
 
   return {
     [Symbol.asyncDispose]: disposeServer(server, sockets),
+    get openConnections() {
+      return sockets.size;
+    },
     requests,
     url: `socks5://127.0.0.1:${port}`,
   };

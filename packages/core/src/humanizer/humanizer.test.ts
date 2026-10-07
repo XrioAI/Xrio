@@ -33,10 +33,7 @@ describe(httpIdentity, () => {
   ])("hands the http client the Chrome 149 Linux profile and $locale's header", (pins) => {
     expect(
       httpIdentity({
-        display: undefined,
-        hardware: undefined,
         locale: pins.locale,
-        timezone: undefined,
       }).inputs,
     ).toStrictEqual({
       browser: "chrome_149",
@@ -46,13 +43,10 @@ describe(httpIdentity, () => {
     });
   });
 
-  it("refuses a locale whose Chrome list is unmeasured, which the options never let through", () => {
+  it("refuses a locale whose Chrome list is unmeasured, at the final emission boundary", () => {
     expect(() =>
       httpIdentity({
-        display: undefined,
-        hardware: undefined,
         locale: "sw-KE",
-        timezone: undefined,
       }),
     ).toThrow("Xrio has not measured Chrome's language list for sw-KE.");
   });

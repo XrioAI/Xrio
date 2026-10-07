@@ -182,7 +182,7 @@ export interface HttpPlan {
   readonly report: (client: HostCapabilities | null) => HttpIdentityReport;
 }
 
-export const httpIdentity = (pins: IdentityIntent): HttpPlan => {
+export const httpIdentity = (pins: Pick<IdentityIntent, "locale">): HttpPlan => {
   const { header, tag } = presentedLocale(pins);
 
   return {

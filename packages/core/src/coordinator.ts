@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { Admission } from "./admission.ts";
 import { createAnswer } from "./answer.ts";
 import type { Answer } from "./answer.ts";
+import type { XrioConfig } from "./config.ts";
 import type { Deadline } from "./deadline.ts";
 import { inScrapeContext, timeStage } from "./diagnostics.ts";
 import { clientClosed } from "./errors.ts";
@@ -10,18 +11,20 @@ import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
 import { httpIdentity, planIdentity } from "./humanizer/humanizer.ts";
-import { presentedLocale } from "./humanizer/surfaces.ts";
+import { identityForVisit, presentedLocale } from "./humanizer/surfaces.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import type { HeldDeadline } from "./lifetime.ts";
-import { refuseRecordOverrides } from "./options.ts";
+import { parseProxy, refuseRecordOverrides } from "./options.ts";
 import { outcomeOf, scrapeError } from "./outcome.ts";
 import type { ScrapeOutcome } from "./outcome.ts";
+import { lookupProxyInfo } from "./proxy/info.ts";
+import { ProxyManager } from "./proxy/manager.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
 import type { SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
 import type { FinishedVisit, Sources, VisitPlan } from "./sources/visit.ts";
-import type { SourceDocument } from "./types.ts";
+import type { ProxyEndpoint, SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
   readonly answer: Promise<SourceDocument>;
@@ -42,6 +45,8 @@ interface Dependencies {
   readonly sources: Sources;
   readonly fonts: FontEvidenceStore;
   readonly random: (size: number) => Uint8Array;
+  readonly configuredProxy: ProxyEndpoint | undefined;
+  readonly proxyInfo: typeof lookupProxyInfo;
 }
 
 interface VisitContext {
@@ -67,34 +72,39 @@ const comparisonFacts = async ({
 
 const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   const { dependencies, held, hold, intent } = context;
+  const proxy = intent.route ?? dependencies.configuredProxy;
 
   if (intent.source.mode === "http") {
     return {
       capabilities: await comparisonFacts(context),
-      identity: httpIdentity(intent.identity),
+      identity: httpIdentity(identityForVisit(intent.identity, hold.device)),
       kind: "http",
-      proxy: intent.route,
+      proxy,
       url: intent.url,
     };
   }
 
+  const route = routeFor(proxy);
+  const observation = proxy === undefined ? undefined : await dependencies.proxyInfo(proxy, held);
+
+  held.throwIfExpired();
+  const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
+
   const capabilities = await dependencies.host.snapshotFor(intent.source.browserPath, held);
-  const scrape = { mode: intent.source.mode, pins: intent.identity };
+  const scrape = { mode: intent.source.mode, pins };
 
   if (hold.device.kind === "record") {
-    refuseRecordOverrides(hold.device.record, scrape);
+    refuseRecordOverrides(hold.device.record, { ...scrape, pins: intent.identity });
   }
 
   const fonts = await dependencies.fonts.claim(
     intent.source.browserPath,
     capabilities,
-    presentedLocale(intent.identity).tag,
+    presentedLocale(pins).tag,
     held,
   );
 
   try {
-    const route = routeFor(intent.route);
-
     const identity = planIdentity({
       ...scrape,
       capabilities:
@@ -102,7 +112,8 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
           ? capabilities
           : { ...capabilities, fontEvidence: fonts.evidence },
       device: hold.device,
-      exit: { facts: exitFactsFor(route), route: route.kind },
+      exit: { facts: exitFactsFor(route, observation), route: route.kind },
+      followExit: route.kind === "proxy",
       hostZone: readHostZone(),
     });
 
@@ -112,7 +123,7 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
       fonts,
       identity,
       kind: "browser",
-      proxy: intent.route,
+      proxy,
       url: intent.url,
     };
   } catch (error) {
@@ -200,9 +211,22 @@ const coordinate = async (
 };
 
 export const createScrapes = (
-  dependencies: Omit<Dependencies, "random"> & { readonly random?: Dependencies["random"] },
+  dependencies: Omit<Dependencies, "random" | "configuredProxy" | "proxyInfo"> & {
+    readonly random?: Dependencies["random"];
+    readonly config?: XrioConfig;
+    readonly proxyInfo?: Dependencies["proxyInfo"];
+  },
 ): Scrapes => {
-  const managers: Dependencies = { ...dependencies, random: dependencies.random ?? randomBytes };
+  const config = dependencies.config?.proxy;
+  const proxy = config === undefined ? undefined : new ProxyManager(config);
+
+  const managers: Dependencies = {
+    ...dependencies,
+    configuredProxy: proxy === undefined ? undefined : parseProxy(proxy.getProxyConnectionString()),
+    proxyInfo: dependencies.proxyInfo ?? lookupProxyInfo,
+    random: dependencies.random ?? randomBytes,
+  };
+
   const runs = new Set<Promise<void>>();
   let closed = false;
   let closing: Promise<void> | undefined;

@@ -108,14 +108,6 @@ export const CHROME_ACCEPT_LANGUAGES = {
 const isShippedLocale = (tag: string): tag is keyof typeof CHROME_ACCEPT_LANGUAGES =>
   Object.hasOwn(CHROME_ACCEPT_LANGUAGES, tag);
 
-export const measuredLocalesFor = (tag: string): readonly string[] => {
-  const [language] = tag.split("-");
-
-  return Object.keys(CHROME_ACCEPT_LANGUAGES).filter(
-    (measured) => measured.split("-")[0] === language,
-  );
-};
-
 export const chromeAcceptLanguages = (tag: string): readonly string[] | undefined =>
   isShippedLocale(tag) ? CHROME_ACCEPT_LANGUAGES[tag] : undefined;
 

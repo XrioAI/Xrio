@@ -42,6 +42,14 @@ describe("calls-go-down lint", () => {
   it.each([
     {
       filename: "sources/browser/runtime.ts",
+      source: "import { ProxyManager } from '../../proxy/manager.ts';",
+    },
+    {
+      filename: "humanizer/humanizer.ts",
+      source: "import { lookupProxyInfo } from '../proxy/info.ts';",
+    },
+    {
+      filename: "sources/browser/runtime.ts",
       source: "import { sessions } from '../../sessions/session.ts';",
     },
     {

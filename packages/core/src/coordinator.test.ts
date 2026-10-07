@@ -4,20 +4,26 @@ import { createAdmission } from "./admission.ts";
 import type { Admission } from "./admission.ts";
 import { createAnswer } from "./answer.ts";
 import { classifyResponse } from "./blocks/classify.ts";
+import type { XrioConfig } from "./config.ts";
 import { createScrapes } from "./coordinator.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { XrioError } from "./errors.ts";
 import { httpIdentity } from "./humanizer/humanizer.ts";
 import { HeldDeadline } from "./lifetime.ts";
-import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
+import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { outcomeOf } from "./outcome.ts";
+import type { lookupProxyInfo, ProxyObservation } from "./proxy/info.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
-import type { Visit } from "./sources/visit.ts";
+import { loadHttpDocument } from "./sources/http.ts";
+import type { Sources, Visit, VisitPlan } from "./sources/visit.ts";
+import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { fixedRandom } from "./testing/fixed-seed.ts";
+import { startFixtureServer } from "./testing/fixture-server.ts";
 import { manualClock } from "./testing/manual-clock.ts";
 import { noPins } from "./testing/no-pins.ts";
-import type { SourceDocument } from "./types.ts";
+import { proxyObservation } from "./testing/proxy-observation.ts";
+import type { ProxyEndpoint, SourceDocument } from "./types.ts";
 
 const intent = resolveScrapeIntent(
   { format: "html", url: "https://example.com" },
@@ -46,6 +52,9 @@ const firstDocument = documentFor("<p>First</p>");
 const secondDocument = documentFor("<p>Second</p>");
 
 interface HarnessOptions {
+  readonly config?: XrioConfig;
+  readonly proxyInfo?: typeof lookupProxyInfo;
+  readonly sources?: Sources;
   readonly admission?: Admission;
   readonly visits?: readonly Visit[];
   readonly failureAt?: string;
@@ -56,6 +65,8 @@ interface HarnessOptions {
 
 const harness = (options: HarnessOptions = {}) => {
   const events: string[] = [];
+  const plans: VisitPlan[] = [];
+  const fontLocales: string[] = [];
   const failure = new XrioError("NETWORK_ERROR", "The fake stage failed.", { details: undefined });
   const owner = new AbortController();
   let visitIndex = 0;
@@ -86,8 +97,10 @@ const harness = (options: HarnessOptions = {}) => {
       },
     },
     comparisonBinary: "/comparison",
+    config: options.config,
     fonts: {
-      claim: async () => {
+      claim: async (_binary, _capabilities, locale) => {
+        fontLocales.push(locale);
         stage("plan");
 
         return await Promise.resolve({
@@ -106,6 +119,7 @@ const harness = (options: HarnessOptions = {}) => {
         return await Promise.resolve({ permittedCpus: 32, platform: "linux" });
       },
     },
+    proxyInfo: options.proxyInfo,
     random: fixedRandom,
     sessions: {
       hold: async (_intent, checks) => {
@@ -134,10 +148,16 @@ const harness = (options: HarnessOptions = {}) => {
     sources: {
       close: async () => {
         stage("sources-close");
+        await options.sources?.close();
         await Promise.resolve();
       },
-      start: () => {
+      start: (plan, slot, held) => {
         stage("start");
+        plans.push(plan);
+
+        if (options.sources !== undefined) {
+          return options.sources.start(plan, slot, held);
+        }
 
         if (options.throwOnStart === true) {
           throw failure;
@@ -160,11 +180,269 @@ const harness = (options: HarnessOptions = {}) => {
     },
   });
 
-  return { events, failure, owner, scrapes };
+  return { events, failure, fontLocales, owner, plans, scrapes };
 };
 
 const relevantEvents = (events: readonly string[]) =>
   events.filter((event) => !event.startsWith("binary:"));
+
+describe("proxy and identity integration", () => {
+  it.each([
+    { clientProxy: undefined, methodProxy: undefined, username: /^configured-\d{8}$/u },
+    {
+      clientProxy: "http://client:secret@proxy.test",
+      methodProxy: undefined,
+      username: /^client$/u,
+    },
+    {
+      clientProxy: "http://client:secret@proxy.test",
+      methodProxy: "http://method:secret@proxy.test",
+      username: /^method$/u,
+    },
+  ])(
+    "selects a whole route for $clientProxy / $methodProxy",
+    async ({ clientProxy, methodProxy, username }) => {
+      const config: XrioConfig = {
+        proxy: { url: "http://configured-{session}:secret@proxy.test" },
+      };
+
+      const before = structuredClone(config);
+
+      const { plans, scrapes } = harness({
+        config,
+        proxyInfo: () => {
+          throw new Error("HTTP scrapes must not call geolocation.");
+        },
+      });
+
+      using deadline = startDeadline(1000);
+
+      const request = resolveScrapeIntent(
+        { format: "html", proxy: methodProxy, url: "https://example.com" },
+        resolveClientOptions({ mode: "http", proxy: clientProxy }),
+      );
+
+      try {
+        await scrapes.start(request, deadline).answer;
+        expect(plans[0].proxy?.credentials?.username).toMatch(username);
+        expect(config).toStrictEqual(before);
+      } finally {
+        await scrapes.close();
+      }
+    },
+  );
+
+  it.each([
+    { inferred: "de-DE", selected: "de-DE" },
+    { inferred: "ar-JO", selected: "en-US" },
+  ])("selects $selected before fonts for an inferred $inferred", async ({ inferred, selected }) => {
+    const { fontLocales, plans, scrapes } = harness({
+      proxyInfo: async () => await Promise.resolve({ ...proxyObservation, locale: inferred }),
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start({ ...browserIntent, route: parseProxy("http://proxy.test") }, deadline)
+        .answer;
+      const [plan] = plans;
+
+      if (plan.kind !== "browser") {
+        throw new Error("Expected a browser plan.");
+      }
+
+      expect(fontLocales).toStrictEqual([selected]);
+      expect(plan.identity.chosen.surfaces).toMatchObject({
+        locale: { tag: selected },
+        timezone: { source: "exit", zone: "Europe/Berlin" },
+      });
+      expect(plan.identity.chosen.exit).toMatchObject({
+        facts: {
+          address: proxyObservation.exitIp,
+          destination: proxyObservation.destination,
+          generation: 0,
+          kind: "observed",
+          observedAt: proxyObservation.observedAt,
+          provider: proxyObservation.provider,
+        },
+        route: "proxy",
+      });
+      expect(JSON.stringify(plan.identity.chosen)).not.toContain("secret");
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("keeps direct browser defaults and never looks up an exit", async () => {
+    const { fontLocales, plans, scrapes } = harness({
+      proxyInfo: () => {
+        throw new Error("Direct routes must not call geolocation.");
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(browserIntent, deadline).answer;
+      const [plan] = plans;
+
+      if (plan.kind !== "browser") {
+        throw new Error("Expected a browser plan.");
+      }
+
+      expect(fontLocales).toStrictEqual(["en-US"]);
+      expect(plan.identity.chosen.surfaces.timezone.source).toBe("host");
+      expect(plan.identity.chosen.exit).toStrictEqual({
+        facts: { kind: "unknown" },
+        route: "direct",
+      });
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it.each(["PROXY_AUTH_FAILED", "PROXY_UNREACHABLE", "PROXY_INFO_UNAVAILABLE"] as const)(
+    "fails before host probes and browser launch on %s, without retrying",
+    async (code) => {
+      const failure = new XrioError(code, "Proxy lookup failed.", { details: undefined });
+      let lookups = 0;
+
+      const { events, plans, scrapes } = harness({
+        proxyInfo: () => {
+          lookups += 1;
+
+          throw failure;
+        },
+      });
+
+      using deadline = startDeadline(1000);
+
+      const run = scrapes.start(
+        { ...browserIntent, route: parseProxy("http://proxy.test") },
+        deadline,
+      );
+
+      await expect(run.answer).rejects.toBe(failure);
+      await scrapes.close();
+      expect({ lookups, plans, probes: events.filter((event) => event === "host") }).toStrictEqual({
+        lookups: 1,
+        plans: [],
+        probes: [],
+      });
+      expect(events).toContain("slot-release");
+      expect(events).toContain("hold-release");
+    },
+  );
+
+  it("keeps concurrent observations attached to the selected endpoint", async () => {
+    const first = Promise.withResolvers<ProxyObservation>();
+    const second = Promise.withResolvers<ProxyObservation>();
+    const lookedUp: (string | ProxyEndpoint)[] = [];
+
+    const { plans, scrapes } = harness({
+      proxyInfo: async (endpoint) => {
+        lookedUp.push(endpoint);
+
+        return await (lookedUp.length === 1 ? first.promise : second.promise);
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    const a = scrapes.start(
+      { ...browserIntent, route: parseProxy("http://a:secret@proxy.test") },
+      deadline,
+    );
+
+    const b = scrapes.start(
+      { ...browserIntent, route: parseProxy("http://b:secret@proxy.test") },
+      deadline,
+    );
+
+    second.resolve({ ...proxyObservation, locale: "fr-FR" });
+    await b.answer;
+    first.resolve(proxyObservation);
+    await a.answer;
+    await scrapes.close();
+
+    expect(
+      plans.map((plan) => [
+        plan.proxy?.credentials?.username,
+        plan.kind === "browser" ? plan.identity.chosen.surfaces.locale.tag : null,
+      ]),
+    ).toStrictEqual([
+      ["b", "fr-FR"],
+      ["a", "de-DE"],
+    ]);
+    expect(plans[0].proxy).toBe(lookedUp[1]);
+    expect(plans[1].proxy).toBe(lookedUp[0]);
+  });
+
+  it("sends en-US through the HTTP relay without a lookup and keeps the configured session after a block", async () => {
+    const headers: (string | undefined)[] = [];
+
+    await using origin = await startFixtureServer((request, response) => {
+      headers.push(request.headers["accept-language"]);
+      response
+        .writeHead(403, { "cf-mitigated": "challenge", "content-type": "text/html" })
+        .end("<p>Blocked</p>");
+    });
+
+    await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+
+    const { plans, scrapes } = harness({
+      config: { proxy: { url: proxy.url.replace("://", "://user-{session}:secret@") } },
+      proxyInfo: () => {
+        throw new Error("HTTP scrapes must not call geolocation.");
+      },
+      sources: {
+        close: async () => {
+          await Promise.resolve();
+        },
+        start: (plan, _slot, deadline) => {
+          if (plan.kind !== "http") {
+            throw new Error("Expected an HTTP plan.");
+          }
+
+          const document = loadHttpDocument(plan, deadline);
+
+          return { closed: document.then(() => ({ exited: true })), document };
+        },
+      },
+    });
+
+    using deadline = startDeadline(10_000);
+
+    try {
+      const request = { ...intent, url: new URL("http://origin.test/") };
+      const first = await scrapes.start(request, deadline).answer;
+      const second = await scrapes.start(request, deadline).answer;
+
+      expect({
+        identity: first.identity,
+        verdicts: [first.block.verdict, second.block.verdict],
+      }).toMatchObject({
+        identity: { locale: "en-US", mode: "http" },
+        verdicts: ["blocked", "blocked"],
+      });
+      expect(JSON.stringify(first.identity)).not.toMatch(/secret|xrio:|127\.0\.0\.1/u);
+      expect(headers).toStrictEqual(Array.from({ length: 2 }, () => "en-US,en;q=0.9"));
+      const endpoint = plans[0].proxy;
+      expect({
+        requests: proxy.requests.length,
+        sameRoute: plans[1].proxy === plans[0].proxy,
+      }).toStrictEqual({ requests: 2, sameRoute: true });
+      expect(proxy.requests.map(({ authorization }) => authorization)).toStrictEqual(
+        Array.from(
+          { length: 2 },
+          () => `Basic ${btoa(`${endpoint?.credentials?.username}:secret`)}`,
+        ),
+      );
+    } finally {
+      await scrapes.close();
+    }
+  });
+});
 
 describe(createScrapes, () => {
   it.each(["document", "timeout"] as const)(

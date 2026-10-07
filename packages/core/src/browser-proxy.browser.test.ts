@@ -16,7 +16,6 @@ import { inspect } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
-import { XrioClient } from "./client.ts";
 import { startDeadline } from "./deadline.ts";
 import { isXrioError } from "./errors.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
@@ -41,6 +40,9 @@ import type { FakeProxy } from "./testing/fake-proxies.ts";
 import { fixedDevice } from "./testing/fixed-seed.ts";
 import { closedLoopbackPort, listenOnLoopback } from "./testing/fixture-server.ts";
 import { noPins } from "./testing/no-pins.ts";
+import { plannedScrapes } from "./testing/planned-scrapes.ts";
+import type { PlannedScrapes } from "./testing/planned-scrapes.ts";
+import { proxyObservation } from "./testing/proxy-observation.ts";
 import type { ScrapeResult } from "./types.ts";
 
 const RUNS_HEADLESS = process.env.XRIO_TEST_MODES?.split(",").includes("headless") ?? true;
@@ -306,12 +308,36 @@ let halfClosingPort: number;
 
 let tlsFixturePort: number;
 
-let client: XrioClient | undefined;
+const proxyEndpointOf = (url: string) => {
+  const { route } = resolveClientOptions({ mode: "http", proxy: url });
+
+  if (route === undefined) {
+    throw new Error("Expected a proxy endpoint.");
+  }
+
+  return route;
+};
+
+let client: PlannedScrapes | undefined;
+
+// These transport tests fix metadata; coordinator and public-client tests cover lookup failures.
+const testProxyInfo = async () => await Promise.resolve(proxyObservation);
 
 const scrape = async (url: string, proxy?: string, timeoutMs = SCRAPE_TIMEOUT_MS) => {
-  client ??= new XrioClient({ browserPath: chromePath(), mode: "headless" });
+  client ??= plannedScrapes(cdpDriver, 1, { proxyInfo: testProxyInfo });
+  using deadline = startDeadline(timeoutMs);
 
-  return await client.scrape({ format: "html", proxy, timeoutMs, url });
+  const document = await client.capture({
+    browserArgs: [],
+    browserPath: chromePath(),
+    deadline,
+    mode: "headless",
+    pins: noPins,
+    proxy: proxy === undefined ? undefined : proxyEndpointOf(proxy),
+    url: new URL(url),
+  });
+
+  return { ...document, data: document.html, format: "html" as const };
 };
 
 const rejectionOf = async (pending: Promise<unknown>) => {
@@ -446,16 +472,6 @@ const navigationParamsOf = (frames: readonly PipeFrame[]): object[] =>
     return isNavigateCommand(command) ? [command.params] : [];
   });
 
-const proxyEndpointOf = (url: string) => {
-  const { route } = resolveClientOptions({ mode: "http", proxy: url });
-
-  if (route === undefined) {
-    throw new Error("Expected a proxy endpoint.");
-  }
-
-  return route;
-};
-
 const renderThroughRelay = async (proxy: string, url: string) => {
   using deadline = startDeadline(SCRAPE_TIMEOUT_MS);
   await using relay = await startRelay(proxyEndpointOf(proxy), deadline, "loopback");
@@ -537,6 +553,10 @@ describe.runIf(RUNS_HEADLESS)("a headless scrape through a proxy returns the pag
     ]);
     expect(authorizationsSeenBy(proxy)).toStrictEqual(new Set([basic(credentials)]));
     expect(leaksOf(result)).toStrictEqual(["proxy", "disable_non_proxied_udp"]);
+    expect(result.identity).toMatchObject({
+      observed: { languages: ["de-DE", "de", "en-US", "en"], timeZone: "Europe/Berlin" },
+      surfaces: { timezone: { source: "exit", zone: "Europe/Berlin" } },
+    });
   });
 
   it("through a SOCKS5 proxy, which receives the relay's credentials and the target's name", async () => {
@@ -823,18 +843,22 @@ describe.runIf(RUNS_HEADLESS)("the proxy password", () => {
   it("never shows in a launch failure whose stderr tail holds Chrome's whole argv", async () => {
     const password = `s3cret-${runId()}`;
 
-    await using failing = new XrioClient({
-      browserPath: await fakeChromePath("argv-on-stderr"),
-      mode: "headless",
-    });
+    const failing = plannedScrapes(cdpDriver, 1, { proxyInfo: testProxyInfo });
+    using deadline = startDeadline(SCRAPE_TIMEOUT_MS);
 
     const failure = await rejectionOf(
-      failing.scrape({
-        format: "html",
-        proxy: `http://user:${password}@127.0.0.1:${await closedLoopbackPort()}`,
-        url: "http://fixture.test/page",
+      failing.capture({
+        browserArgs: [],
+        browserPath: await fakeChromePath("argv-on-stderr"),
+        deadline,
+        mode: "headless",
+        pins: noPins,
+        proxy: proxyEndpointOf(`http://user:${password}@127.0.0.1:${await closedLoopbackPort()}`),
+        url: new URL("http://fixture.test/page"),
       }),
     );
+
+    await failing.close();
 
     if (!isXrioError(failure, "BROWSER_LAUNCH_FAILED")) {
       throw failure;

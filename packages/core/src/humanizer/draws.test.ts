@@ -15,14 +15,7 @@ import {
 import { forkWithKnobs } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
 import type { DeviceRecord, Observation } from "./contracts.ts";
-import {
-  displayMisfit,
-  drawDisplay,
-  drawHardware,
-  seedOf,
-  windowBounds,
-  workAreaOf,
-} from "./draws.ts";
+import { drawDisplay, drawHardware, seedOf, windowBounds, workAreaOf } from "./draws.ts";
 import type { DrawnDisplay, HardwareDraw } from "./draws.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityPlan } from "./humanizer.ts";
@@ -776,10 +769,7 @@ describe("a display the caller narrows", () => {
       }),
     );
 
-    expect({ misfit: displayMisfit(tables), windows }).toStrictEqual({
-      misfit: undefined,
-      windows: new Set(["maximized 100", "maximized 88", "maximized 92"]),
-    });
+    expect(windows).toStrictEqual(new Set(["maximized 100", "maximized 88", "maximized 92"]));
   });
 
   it("draws any of Xrio's layouts on a pinned screen too narrow for the 1265 px floor", () => {

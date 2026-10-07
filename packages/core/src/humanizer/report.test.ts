@@ -191,11 +191,7 @@ describe("the identity report", () => {
   });
 
   it.each(["fr-FR", "ja-JP"])("reports the locale %s an http scrape was pinned to", (locale) => {
-    expect(
-      httpIdentity({ display: undefined, hardware: undefined, locale, timezone: undefined }).report(
-        null,
-      ),
-    ).toMatchObject({
+    expect(httpIdentity({ locale }).report(null)).toMatchObject({
       locale,
       mode: "http",
     });
