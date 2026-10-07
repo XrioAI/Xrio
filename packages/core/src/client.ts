@@ -1,15 +1,19 @@
+import { createAdmission } from "./admission.ts";
+import { hostCacheRoot } from "./cache-dir.ts";
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
+import { createScrapes } from "./coordinator.ts";
+import type { Scrapes } from "./coordinator.ts";
 import { startDeadline } from "./deadline.ts";
-import { clientClosed } from "./errors.ts";
-import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
-import { createBrowsers } from "./sources/browser/browsers.ts";
-import type { Browsers } from "./sources/browser/browsers.ts";
+import type { ClientDefaults } from "./intent.ts";
+import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
+import { anonymousSessions } from "./sessions/session.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
-import { loadHttpDocument } from "./sources/http.ts";
+import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
+import { hostFactsFor } from "./sources/browser/host-facts.ts";
+import type { ClientHostFacts } from "./sources/browser/host-facts.ts";
+import { createSources } from "./sources/source.ts";
 import type {
-  ClientDefaults,
   ClientOptions,
-  DocumentRequest,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
@@ -27,15 +31,35 @@ export type {
 
 export { isXrioError, XrioError } from "./errors.ts";
 
+export type {
+  BrowserIdentityReport,
+  Coverage,
+  CoverageReason,
+  CoveredSurface,
+  HttpIdentityReport,
+  IdentityCoverage,
+  IdentityReport,
+  ObservedIdentity,
+} from "./humanizer/report.ts";
+
+export type { SurfaceChoices } from "./humanizer/surfaces.ts";
+
+export type { IdentityMismatch, IdentityTell } from "./humanizer/verify.ts";
+
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
 
 export type {
   ClientOptions,
+  DisplayOptions,
+  HardwareOptions,
   ModeOptions,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
+  ScreenSize,
   StructuredContent,
+  Taskbar,
+  WindowSize,
 } from "./types.ts";
 
 const formats = {
@@ -50,30 +74,34 @@ const formats = {
 
 export class XrioClient {
   readonly #defaults: ClientDefaults;
-  readonly #browsers: Browsers;
-  readonly #inFlight = new Set<Promise<unknown>>();
-  #closed = false;
+  readonly #hostFacts: ClientHostFacts;
+  readonly #scrapes: Scrapes;
 
   constructor(options: ClientOptions) {
     this.#defaults = resolveClientOptions(options);
-    this.#browsers = createBrowsers(cdpDriver, this.#defaults.maxBrowsers);
+    this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
+
+    this.#scrapes = createScrapes({
+      admission: createAdmission(this.#defaults.maxBrowsers),
+      comparisonBinary: this.#defaults.browser.browserPath,
+      fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
+      host: this.#hostFacts,
+      sessions: anonymousSessions(),
+      sources: createSources(cdpDriver),
+    });
   }
 
   scrape<Format extends ScrapeFormat>(
     options: ScrapeOptions<Format>,
   ): Promise<ScrapeResult<Format>>;
   async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
-    if (this.#closed) {
-      throw clientClosed();
-    }
-
-    const { format, signal, source, timeoutMs } = resolveScrapeOptions(options, this.#defaults);
-    using deadline = startDeadline(timeoutMs, signal);
-
-    const document = await this.#loadDocument({ ...source, deadline });
+    this.#scrapes.assertOpen();
+    const intent = resolveScrapeIntent(options, this.#defaults);
+    using deadline = startDeadline(intent.timeoutMs, intent.signal);
+    const document = await this.#scrapes.start(intent, deadline).answer;
 
     deadline.throwIfExpired();
-    const content = formats[format](document);
+    const content = formats[intent.format](document);
     deadline.throwIfExpired();
 
     return {
@@ -81,33 +109,18 @@ export class XrioClient {
       block: document.block,
       cookies: document.cookies,
       headers: document.headers,
+      identity: document.identity,
       status: document.status,
       url: document.url,
     };
   }
 
   async close(): Promise<void> {
-    this.#closed = true;
-    await Promise.allSettled([this.#browsers.close(), ...this.#inFlight]);
+    await this.#scrapes.close();
+    await this.#hostFacts.settle();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close();
-  }
-
-  async #loadDocument(request: DocumentRequest): Promise<SourceDocument> {
-    const loading =
-      request.mode === "http" ? loadHttpDocument(request) : this.#browsers.load(request);
-
-    this.#inFlight.add(loading);
-
-    try {
-      return await loading;
-    } catch (error) {
-      request.deadline.throwIfExpired();
-      throw error;
-    } finally {
-      this.#inFlight.delete(loading);
-    }
   }
 }

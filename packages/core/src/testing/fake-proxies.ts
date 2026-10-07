@@ -5,6 +5,7 @@ import type { IncomingMessage } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { connect, createServer as createTcpServer } from "node:net";
 import type { Server, Socket } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { listenOnLoopback } from "./fixture-server.ts";
 
@@ -19,6 +20,7 @@ export interface FakeProxyBehaviour {
   readonly requireCredentials?: string;
   readonly silent?: boolean;
   readonly secure?: boolean;
+  readonly connectDelayMs?: number;
 }
 
 export const TEST_ONLY_CERT = readFileSync(new URL("test-only-cert.pem", import.meta.url));
@@ -67,6 +69,13 @@ const pipeBothWays = (left: Socket, right: Socket) => {
   right.pipe(left);
 };
 
+const answerConnect = async (socket: Socket, upstream: Socket, head: Buffer, delayMs: number) => {
+  await delay(delayMs);
+  socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+  upstream.write(head);
+  pipeBothWays(socket, upstream);
+};
+
 export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise<FakeProxy> => {
   const requests: FakeProxy["requests"] = [];
 
@@ -106,9 +115,7 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
     const upstream = connect(
       { allowHalfOpen: true, host: "127.0.0.1", port: behaviour.tunnelTo },
       () => {
-        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        upstream.write(head);
-        pipeBothWays(socket, upstream);
+        void answerConnect(socket, upstream, head, behaviour.connectDelayMs ?? 0);
       },
     );
 
@@ -194,17 +201,22 @@ const readSocksDestination = async (socket: Socket): Promise<string> => {
   return addressType === 1 ? address.join(".") : address.toString("hex");
 };
 
-const acceptsSocksCredentials = async (
+interface SocksAuthentication {
+  readonly accepted: boolean;
+  readonly presented: string | undefined;
+}
+
+const authenticateSocksClient = async (
   socket: Socket,
   requireCredentials: string | undefined,
-): Promise<boolean> => {
+): Promise<SocksAuthentication> => {
   const [, methodCount] = await readBytes(socket, 2);
   await readBytes(socket, methodCount);
 
   if (requireCredentials === undefined) {
     socket.write(Buffer.from([SOCKS_VERSION, SOCKS_NO_AUTHENTICATION]));
 
-    return true;
+    return { accepted: true, presented: undefined };
   }
 
   socket.write(Buffer.from([SOCKS_VERSION, SOCKS_USERNAME_PASSWORD]));
@@ -212,13 +224,12 @@ const acceptsSocksCredentials = async (
   const username = await readBytes(socket, authentication[1]);
   const [passwordLength] = await readBytes(socket, 1);
   const password = await readBytes(socket, passwordLength);
-
-  const accepted =
-    `${username.toString("utf-8")}:${password.toString("utf-8")}` === requireCredentials;
+  const presented = `${username.toString("utf-8")}:${password.toString("utf-8")}`;
+  const accepted = presented === requireCredentials;
 
   socket.write(Buffer.from([1, accepted ? 0 : 1]));
 
-  return accepted;
+  return { accepted, presented };
 };
 
 const negotiateSocksTunnel = async (
@@ -226,7 +237,10 @@ const negotiateSocksTunnel = async (
   behaviour: FakeProxyBehaviour,
   requests: FakeProxy["requests"],
 ) => {
-  const accepted = await acceptsSocksCredentials(socket, behaviour.requireCredentials);
+  const { accepted, presented } = await authenticateSocksClient(
+    socket,
+    behaviour.requireCredentials,
+  );
 
   if (!accepted) {
     socket.end();
@@ -234,7 +248,8 @@ const negotiateSocksTunnel = async (
     return;
   }
 
-  requests.push({ authority: await readSocksDestination(socket), authorization: undefined });
+  requests.push({ authority: await readSocksDestination(socket), authorization: presented });
+  await delay(behaviour.connectDelayMs ?? 0);
 
   const reply = behaviour.connectStatus === undefined ? 0 : 4;
   socket.write(Buffer.from([SOCKS_VERSION, reply, 0, 1, 0, 0, 0, 0, 0, 0]));

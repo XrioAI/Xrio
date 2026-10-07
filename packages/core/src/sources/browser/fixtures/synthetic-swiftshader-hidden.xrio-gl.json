@@ -1,0 +1,18 @@
+{
+  "chrome_version": "154.0.8037.57",
+  "claim": "synthetic-swiftshader.json",
+  "digest": "sha256:ce60cf8e5d741d9396b26631c12bc4d81c7cae56c122aabf53823bd842ec9c3e",
+  "float_arrays": [],
+  "floats": [],
+  "form_factor": "desktop",
+  "hidden_extensions": ["WEBGL_synthetic_a", "WEBGL_synthetic_b"],
+  "int_arrays": [],
+  "ints": [],
+  "max_threads": 16,
+  "name": "synthetic-swiftshader-hidden",
+  "not_added": [],
+  "over": "synthetic-swiftshader.json",
+  "renderer": "ANGLE (Synthetic, SwiftShader Device)",
+  "schema": "xrio-gl-table/v2",
+  "vendor": "Synthetic Inc."
+}

@@ -7,6 +7,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
+import { planIdentity } from "../../humanizer/humanizer.ts";
+import { fixedDevice } from "../../testing/fixed-seed.ts";
+import { noPins } from "../../testing/no-pins.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
 import { createScratchDir, spawnChrome } from "./browser-process.ts";
 import { ChromeScope } from "./chrome-scope.ts";
@@ -64,12 +67,20 @@ const setup = async () => {
   const scope = new ChromeScope(await createScratchDir(Date.now(), root));
 
   const plan = planLaunch({
+    browserArgs: [],
     browserPath: process.execPath,
     display: undefined,
     headless: true,
-    platform: process.platform,
+    identity: planIdentity({
+      capabilities: { permittedCpus: 32, platform: process.platform },
+      device: fixedDevice,
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: "UTC",
+      mode: "headless",
+      pins: noPins,
+    }).inputs,
+    proxyServer: undefined,
     scratchDir: scope.scratch.path,
-    timezone: undefined,
     xauthority: undefined,
   });
 

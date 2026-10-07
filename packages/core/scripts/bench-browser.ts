@@ -5,18 +5,32 @@ import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { startDeadline } from "../src/deadline.ts";
-import { createBrowsers } from "../src/sources/browser/browsers.ts";
+import { readHostZone } from "../src/humanizer/host-zone.ts";
+import { planIdentity } from "../src/humanizer/humanizer.ts";
+import { createCapabilityProbe } from "../src/sources/browser/capabilities.ts";
 import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
 import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
 import { conformancePages } from "../src/testing/conformance-pages.ts";
+import { fixedDevice, fixedRandom } from "../src/testing/fixed-seed.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
+import { noPins } from "../src/testing/no-pins.ts";
+import { plannedScrapes } from "../src/testing/planned-scrapes.ts";
 
 const SCRAPE_TIMEOUT_MS = 30_000;
 
 const PERCENTILES = [50, 95] as const;
 
-const MEASURES = ["launch", "navigation", "capture", "teardown", "answer", "exit"] as const;
+const MEASURES = [
+  "identity",
+  "launch",
+  "verify",
+  "navigation",
+  "capture",
+  "teardown",
+  "answer",
+  "exit",
+] as const;
 
 type Measure = (typeof MEASURES)[number];
 
@@ -71,7 +85,16 @@ const sha256Of = async (file: string): Promise<string> =>
 const server = await startFixtureServer(conformancePages);
 
 const scrapeOnce = async (): Promise<Sample> => {
-  const sample: Sample = { answer: 0, capture: 0, exit: 0, launch: 0, navigation: 0, teardown: 0 };
+  const sample: Sample = {
+    answer: 0,
+    capture: 0,
+    exit: 0,
+    identity: 0,
+    launch: 0,
+    navigation: 0,
+    teardown: 0,
+    verify: 0,
+  };
 
   const record: ChannelListener = (message) => {
     if (isStageTiming(message) && isMeasure(message.stage)) {
@@ -80,19 +103,21 @@ const scrapeOnce = async (): Promise<Sample> => {
   };
 
   subscribe("xrio:stage", record);
-  const browsers = createBrowsers(cdpDriver, 1);
+  const browsers = plannedScrapes(cdpDriver, 1, { random: fixedRandom });
   const started = performance.now();
 
   try {
     using deadline = startDeadline(SCRAPE_TIMEOUT_MS);
 
-    await browsers.load({
+    await browsers.visit({
+      browserArgs: [],
       browserPath: chromePath(),
       deadline,
       mode,
+      pins: noPins,
       proxy: undefined,
       url: new URL(values.route, server.origin),
-    });
+    }).document;
     sample.answer = performance.now() - started;
   } finally {
     await browsers.close();
@@ -130,12 +155,20 @@ for (let run = 0; run < runs; run += 1) {
 await server[Symbol.asyncDispose]();
 
 const { args } = planLaunch({
+  browserArgs: [],
   browserPath: chromePath(),
   display: process.env.DISPLAY,
   headless: mode === "headless",
-  platform: process.platform,
+  identity: planIdentity({
+    capabilities: await createCapabilityProbe()(chromePath()),
+    device: fixedDevice,
+    exit: { facts: { kind: "unknown" }, route: "direct" },
+    hostZone: readHostZone(),
+    mode,
+    pins: noPins,
+  }).inputs,
+  proxyServer: undefined,
   scratchDir: "<scratch>",
-  timezone: process.env.TZ,
   xauthority: process.env.XAUTHORITY,
 });
 

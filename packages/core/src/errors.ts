@@ -1,15 +1,17 @@
 import type { BlockReport } from "./blocks/classify.ts";
+import type { IdentityMismatch } from "./humanizer/verify.ts";
 import type { ResponseDetails } from "./types.ts";
 
 interface XrioErrorDetails {
   BROWSER_CRASHED: undefined;
-  BROWSER_LAUNCH_FAILED: { stderr: string };
+  BROWSER_LAUNCH_FAILED: { stderr: string; mismatches: readonly IdentityMismatch[] };
   CLIENT_CLOSED: undefined;
   NETWORK_ERROR: { netError: string } | undefined;
   PROXY_AUTH_FAILED: undefined;
   PROXY_CONNECT_FAILED: { status: number };
   PROXY_UNREACHABLE: undefined;
   RESPONSE_TOO_LARGE: undefined;
+  SESSION_UNAVAILABLE: { reason: "ownership-lost" };
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
   TOO_MANY_REDIRECTS: undefined;
@@ -57,6 +59,7 @@ const errorClasses = {
   PROXY_CONNECT_FAILED: XrioError,
   PROXY_UNREACHABLE: XrioError,
   RESPONSE_TOO_LARGE: XrioError,
+  SESSION_UNAVAILABLE: XrioError,
   TIMEOUT: XrioError,
   TLS_CERTIFICATE_INVALID: XrioError,
   TOO_MANY_REDIRECTS: XrioError,

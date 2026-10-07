@@ -1,0 +1,6 @@
+{
+  "chrome_version": "154.0.8037.57",
+  "digest": "sha256:a8b84b3cdaf7016713318a5e7c5e2ec9f379889d2c4b34ea0b0212c746e2ab3f",
+  "name": "synthetic-gpu",
+  "schema": "xrio-media-table/v1"
+}

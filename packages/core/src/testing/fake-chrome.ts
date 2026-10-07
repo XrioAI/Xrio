@@ -1,5 +1,6 @@
-import { createWriteStream } from "node:fs";
+import { readFileSync } from "node:fs";
 import { Socket } from "node:net";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -8,6 +9,7 @@ const SCENARIOS = [
   "normal",
   "fragmented",
   "no-start",
+  "argv-on-stderr",
   "old",
   "crash-on-navigate",
   "ignore-close",
@@ -18,6 +20,14 @@ const SCENARIOS = [
   "pipe-closes-on-navigate",
   "startup-blank-commit",
   "evaluate-throws",
+  "hang-on-navigate",
+  "navigate-error",
+  "identity-drift",
+  "no-webgl",
+  "unsized-window",
+  "fork",
+  "fonts-drift",
+  "fonts-unresolved",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -53,6 +63,8 @@ const INITIAL_LIFECYCLE = [
   "networkIdle",
 ];
 
+const NAVIGATION_ERROR = "net::ERR_NAME_NOT_RESOLVED";
+
 const PAGE_HTML = "<!DOCTYPE html><html><head></head><body><p>fake page</p></body></html>";
 
 const isScenario = (value: string): value is Scenario => SCENARIO_NAMES.has(value);
@@ -74,6 +86,17 @@ const readsByValue = (params: unknown): params is { awaitPromise: true; returnBy
   "awaitPromise" in params &&
   params.awaitPromise === true;
 
+const IDENTITY_READ_MARKER = "requestedOffsets";
+
+const AFTER_CAPTURE_MARKER = "isSecureContext";
+
+const expressionCarries = (params: unknown, marker: string): params is { expression: string } =>
+  typeof params === "object" &&
+  params !== null &&
+  "expression" in params &&
+  typeof params.expression === "string" &&
+  params.expression.includes(marker);
+
 const hasUrl = (params: unknown): params is { url: string } =>
   typeof params === "object" &&
   params !== null &&
@@ -88,14 +111,16 @@ const PRODUCT = scenario === "old" ? "HeadlessChrome/120.0.0.0" : "HeadlessChrom
 
 const TARGET_NAVIGATED = { code: -32_000, message: "Inspected target navigated or closed" };
 
+const USER_AGENT_PRODUCT = scenario === "fork" ? "Chrome/154.0.8037.57" : PRODUCT;
+
 const FRAME_NOT_IN_TARGET = {
   code: -32_000,
   message: "Frame with the given id does not belong to the target.",
 };
 
-const output = createWriteStream("", { fd: 4 });
+const output = new Socket({ fd: 4, readable: false });
 
-const input = new Socket({ fd: 3, readable: true }).setEncoding("utf-8");
+const input = new Socket({ fd: 3, writable: false }).setEncoding("utf-8");
 
 const pageSessions: string[] = [];
 
@@ -232,6 +257,218 @@ const UTILITY_SCRIPT: Json = {
     objectId: "U1",
     type: "object",
   },
+};
+
+const UTC_OFFSETS = ["GMT+00:00", "GMT+00:00"];
+
+const SCREEN_INFO =
+  /^--screen-info=\{0,0 (?<width>\d+)x(?<height>\d+) .*workAreaLeft=(?<left>\d+) workAreaRight=(?<right>\d+) workAreaTop=(?<top>\d+) workAreaBottom=(?<bottom>\d+)\}$/u;
+
+const PAIR = /^(?<first>\d+),(?<second>\d+)$/u;
+
+const switchValue = (name: string): string | undefined =>
+  process.argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+
+const pairOf = (name: string, fallback: readonly [number, number]): readonly [number, number] => {
+  const groups = PAIR.exec(switchValue(name) ?? "")?.groups;
+
+  return groups === undefined ? fallback : [Number(groups.first), Number(groups.second)];
+};
+
+const WEBGL_VENDOR = "Google Inc. (Google)";
+
+const WEBGL_RENDERER =
+  "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)";
+
+const WEBGL_EXTENSIONS = [
+  "ANGLE_instanced_arrays",
+  "EXT_blend_minmax",
+  "EXT_color_buffer_half_float",
+  "EXT_float_blend",
+  "EXT_texture_filter_anisotropic",
+  "OES_element_index_uint",
+  "OES_standard_derivatives",
+  "OES_texture_float",
+  "OES_vertex_array_object",
+  "WEBGL_color_buffer_float",
+  "WEBGL_compressed_texture_astc",
+  "WEBGL_compressed_texture_etc",
+  "WEBGL_compressed_texture_etc1",
+  "WEBGL_debug_renderer_info",
+  "WEBGL_depth_texture",
+  "WEBGL_lose_context",
+];
+
+interface GlStrings {
+  readonly vendor: string;
+  readonly renderer: string;
+  readonly hidden: readonly string[];
+}
+
+const STOCK_GL: GlStrings = { hidden: [], renderer: WEBGL_RENDERER, vendor: WEBGL_VENDOR };
+
+const isNamed = (value: unknown): value is string => typeof value === "string" && value !== "";
+
+const isLoadableGl = (
+  value: unknown,
+  name: string,
+): value is { vendor: string; renderer: string; hidden_extensions: string[] } =>
+  typeof value === "object" &&
+  value !== null &&
+  "name" in value &&
+  value.name === name &&
+  "vendor" in value &&
+  isNamed(value.vendor) &&
+  "renderer" in value &&
+  isNamed(value.renderer) &&
+  "hidden_extensions" in value &&
+  Array.isArray(value.hidden_extensions) &&
+  value.hidden_extensions.every(isNamed);
+
+const loadedGl = (directory: string, name: string): GlStrings | undefined => {
+  try {
+    const artifact: unknown = JSON.parse(
+      readFileSync(path.join(directory, "personas", `${name}.xrio-gl.json`), "utf-8"),
+    );
+
+    return isLoadableGl(artifact, name)
+      ? { hidden: artifact.hidden_extensions, renderer: artifact.renderer, vendor: artifact.vendor }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const presentedGl = (): GlStrings => {
+  const name = switchValue("--xrio-gl-persona");
+  const directory = process.env.XRIO_FAKE_PACKAGE;
+
+  if (scenario !== "fork" || name === undefined || directory === undefined) {
+    return STOCK_GL;
+  }
+
+  return loadedGl(directory, name) ?? STOCK_GL;
+};
+
+const GL = presentedGl();
+
+const HOST_CORES = 8;
+
+const HOST_MEMORY_GB = 8;
+
+const knobNumber = (name: string, fallback: number): number =>
+  Number(switchValue(name) ?? fallback);
+
+const DEFAULT_SCREEN = { bottom: 40, height: 1080, left: 0, right: 0, top: 0, width: 1920 };
+
+const screenOf = () => {
+  const groups = process.argv.map((arg) => SCREEN_INFO.exec(arg)?.groups).find(Boolean);
+
+  const { bottom, height, left, right, top, width } =
+    groups === undefined
+      ? DEFAULT_SCREEN
+      : Object.fromEntries(Object.entries(groups).map(([key, value]) => [key, Number(value)]));
+
+  return {
+    availHeight: height - top - bottom,
+    availLeft: left,
+    availTop: top,
+    availWidth: width - left - right,
+    screenHeight: height,
+    screenWidth: width,
+  };
+};
+
+const [OUTER_WIDTH, OUTER_HEIGHT] = pairOf("--window-size", [1600, 900]);
+
+const [SCREEN_X, SCREEN_Y] = pairOf("--window-position", [22, 22]);
+
+const OBSERVATION = {
+  ...screenOf(),
+  anyPointer: "fine",
+  colorDepth: 24,
+  colorScheme: "light",
+  devicePixelRatio: 1,
+  fontsDigest: "c41f09a2",
+  fontsSentinel: scenario === "fonts-drift" ? "dead0000" : "5e17a1b2",
+  fontsSentinelResolved: scenario !== "fonts-unresolved",
+  hardwareConcurrency: knobNumber("--xrio-hardware-concurrency", HOST_CORES),
+  hover: "hover",
+  intlLocale: "en-US",
+  languages: ["en-US", "en"],
+  maxTouchPoints: 0,
+  outerHeight: OUTER_HEIGHT,
+  outerWidth: OUTER_WIDTH,
+  pointer: "fine",
+  reducedMotion: "no-preference",
+  requestedOffsets: scenario === "identity-drift" ? ["GMT-06:00", "GMT-05:00"] : UTC_OFFSETS,
+  requestedZone: scenario === "identity-drift" ? "America/Chicago" : "UTC",
+  screenX: SCREEN_X,
+  screenY: SCREEN_Y,
+  userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
+  webdriver: false,
+  webgl: scenario !== "no-webgl",
+  webglExtensions:
+    scenario === "no-webgl"
+      ? null
+      : WEBGL_EXTENSIONS.filter((extension) => !GL.hidden.includes(extension)),
+  webglRenderer: scenario === "no-webgl" ? null : GL.renderer,
+  webglVendor: scenario === "no-webgl" ? null : GL.vendor,
+  zone: "UTC",
+  zoneOffsets: UTC_OFFSETS,
+};
+
+const identityReply = (observation: { [key: string]: Json }): Json => ({
+  result: { type: "string", value: JSON.stringify(observation) },
+});
+
+const SECURE_CONTEXT_READING = {
+  battery: true,
+  batteryState: { charging: true, kind: "state", level: 1 },
+  clientHints: {
+    architecture: "x86",
+    bitness: "64",
+    brands: [{ brand: "Chromium", version: "154" }],
+    fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+    mobile: false,
+    model: "",
+    platform: "Linux",
+    platformVersion: "6.8.0",
+    wow64: false,
+  },
+  deviceMemory: knobNumber("--xrio-device-memory", HOST_MEMORY_GB),
+  kind: "secure",
+  webgpu: false,
+  webgpuAdapter: { kind: "none" },
+};
+
+const AFTER_CAPTURE_READ: Json = {
+  result: { type: "string", value: JSON.stringify(SECURE_CONTEXT_READING) },
+};
+
+const readCarries = (
+  params: unknown,
+  marker: string,
+): params is { arguments: readonly unknown[] } =>
+  typeof params === "object" &&
+  params !== null &&
+  "arguments" in params &&
+  JSON.stringify(params.arguments).includes(marker);
+
+const SENTINEL_READ = String.raw`, \"sentinel\")`;
+
+const SENTINEL_EXPRESSION = ', "sentinel")';
+
+let identityReads = 0;
+
+const observedIdentity = (sentinelOnly: boolean): Json => {
+  identityReads += 1;
+
+  const observation = sentinelOnly ? { ...OBSERVATION, fontsDigest: null } : OBSERVATION;
+
+  return scenario === "unsized-window" && identityReads === 1
+    ? identityReply({ ...observation, outerHeight: 0, outerWidth: 0 })
+    : identityReply(observation);
 };
 
 const fixedResults = new Map<string, Json>([
@@ -387,6 +624,30 @@ const closeBrowser = async (closed: Json): Promise<void> => {
   process.exit(0);
 };
 
+const answerEvaluate = async (
+  { id, params, sessionId }: Command,
+  reply: (result: Json) => Json,
+): Promise<void> => {
+  if (expressionCarries(params, AFTER_CAPTURE_MARKER)) {
+    await write([reply(AFTER_CAPTURE_READ)]);
+
+    return;
+  }
+
+  if (currentUrl === "about:blank" && expressionCarries(params, IDENTITY_READ_MARKER)) {
+    await write([reply(observedIdentity(params.expression.includes(SENTINEL_EXPRESSION)))]);
+
+    return;
+  }
+
+  await (readsByValue(params)
+    ? evaluateByValue(
+        reply(scenario === "evaluate-throws" ? THROWN : CAPTURED_PAGE),
+        onSession(sessionId, { error: TARGET_NAVIGATED, id }),
+      )
+    : write([reply(UTILITY_SCRIPT)]));
+};
+
 const answer = async ({ id, method, params, sessionId }: Command): Promise<void> => {
   const reply = (result: Json): Json => onSession(sessionId, { id, result });
 
@@ -429,17 +690,23 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Runtime.callFunctionOn": {
-      await write([reply(CAPTURED_PAGE)]);
+      if (readCarries(params, "isSecureContext")) {
+        await write([reply(AFTER_CAPTURE_READ)]);
+        break;
+      }
+
+      await write([
+        reply(
+          currentUrl === "about:blank"
+            ? observedIdentity(readCarries(params, SENTINEL_READ))
+            : CAPTURED_PAGE,
+        ),
+      ]);
       break;
     }
 
     case "Runtime.evaluate": {
-      await (readsByValue(params)
-        ? evaluateByValue(
-            reply(scenario === "evaluate-throws" ? THROWN : CAPTURED_PAGE),
-            onSession(sessionId, { error: TARGET_NAVIGATED, id }),
-          )
-        : write([reply(UTILITY_SCRIPT)]));
+      await answerEvaluate({ id, method, params, sessionId }, reply);
       break;
     }
 
@@ -449,6 +716,15 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
 
     case "Page.navigate": {
+      if (scenario === "hang-on-navigate") {
+        break;
+      }
+
+      if (scenario === "navigate-error") {
+        await write([reply({ errorText: NAVIGATION_ERROR, frameId: TARGET_ID, loaderId: "L1" })]);
+        break;
+      }
+
       await answerNavigate(
         hasUrl(params) ? params.url : undefined,
         reply({ frameId: TARGET_ID, loaderId: "L1" }),
@@ -466,6 +742,11 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
     }
   }
 };
+
+if (scenario === "argv-on-stderr") {
+  process.stderr.write(`${process.argv.slice(2).join("\n")}\n`);
+  process.exit(1);
+}
 
 if (scenario === "no-start") {
   process.stderr.write("fatal: fake chrome cannot start\n");

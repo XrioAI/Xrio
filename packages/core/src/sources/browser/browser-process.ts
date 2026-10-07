@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { Dirent } from "node:fs";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -7,6 +8,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { text } from "node:stream/consumers";
 
+import { publishInternalEvent } from "../../diagnostics.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { directoriesIn } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
@@ -52,7 +54,7 @@ export const scratchRoot = (): string => path.join("/tmp", `xrio-${currentUid()}
 
 const groupAndOtherPermissions = (mode: number): number => mode % OWNER_PERMISSION_UNIT;
 
-const ensureScratchRoot = async (root: string): Promise<void> => {
+export const ensureScratchRoot = async (root: string): Promise<void> => {
   await mkdir(root, { mode: 0o700, recursive: true });
   const stats = await lstat(root);
 
@@ -93,9 +95,17 @@ const listEntries = async (directory: string): Promise<Dirent[]> => {
   }
 };
 
-export const createScratchDir = async (now: number, root = scratchRoot()): Promise<ScratchDir> => {
+export type ScratchPurpose = "browser" | "probe";
+
+const SCRATCH_PREFIXES: Readonly<Record<ScratchPurpose, string>> = { browser: "b", probe: "p" };
+
+export const createScratchDir = async (
+  now: number,
+  root = scratchRoot(),
+  purpose: ScratchPurpose = "browser",
+): Promise<ScratchDir> => {
   await ensureScratchRoot(root);
-  const directory = await mkdtemp(path.join(root, "b"));
+  const directory = await mkdtemp(path.join(root, SCRATCH_PREFIXES[purpose]));
   const owner: Owner = { createdAt: now, pid: process.pid };
 
   await writeFile(path.join(directory, OWNER_FILE), JSON.stringify(owner), { mode: 0o600 });
@@ -118,12 +128,17 @@ export const removeScratchDir = async (
   await rm(directory, { force: true, recursive: true });
 };
 
-const writeAtomically = async (file: string, contents: string): Promise<void> => {
-  const temporary = `${file}.${process.pid}.tmp`;
+export const writeAtomically = async (file: string, contents: string): Promise<void> => {
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
 
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(temporary, contents, { mode: 0o600 });
-  await rename(temporary, file);
+
+  try {
+    await writeFile(temporary, contents, { flag: "wx", mode: 0o600 });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 };
 
 export const prepareProfile = async (plan: LaunchPlan): Promise<void> => {
@@ -191,6 +206,8 @@ export const spawnChrome = (
   args: readonly string[],
   env: Readonly<Record<string, string>>,
 ): SpawnedChrome => {
+  publishInternalEvent({ detail: JSON.stringify(args), event: "browser-argv" });
+
   const child = spawn(executable, args, {
     detached: true,
     env,
@@ -269,7 +286,11 @@ const psBrowserPid = async (marker: string, signal: AbortSignal): Promise<number
 
     const line = listing
       .split("\n")
-      .find((entry) => entry.includes(` ${marker} `) && !entry.includes(" --type="));
+      .find(
+        (entry) =>
+          (entry.includes(` ${marker} `) || entry.endsWith(` ${marker}`)) &&
+          !entry.includes(" --type="),
+      );
 
     return line === undefined ? undefined : Number(line.trim().split(" ", 1)[0]);
   } finally {
@@ -311,8 +332,12 @@ const scanBrowserPid = async (
   }
 };
 
+const isProbeScratch = (directory: string): boolean =>
+  path.basename(directory).startsWith(SCRATCH_PREFIXES.probe);
+
 const browserStopped = async (directory: string): Promise<boolean> => {
-  const scan = await scanBrowserPid(directoriesIn(directory).profile, PROCESS_SCAN_BUDGET_MS);
+  const profile = isProbeScratch(directory) ? directory : directoriesIn(directory).profile;
+  const scan = await scanBrowserPid(profile, PROCESS_SCAN_BUDGET_MS);
 
   if (!scan.completed) {
     return false;
@@ -330,8 +355,10 @@ const browserStopped = async (directory: string): Promise<boolean> => {
 const removeIfAbandoned = async (directory: string, now: number): Promise<boolean> => {
   const owner = await readOwner(directory);
 
-  const isAbandoned =
-    owner !== undefined && now - owner.createdAt > ABANDONED_AFTER_MS && !isAlive(owner.pid);
+  const isOldEnough =
+    isProbeScratch(directory) || now - (owner?.createdAt ?? now) > ABANDONED_AFTER_MS;
+
+  const isAbandoned = owner !== undefined && isOldEnough && !isAlive(owner.pid);
 
   if (!isAbandoned || !(await browserStopped(directory))) {
     return false;

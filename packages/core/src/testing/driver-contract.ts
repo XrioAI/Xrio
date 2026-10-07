@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
+import { readHostZone } from "../humanizer/host-zone.ts";
+import { planIdentity } from "../humanizer/humanizer.ts";
 import {
   createScratchDir,
   prepareProfile,
@@ -14,7 +16,9 @@ import { planLaunch } from "../sources/browser/launch-plan.ts";
 import { settleWithin } from "../sources/browser/lifetime.ts";
 import type { BrowserDriver, DriverBrowser, DriverEvent } from "../sources/browser/port.ts";
 import { chromePath } from "./chrome-path.ts";
+import { fixedDevice } from "./fixed-seed.ts";
 import { startFixtureServer } from "./fixture-server.ts";
+import { noPins } from "./no-pins.ts";
 import { killRenderers } from "./processes.ts";
 
 export const DRIVER_GUARANTEES = [
@@ -79,12 +83,20 @@ const withDriver = async (
   const scratch = await createScratchDir(Date.now());
 
   const plan = planLaunch({
+    browserArgs: [],
     browserPath: chromePath(),
     display: process.env.DISPLAY,
     headless: true,
-    platform: process.platform,
+    identity: planIdentity({
+      capabilities: { permittedCpus: 32, platform: process.platform },
+      device: fixedDevice,
+      exit: { facts: { kind: "unknown" }, route: "direct" },
+      hostZone: readHostZone(),
+      mode: "headless",
+      pins: noPins,
+    }).inputs,
+    proxyServer: undefined,
     scratchDir: scratch.path,
-    timezone: process.env.TZ,
     xauthority: process.env.XAUTHORITY,
   });
 

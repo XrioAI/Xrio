@@ -6,11 +6,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../../../deadline.ts";
 import type { Clock } from "../../../deadline.ts";
 import { isXrioError } from "../../../errors.ts";
+import { planIdentity } from "../../../humanizer/humanizer.ts";
 import { fakeChromePath } from "../../../testing/fake-chrome-path.ts";
+import { fixedDevice } from "../../../testing/fixed-seed.ts";
 import { leftovers, nothingLeft } from "../../../testing/leftovers.ts";
 import { manualClock } from "../../../testing/manual-clock.ts";
+import { noPins } from "../../../testing/no-pins.ts";
+import { plannedScrapes } from "../../../testing/planned-scrapes.ts";
 import { createScratchDir, removeScratchDir } from "../browser-process.ts";
-import { createBrowsers } from "../browsers.ts";
+import { createCapabilityProbe } from "../capabilities.ts";
 import { planLaunch } from "../launch-plan.ts";
 import { CLOSE_BUDGET_MS } from "../port.ts";
 import { renderDocument } from "../render.ts";
@@ -60,16 +64,18 @@ describe("the CDP driver's launch", () => {
       },
     };
 
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(SCRAPE_DEADLINE_MS, undefined, watched);
 
-    const loading = browsers.load({
+    const loading = browsers.visit({
+      browserArgs: [],
       browserPath: await fakeChromePath("slow-start"),
       deadline,
       mode: "headless",
+      pins: noPins,
       proxy: undefined,
       url: new URL("https://fake.test/page"),
-    });
+    }).document;
 
     await capStarted.promise;
     advance(LAUNCH_CAP_MS);
@@ -85,18 +91,20 @@ describe("the CDP driver's launch", () => {
   });
 
   it("reports a browser that dies after cutting off the capture as crashed, not as a timeout", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     try {
       await expect(
-        browsers.load({
+        browsers.visit({
+          browserArgs: [],
           browserPath: await fakeChromePath("exit-after-capture-error"),
           deadline,
           mode: "headless",
+          pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
-        }),
+        }).document,
       ).rejects.toMatchObject({ code: "BROWSER_CRASHED" });
     } finally {
       await browsers.close();
@@ -111,12 +119,20 @@ describe("the CDP driver's documents", () => {
     const scratch = await createScratchDir(Date.now());
 
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: await fakeChromePath("evaluate-throws"),
       display: undefined,
       headless: true,
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: { permittedCpus: 32, platform: process.platform },
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headless",
+        pins: noPins,
+      }).inputs,
+      proxyServer: undefined,
       scratchDir: scratch.path,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -145,12 +161,20 @@ describe("the CDP driver's documents", () => {
     const scratch = await createScratchDir(Date.now());
 
     const plan = planLaunch({
+      browserArgs: [],
       browserPath: await fakeChromePath("startup-blank-commit"),
       display: undefined,
       headless: true,
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: { permittedCpus: 32, platform: process.platform },
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headless",
+        pins: noPins,
+      }).inputs,
+      proxyServer: undefined,
       scratchDir: scratch.path,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -194,13 +218,23 @@ describe("the CDP driver's documents", () => {
 
     const scratch = await createScratchDir(Date.now());
 
+    const browserPath = await fakeChromePath("normal");
+
     const plan = planLaunch({
-      browserPath: await fakeChromePath("normal"),
+      browserArgs: [],
+      browserPath,
       display: undefined,
       headless: true,
-      platform: process.platform,
+      identity: planIdentity({
+        capabilities: await createCapabilityProbe()(browserPath),
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headless",
+        pins: noPins,
+      }).inputs,
+      proxyServer: undefined,
       scratchDir: scratch.path,
-      timezone: undefined,
       xauthority: undefined,
     });
 
@@ -220,7 +254,13 @@ describe("the CDP driver's documents", () => {
         "fake page",
       );
 
-      const document = await renderDocument(browser, new URL("https://fake.test/page"), deadline);
+      const { source: document } = await renderDocument(
+        browser,
+        new URL("https://fake.test/page"),
+        undefined,
+        deadline,
+        async () => await Promise.resolve(null),
+      );
 
       expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
       expect(sent).toStrictEqual([
@@ -241,17 +281,19 @@ describe("the CDP driver's documents", () => {
   });
 
   it("ignores the startup about:blank commit and returns the navigated page", async () => {
-    const browsers = createBrowsers(cdpDriver, 1);
+    const browsers = plannedScrapes(cdpDriver, 1);
     using deadline = startDeadline(10_000);
 
     try {
-      const document = await browsers.load({
+      const document = await browsers.visit({
+        browserArgs: [],
         browserPath: await fakeChromePath("startup-blank-commit"),
         deadline,
         mode: "headless",
+        pins: noPins,
         proxy: undefined,
         url: new URL("https://fake.test/page"),
-      });
+      }).document;
 
       expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
       expect(document.html).toContain("<p>fake page</p>");
@@ -279,17 +321,19 @@ describe("the CDP driver's capture", () => {
       };
 
       subscribe("xrio:event", record);
-      const browsers = createBrowsers(cdpDriver, 1);
+      const browsers = plannedScrapes(cdpDriver, 1);
       using deadline = startDeadline(10_000);
 
       try {
-        const document = await browsers.load({
+        const document = await browsers.visit({
+          browserArgs: [],
           browserPath: await fakeChromePath(scenario),
           deadline,
           mode: "headless",
+          pins: noPins,
           proxy: undefined,
           url: new URL("https://fake.test/page"),
-        });
+        }).document;
 
         expect(document).toMatchObject({ status: 200, url: "https://fake.test/page" });
         expect(document.html).toContain("<p>fake page</p>");

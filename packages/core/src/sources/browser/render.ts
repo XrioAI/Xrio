@@ -2,6 +2,7 @@ import { classifyResponse } from "../../blocks/classify.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { redactUrl, XrioError } from "../../errors.ts";
+import type { Relay } from "../../proxy/relay.ts";
 import type { ResponseDetails, SourceDocument } from "../../types.ts";
 import { responseDetailsFrom } from "../response.ts";
 import { DriverError } from "./port.ts";
@@ -88,6 +89,10 @@ const MAX_REQUEST_URLS = 4000;
 const COMMITTED_ERROR_PAGE = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
 
 const MAX_REQUEST_URL_CHARS = 2048;
+
+const PROXY_NET_ERROR = /^net::ERR_(?:PROXY|TUNNEL)_/u;
+
+type RelayFailures = Pick<Relay, "failureFor"> | undefined;
 
 interface RawHeaderEvent {
   status: number;
@@ -259,16 +264,54 @@ const navigationError = (url: URL, failure: DriverError, netError: string): Xrio
     details: { netError },
   });
 
-const navigateTo = async (browser: DriverBrowser, url: URL, deadline: Deadline): Promise<void> => {
+const relayFailureOfHost = (relay: RelayFailures, url: string): XrioError | undefined => {
+  const hostname = URL.parse(url)?.hostname;
+
+  return hostname === undefined ? undefined : relay?.failureFor(hostname);
+};
+
+const relayFailureBehind = (
+  relay: RelayFailures,
+  failingHop: string | undefined,
+  url: URL,
+  netError: string,
+): XrioError | undefined => {
+  if (!PROXY_NET_ERROR.test(netError)) {
+    return undefined;
+  }
+
+  return relayFailureOfHost(relay, failingHop ?? url.href) ?? relayFailureOfHost(relay, url.href);
+};
+
+const relayFailureFor = (relay: RelayFailures, { url }: DocumentHop): XrioError | undefined => {
+  const documentUrl = URL.parse(url);
+
+  return documentUrl?.protocol === "http:" ? relay?.failureFor(documentUrl.hostname) : undefined;
+};
+
+const navigateTo = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  url: URL,
+  relay: RelayFailures,
+  deadline: Deadline,
+): Promise<void> => {
   try {
     await browser.navigate(url.href, deadline);
   } catch (error) {
     if (isDriverFailure(error, "navigation-failed")) {
-      if (error.reason.netError === COMMITTED_ERROR_PAGE) {
+      const { netError } = error.reason;
+
+      if (netError === COMMITTED_ERROR_PAGE) {
         return;
       }
 
-      throw navigationError(url, error, error.reason.netError);
+      const failingHop = tracker.requestUrls.at(-1);
+
+      throw (
+        relayFailureBehind(relay, failingHop, url, netError) ??
+        navigationError(url, error, netError)
+      );
     }
 
     throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
@@ -384,37 +427,60 @@ const captureCurrentDocument = async (
   return rebound;
 };
 
-export const renderDocument = async (
+export const renderDocument = async <Reading>(
   browser: DriverBrowser,
   url: URL,
+  relay: RelayFailures,
   deadline: Deadline,
-): Promise<SourceDocument> => {
+  readAfterCapture: () => Promise<Reading>,
+): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
   const tracker = new PageTracker(browser);
 
   try {
-    await timeStage("navigation", async () => {
-      await navigateTo(browser, url, deadline);
-      await tracker.documentLoaded(deadline);
-    });
-
-    const { document, html } = await timeStage(
-      "capture",
-      async () => await captureCurrentDocument(browser, tracker, deadline),
+    await timeStage(
+      "navigation",
+      async () => {
+        await navigateTo(browser, tracker, url, relay, deadline);
+        await tracker.documentLoaded(deadline);
+      },
+      deadline,
     );
+
+    const { afterCapture, captured } = await timeStage(
+      "capture",
+      async () => {
+        const current = await captureCurrentDocument(browser, tracker, deadline);
+
+        tracker.stop();
+
+        return { afterCapture: await readAfterCapture(), captured: current };
+      },
+      deadline,
+    );
+
+    const { document, html } = captured;
+    const relayFailure = relayFailureFor(relay, document);
+
+    if (relayFailure !== undefined) {
+      throw relayFailure;
+    }
 
     const details = tracker.responseOf(document);
 
     reportDropped(tracker);
 
     return {
-      ...details,
-      block: classifyResponse({
+      afterCapture,
+      source: {
+        ...details,
+        block: classifyResponse({
+          html,
+          requestUrls: tracker.requestUrls,
+          response: details,
+        }),
         html,
         requestUrls: tracker.requestUrls,
-        response: details,
-      }),
-      html,
-      requestUrls: tracker.requestUrls,
+      },
     };
   } finally {
     tracker.stop();
