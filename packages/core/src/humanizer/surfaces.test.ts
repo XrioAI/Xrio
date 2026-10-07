@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveClientOptions, resolveScrapeIntent } from "../options.ts";
 import { fixedDevice, fixedSeed } from "../testing/fixed-seed.ts";
 import {
   forkWithGl,
@@ -1410,8 +1409,6 @@ const gpuTellsOf = (tells: readonly string[]) =>
   tells.filter((tell) => tell.startsWith("gpu-") || tell.startsWith("gl-persona-"));
 
 describe("the default GPU policy", () => {
-  const browser = { browserPath: "/browser", mode: "headless" } as const;
-
   it("presents the announced hardware persona over SwiftShader with the kit lineup", () => {
     const plan = planIdentity(
       contextOf({ capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])) }),
@@ -1478,63 +1475,6 @@ describe("the default GPU policy", () => {
       gpu: { backend: "swiftshader", persona: null },
       tells: ["gl-persona-unavailable"],
     });
-  });
-
-  it("is matched when the client defaults to matched and the scrape names no policy", () => {
-    const defaults = resolveClientOptions({ ...browser, hardware: { gpuPolicy: "matched" } });
-
-    const { identity } = resolveScrapeIntent(
-      { format: "html", url: "https://example.com" },
-      defaults,
-    );
-
-    const plan = planIdentity(
-      contextOf({
-        capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
-        pins: identity,
-      }),
-    );
-
-    expect({ gpu: plan.chosen.surfaces.gpu, tells: gpuTellsOf(plan.tells) }).toStrictEqual({
-      gpu: { backend: "swiftshader", persona: null },
-      tells: ["gl-persona-unavailable"],
-    });
-  });
-
-  it("is announce when the client names no policy and the scrape names none", () => {
-    const defaults = resolveClientOptions({ ...browser, hardware: { cores: 8 } });
-
-    const { identity } = resolveScrapeIntent(
-      { format: "html", url: "https://example.com" },
-      defaults,
-    );
-
-    const plan = planIdentity(
-      contextOf({
-        capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
-        pins: identity,
-      }),
-    );
-
-    expect(plan.chosen.surfaces.gpu).toStrictEqual(ANNOUNCED_RENOIR);
-  });
-
-  it("lets a scrape's matched policy replace a client default of announce", () => {
-    const defaults = resolveClientOptions({ ...browser, hardware: { gpuPolicy: "announce" } });
-
-    const { identity } = resolveScrapeIntent(
-      { format: "html", hardware: { gpuPolicy: "matched" }, url: "https://example.com" },
-      defaults,
-    );
-
-    const plan = planIdentity(
-      contextOf({
-        capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
-        pins: identity,
-      }),
-    );
-
-    expect(plan.chosen.surfaces.gpu).toStrictEqual({ backend: "swiftshader", persona: null });
   });
 });
 

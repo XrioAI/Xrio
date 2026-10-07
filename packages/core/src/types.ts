@@ -1,6 +1,4 @@
 import type { BlockReport } from "./blocks/classify.ts";
-import type { GpuPolicy } from "./humanizer/contracts.ts";
-import type { REPORTABLE_MEMORY_GB } from "./humanizer/owned-inputs.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
@@ -15,76 +13,25 @@ interface BrowserMode {
   browserPath: string;
 }
 
-export interface ScreenSize {
-  width: number;
-  height: number;
-}
-
-export interface Taskbar {
-  top?: number;
-  right?: number;
-  bottom?: number;
-  left?: number;
-}
-
-export interface WindowSize {
-  width: number;
-  height: number;
-  x?: number;
-  y?: number;
-}
-
-type Weighted<Value> = Value & { weight: number };
-
-export interface DisplayOptions {
-  screen?: ScreenSize | readonly Weighted<ScreenSize>[];
-  taskbar?: Taskbar | readonly Weighted<Taskbar>[];
-  window?:
-    | "maximized"
-    | WindowSize
-    | readonly (Weighted<WindowSize> | { maximized: true; weight: number })[];
-}
-
-type ReportableMemoryGb = (typeof REPORTABLE_MEMORY_GB)[number];
-
-export interface HardwareOptions {
-  cores?: number | readonly Weighted<{ value: number }>[];
-  memoryGb?: ReportableMemoryGb | readonly Weighted<{ value: ReportableMemoryGb }>[];
-  gpu?: string | readonly Weighted<{ name: string }>[];
-  gpuPolicy?: GpuPolicy;
-}
-
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
-interface BrowserChoices {
-  timezone?: string;
-  display?: DisplayOptions;
-  hardware?: HardwareOptions;
-}
-
-type ModeOverride =
-  | (HttpMode & { timezone?: never; display?: never; hardware?: never })
-  | (BrowserMode & BrowserChoices)
-  | ({ mode?: never; browserPath?: never } & BrowserChoices);
+type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
 
 export type ClientOptions = (
-  | {
-      mode: "http";
-      browserPath?: string;
-      browserArgs?: readonly string[];
-      timezone?: never;
-      display?: never;
-      hardware?: never;
-    }
-  | ((BrowserMode | { mode?: never; browserPath: string }) &
-      BrowserChoices & { browserArgs?: readonly string[] })
-) & { proxy?: string; maxBrowsers?: number; locale?: string; cacheDir?: string };
+  | { mode: "http"; browserPath?: string }
+  | BrowserMode
+  | { mode?: never; browserPath: string }
+) & {
+  browserArgs?: readonly string[];
+  proxy?: string;
+  maxBrowsers?: number;
+  cacheDir?: string;
+};
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
   format: Format;
   proxy?: string;
-  locale?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 };

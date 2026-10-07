@@ -5,7 +5,6 @@ import {
   chromeAcceptLanguages,
   isChromeBadFlag,
   isOwnedSwitch,
-  measuredLocalesFor,
   OWNED_SWITCHES,
   XRIO_SENT_BAD_FLAG_SWITCHES,
 } from "./owned-inputs.ts";
@@ -113,18 +112,6 @@ describe(chromeAcceptLanguages, () => {
       expect([tag, language]).toContain(first);
       expect(new Set([first, ...rest]).size).toBe(rest.length + 1);
     }
-  });
-});
-
-describe(measuredLocalesFor, () => {
-  it.each([
-    { language: "de", tags: ["de-AT", "de-CH", "de-DE"] },
-    { language: "de-DE", tags: ["de-AT", "de-CH", "de-DE"] },
-    { language: "ja-JP-u-ca-japanese", tags: ["ja-JP"] },
-    { language: "sw-KE", tags: [] },
-    { language: "toString", tags: [] },
-  ])("finds $tags for $language", ({ language, tags }) => {
-    expect(measuredLocalesFor(language)).toStrictEqual(tags);
   });
 });
 

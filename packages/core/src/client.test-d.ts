@@ -13,9 +13,7 @@ import type {
   Coverage,
   CoverageReason,
   CoveredSurface,
-  DisplayOptions,
   ErrorCode,
-  HardwareOptions,
   HttpIdentityReport,
   IdentityMismatch,
   IdentityReport,
@@ -145,186 +143,28 @@ describe("XrioClient types", () => {
     void new XrioClient({ mode: "http" }).scrape({ browserArgs, format: "html", url });
   });
 
-  it("accepts a locale as a client default and a per-scrape override in every mode", () => {
+  it("excludes identity settings from the client and scrape APIs", () => {
+    const client = new XrioClient({ mode: "http" });
     const url = "https://example.com";
-    const http = new XrioClient({ locale: "fr-FR", mode: "http" });
-    const headless = new XrioClient({ browserPath: "/browser", locale: "de-DE", mode: "headless" });
-    const headed = new XrioClient({ browserPath: "/browser", locale: "pt-BR" });
-
-    expectTypeOf<ClientOptions["locale"]>().toEqualTypeOf<string | undefined>();
-    expectTypeOf(http.scrape({ format: "html", locale: "en-GB", url })).toEqualTypeOf<
-      Promise<ScrapeResult<"html">>
-    >();
-    expectTypeOf(headless.scrape({ format: "html", locale: "en-AU", url })).toEqualTypeOf<
-      Promise<ScrapeResult<"html">>
-    >();
-    expectTypeOf(
-      headed.scrape({
-        browserPath: "/other",
-        format: "json",
-        locale: "ja-JP",
-        mode: "headless",
-        url,
-      }),
-    ).toEqualTypeOf<Promise<ScrapeResult<"json">>>();
-    expectTypeOf(
-      headed.scrape({ format: "html", locale: "en-GB", mode: "http", url }),
-    ).toEqualTypeOf<Promise<ScrapeResult<"html">>>();
-    // @ts-expect-error A locale is one tag, not a list.
-    void new XrioClient({ locale: ["de-DE"], mode: "http" });
-  });
-
-  it("takes display in browser modes only, as values or weighted tables", () => {
-    const url = "https://example.com";
-
-    const browser = new XrioClient({
-      browserPath: "/browser",
-      display: {
-        screen: [
-          { height: 1080, weight: 40, width: 1920 },
-          { height: 1440, weight: 7, width: 2560 },
-        ],
-        taskbar: [
-          { left: 64, top: 32, weight: 3 },
-          { bottom: 48, weight: 2 },
-        ],
-        window: "maximized",
-      },
-    });
-
-    expectTypeOf<ClientOptions["display"]>().toEqualTypeOf<DisplayOptions | undefined>();
-    void browser.scrape({
-      display: { screen: { height: 900, width: 1440 }, taskbar: {} },
-      format: "html",
-      url,
-    });
-    void browser.scrape({
-      display: {
-        window: [
-          { maximized: true, weight: 3 },
-          { height: 800, weight: 1, width: 1280, x: 0, y: 32 },
-        ],
-      },
-      format: "html",
-      url,
-    });
-    // @ts-expect-error An http client has no screen to present.
-    void new XrioClient({ display: { window: "maximized" }, mode: "http" });
-    // @ts-expect-error An explicit http mode takes no display.
-    void browser.scrape({ display: { window: "maximized" }, format: "html", mode: "http", url });
-    void browser.scrape({
-      // @ts-expect-error A table row needs a weight.
-      display: { screen: [{ height: 900, width: 1440 }] },
-      format: "html",
-      url,
-    });
-    // @ts-expect-error A window is maximized or a size.
-    void browser.scrape({ display: { window: "fullscreen" }, format: "html", url });
-  });
-
-  it("takes hardware in browser modes only, as values or weighted tables", () => {
-    const url = "https://example.com";
-
-    const browser = new XrioClient({
-      browserPath: "/browser",
-      hardware: {
-        cores: [
-          { value: 8, weight: 3 },
-          { value: 12, weight: 1 },
-        ],
-        memoryGb: 16,
-      },
-    });
-
-    expectTypeOf<ClientOptions["hardware"]>().toEqualTypeOf<HardwareOptions | undefined>();
-    void browser.scrape({ format: "html", hardware: { cores: 6 }, url });
-    void browser.scrape({ format: "html", hardware: { memoryGb: [{ value: 8, weight: 1 }] }, url });
-    // @ts-expect-error An http client has no machine to present.
-    void new XrioClient({ hardware: { cores: 8 }, mode: "http" });
-    // @ts-expect-error An explicit http mode takes no hardware.
-    void browser.scrape({ format: "html", hardware: { cores: 8 }, mode: "http", url });
-    // @ts-expect-error A table row needs a weight.
-    void browser.scrape({ format: "html", hardware: { cores: [{ value: 8 }] }, url });
-    // @ts-expect-error Memory is one of the sizes Chrome reports.
-    void browser.scrape({ format: "html", hardware: { memoryGb: 12 }, url });
-    void browser.scrape({
-      format: "html",
-      // @ts-expect-error A memory table's rows hold sizes Chrome reports too.
-      hardware: { memoryGb: [{ value: 12, weight: 1 }] },
-      url,
-    });
-    // @ts-expect-error Cores are a number or a table of rows.
-    void browser.scrape({ format: "html", hardware: { cores: "8" }, url });
-  });
-
-  it("takes a GL persona in hardware as a name or a weighted table of names", () => {
-    const url = "https://example.com";
-
-    const browser = new XrioClient({
-      browserPath: "/browser",
-      hardware: { gpu: "basharsx4-amd-renoir" },
-    });
-
-    expectTypeOf<HardwareOptions["gpu"]>().toEqualTypeOf<
-      string | readonly ({ name: string } & { weight: number })[] | undefined
-    >();
-    void browser.scrape({
-      format: "html",
-      hardware: { gpu: [{ name: "basharsx4-swiftshader-hidden", weight: 1 }] },
-      url,
-    });
-    // @ts-expect-error A GL persona row names a persona, not a value.
-    void browser.scrape({ format: "html", hardware: { gpu: [{ value: 8, weight: 1 }] }, url });
-    void browser.scrape({
-      format: "html",
-      // @ts-expect-error A table row needs a weight.
-      hardware: { gpu: [{ name: "basharsx4-amd-renoir" }] },
-      url,
-    });
-  });
-
-  it("takes a GPU policy in hardware as matched or announce, as a client default and per scrape", () => {
-    const url = "https://example.com";
-
-    const browser = new XrioClient({
-      browserPath: "/browser",
-      hardware: { gpuPolicy: "announce" },
-    });
-
-    expectTypeOf<HardwareOptions["gpuPolicy"]>().toEqualTypeOf<
-      "matched" | "announce" | undefined
-    >();
-    void browser.scrape({ format: "html", hardware: { gpuPolicy: "matched" }, url });
-    // @ts-expect-error A GPU policy is matched or announce.
-    void browser.scrape({ format: "html", hardware: { gpuPolicy: "hide" }, url });
-    // @ts-expect-error An http client has no machine to present.
-    void new XrioClient({ hardware: { gpuPolicy: "announce" }, mode: "http" });
-  });
-
-  it("takes timezone in browser modes only, as a client default and per scrape", () => {
-    const url = "https://example.com";
-    const browser = new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });
-    const http = new XrioClient({ mode: "http" });
-
-    expectTypeOf<ClientOptions["timezone"]>().toEqualTypeOf<string | undefined>();
-    void new XrioClient({ browserPath: "/browser", mode: "headless", timezone: "UTC" });
-    void browser.scrape({ format: "html", timezone: "America/New_York", url });
-    void http.scrape({
-      browserPath: "/browser",
-      format: "html",
-      mode: "headless",
-      timezone: "America/New_York",
-      url,
-    });
-    void http.scrape({ format: "html", timezone: "America/New_York", url });
-    // @ts-expect-error An http client has no browser to present a zone from.
-    void new XrioClient({ mode: "http", timezone: "UTC" });
-    // @ts-expect-error timezone needs a browser path, like every browser client option.
-    void new XrioClient({ timezone: "UTC" });
-    // @ts-expect-error An explicit http mode takes no timezone.
-    void browser.scrape({ format: "html", mode: "http", timezone: "UTC", url });
-    // @ts-expect-error A timezone is a zone name, not an offset.
-    void browser.scrape({ format: "html", timezone: 120, url });
+    expectTypeOf<
+      Extract<keyof ClientOptions, "locale" | "timezone" | "display" | "hardware">
+    >().toBeNever();
+    // @ts-expect-error Locale is selected from the route.
+    void new XrioClient({ locale: "de-DE", mode: "http" });
+    // @ts-expect-error Timezone is selected from the route.
+    void new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });
+    // @ts-expect-error Display is not a client option.
+    void new XrioClient({ browserPath: "/browser", display: {} });
+    // @ts-expect-error Hardware is not a client option.
+    void new XrioClient({ browserPath: "/browser", hardware: {} });
+    // @ts-expect-error Locale is not a scrape override.
+    void client.scrape({ format: "html", locale: "de-DE", url });
+    // @ts-expect-error Timezone is not a scrape override.
+    void client.scrape({ format: "html", timezone: "Europe/Berlin", url });
+    // @ts-expect-error Display is not a scrape override.
+    void client.scrape({ display: {}, format: "html", url });
+    // @ts-expect-error Hardware is not a scrape override.
+    void client.scrape({ format: "html", hardware: {}, url });
   });
 
   it("exposes each response header as an optional string and cookies separately", () => {
