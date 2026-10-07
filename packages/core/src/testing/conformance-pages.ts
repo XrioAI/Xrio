@@ -644,6 +644,17 @@ const routes = new Map<
     },
   ],
   [
+    "/empty-html-403",
+    (response) => {
+      response.writeHead(403, {
+        "content-type": "text/html",
+        "set-cookie": "empty-html-403=1; Path=/",
+        "x-page": "empty-html-403",
+      });
+      response.end();
+    },
+  ],
+  [
     "/strict-csp",
     (response) => {
       response.setHeader("content-security-policy", "default-src 'none'; script-src 'none'");

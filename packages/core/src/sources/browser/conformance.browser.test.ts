@@ -646,6 +646,24 @@ describe.each(MODES)("documents captured, %s", (mode) => {
   });
 });
 
+describe.each(MODES)("documents captured whatever their URL or readiness, %s", (mode) => {
+  serveFixturePages();
+
+  it("captures a URL with a fragment, which the response URL never carries", async () => {
+    const source = await load(mode, "/static#section");
+    expect(markerOf(source.html)).toBe("static");
+  });
+
+  it("returns an empty text/html 403, which commits Chrome's error page, with its response details", async () => {
+    const source = await load(mode, "/empty-html-403");
+    expect(source).toMatchObject({
+      cookies: ["empty-html-403=1; Path=/"],
+      headers: { "content-type": "text/html", "x-page": "empty-html-403" },
+      status: 403,
+    });
+  });
+});
+
 describe.each(MODES)("the launch identity, %s", (mode) => {
   serveFixturePages();
 
