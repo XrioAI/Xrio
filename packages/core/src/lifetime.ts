@@ -11,6 +11,10 @@ export class HeldDeadline implements Deadline {
     return this.#deadline.signal;
   }
 
+  get clock(): Deadline["clock"] {
+    return this.#deadline.clock;
+  }
+
   abortReason = (): AbortReason | undefined => this.#deadline.abortReason();
   remainingMs = (): number => this.#deadline.remainingMs();
   throwIfExpired = (): void => {

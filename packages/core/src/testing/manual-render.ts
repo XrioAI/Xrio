@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+
 import { startDeadline } from "../deadline.ts";
 import type {
   DocumentHop,
@@ -19,6 +21,11 @@ export const PAGE_URL = "https://example.test/";
 
 const HTML_HEADERS: RawHeaders = [["content-type", "text/html"]];
 
+export const challengeHeaders = (vendorHeader: string): RawHeaders => [
+  ...HTML_HEADERS,
+  [vendorHeader, "challenge"],
+];
+
 export const documentHop = (overrides: Partial<DocumentHop> = {}): DocumentHop => ({
   frameId: "F1",
   fromCache: false,
@@ -39,6 +46,7 @@ const bodyOf = (hop: DocumentHop): string => (hop.headers.length > 1 ? CHALLENGE
 const controlledBrowser = (first: DocumentHop) => {
   const listeners = new Set<DriverListener>();
   let html = bodyOf(first);
+  let afterCapture: (() => void) | undefined;
 
   const emit = (event: DriverEvent) => {
     for (const listener of listeners) {
@@ -67,6 +75,11 @@ const controlledBrowser = (first: DocumentHop) => {
         throw new Error("Unexpected capture or selector reply.");
       }
 
+      if (!expression.includes("querySelectorAll")) {
+        afterCapture?.();
+        afterCapture = undefined;
+      }
+
       await Promise.resolve();
 
       return value;
@@ -90,6 +103,13 @@ const controlledBrowser = (first: DocumentHop) => {
     browser,
     commit,
     emit,
+    listeners: () => listeners.size,
+    onCapture: (run: () => void) => {
+      afterCapture = run;
+    },
+    setHtml: (body: string) => {
+      html = body;
+    },
   };
 };
 
@@ -108,5 +128,10 @@ export const startedRender = (first: DocumentHop, timeoutMs = 60_000) => {
 
   void Promise.allSettled([result]);
 
-  return { ...control, deadline, result, time };
+  const tick = async (ms = 250) => {
+    time.advance(ms);
+    await nextTurn();
+  };
+
+  return { ...control, deadline, result, tick, time };
 };

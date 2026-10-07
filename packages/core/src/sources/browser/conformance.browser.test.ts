@@ -1268,3 +1268,22 @@ describe.each(MODES)("browser visits, %s", (mode) => {
     },
   );
 });
+
+describe.each(MODES)("challenge waits, %s", (mode) => {
+  serveFixturePages();
+
+  it.each([
+    { outcome: "passed", rounds: 1, route: "navigation", timeoutMs: 20_000 },
+    { outcome: "passed_in_place", rounds: 1, route: "in-place", timeoutMs: 35_000 },
+    { outcome: "passed", rounds: 1, route: "late-request", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 2, route: "same-vendor", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 2, route: "two-vendors", timeoutMs: 20_000 },
+    { outcome: "budget_exhausted", rounds: 1, route: "never", timeoutMs: 35_000 },
+    { outcome: "deadline", rounds: 1, route: "never", timeoutMs: 10_000 },
+    { outcome: "rounds_exhausted", rounds: 3, route: "four-challenges", timeoutMs: 20_000 },
+  ])("grades $route as $outcome", async ({ route, rounds, outcome, timeoutMs }) => {
+    const source = await load(mode, `/challenge/${route}`, timeoutMs);
+    expect(source.block.challenge?.outcome).toBe(outcome);
+    expect(source.block.challenge?.rounds).toHaveLength(rounds);
+  });
+});

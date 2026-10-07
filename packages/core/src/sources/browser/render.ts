@@ -1,4 +1,5 @@
-import { classifyResponse } from "../../blocks/classify.ts";
+import { classifyResponse, challengeCandidate } from "../../blocks/classify.ts";
+import type { BlockInput, ChallengeOutcome, ChallengeReport } from "../../blocks/classify.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { XrioError } from "../../errors.ts";
@@ -6,6 +7,8 @@ import type { Relay } from "../../proxy/relay.ts";
 import type { ResponseDetails, SourceDocument } from "../../types.ts";
 import { isHtmlContentType, unsupportedContentType } from "../content-type.ts";
 import { networkFailure } from "../net-error.ts";
+import { waitForChallenge } from "./challenge.ts";
+import type { ChallengeWait } from "./challenge.ts";
 import {
   currentDocument,
   documentKey,
@@ -143,14 +146,25 @@ class PageTracker {
 
     const record = currentDocument(this.#state);
 
-    const document = record?.loaded === true ? record.response : undefined;
-    const failure = document === undefined ? undefined : this.#failureOf(document);
+    if (record?.loaded !== true) {
+      return undefined;
+    }
+
+    if (record.response === undefined) {
+      throw new XrioError(
+        "NETWORK_ERROR",
+        "The page committed a document that had no HTTP response.",
+        { details: undefined },
+      );
+    }
+
+    const failure = this.#failureOf(record.response);
 
     if (failure !== undefined) {
       throw failure;
     }
 
-    return document;
+    return record.response;
   }
 
   async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
@@ -169,20 +183,6 @@ class PageTracker {
 
         if (this.downloaded) {
           reject(this.downloadError());
-
-          return;
-        }
-
-        const record = currentDocument(this.#state);
-
-        if (record?.loaded === true && record.response === undefined) {
-          reject(
-            new XrioError(
-              "NETWORK_ERROR",
-              "The page committed a document that had no HTTP response.",
-              { details: undefined },
-            ),
-          );
         }
       } catch (error) {
         reject(error);
@@ -432,6 +432,125 @@ const captureCurrentDocument = async (
   return rebound;
 };
 
+const GAVE_UP: ReadonlySet<ChallengeOutcome> = new Set([
+  "budget_exhausted",
+  "deadline",
+  "rounds_exhausted",
+]);
+
+const challengeGaveUp = (report: ChallengeReport | null): boolean =>
+  report !== null && GAVE_UP.has(report.outcome);
+
+const blockInputOf = (tracker: PageTracker, { document, html }: CapturedDocument): BlockInput => ({
+  html,
+  requestUrls: tracker.requestUrls(document),
+  response: tracker.responseOf(document),
+});
+
+const settledChallenge = (
+  tracker: PageTracker,
+  { lastDocument, report }: ChallengeWait,
+  captured: CapturedDocument,
+): ChallengeReport | null => {
+  if (report === null) {
+    return null;
+  }
+
+  if (challengeCandidate(blockInputOf(tracker, captured)) !== undefined) {
+    return report.outcome === "passed" ? { ...report, outcome: "rounds_exhausted" } : report;
+  }
+
+  const passedInPlace =
+    report.outcome !== "passed" && documentKey(captured.document) === documentKey(lastDocument);
+
+  return { ...report, outcome: passedInPlace ? "passed_in_place" : "passed" };
+};
+
+interface Render<Reading> {
+  readonly browser: DriverBrowser;
+  readonly tracker: PageTracker;
+  readonly deadline: Deadline;
+  readonly readAfterCapture: () => Promise<Reading>;
+}
+
+interface Rendered<Reading> {
+  readonly afterCapture: Reading;
+  readonly captured: CapturedDocument;
+  readonly challenge: ChallengeReport | null;
+}
+
+type FirstCapture<Reading> =
+  | { readonly kind: "rendered"; readonly rendered: Rendered<Reading> }
+  | { readonly kind: "late-challenge"; readonly evidence: BlockInput };
+
+const finishCapture = async <Reading>(
+  { readAfterCapture, tracker }: Render<Reading>,
+  challenge: ChallengeWait,
+  captured: CapturedDocument,
+): Promise<Rendered<Reading>> => {
+  const settled = settledChallenge(tracker, challenge, captured);
+
+  tracker.stop();
+
+  return { afterCapture: await readAfterCapture(), captured, challenge: settled };
+};
+
+const captureUnlessLateChallenge = async <Reading>(
+  render: Render<Reading>,
+  challenge: ChallengeWait,
+): Promise<FirstCapture<Reading>> => {
+  const captured = await captureCurrentDocument(render.browser, render.tracker, render.deadline);
+  const evidence = blockInputOf(render.tracker, captured);
+
+  if (!challengeGaveUp(challenge.report) && challengeCandidate(evidence) !== undefined) {
+    return { evidence, kind: "late-challenge" };
+  }
+
+  return { kind: "rendered", rendered: await finishCapture(render, challenge, captured) };
+};
+
+const recaptureAfterLateChallenge = async <Reading>(
+  render: Render<Reading>,
+  challenge: ChallengeWait,
+  evidence: BlockInput,
+): Promise<Rendered<Reading>> => {
+  const { browser, deadline, tracker } = render;
+
+  const late = await timeStage(
+    "challenge",
+    async () => await waitForChallenge(tracker, deadline, evidence, challenge.report),
+    deadline,
+  );
+
+  return await timeStage(
+    "capture",
+    async () =>
+      await finishCapture(render, late, await captureCurrentDocument(browser, tracker, deadline)),
+    deadline,
+  );
+};
+
+const sourceOf = (
+  relay: RelayFailures,
+  tracker: PageTracker,
+  { captured, challenge }: Rendered<unknown>,
+): Omit<SourceDocument, "identity"> => {
+  const relayFailure = relayFailureFor(relay, captured.document);
+
+  if (relayFailure !== undefined) {
+    throw relayFailure;
+  }
+
+  const input = blockInputOf(tracker, captured);
+
+  return {
+    ...input.response,
+    block: classifyResponse({ ...input, challenge }),
+    html: captured.html,
+    requestUrls: input.requestUrls,
+  };
+};
+
 export const renderDocument = async <Reading>(
   browser: DriverBrowser,
   url: URL,
@@ -440,6 +559,7 @@ export const renderDocument = async <Reading>(
   readAfterCapture: () => Promise<Reading>,
 ): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
   const tracker = new PageTracker(browser, (document) => relayFailureFor(relay, document));
+  const render: Render<Reading> = { browser, deadline, readAfterCapture, tracker };
 
   try {
     await timeStage(
@@ -452,40 +572,24 @@ export const renderDocument = async <Reading>(
       deadline,
     );
 
-    const { afterCapture, captured } = await timeStage(
-      "capture",
-      async () => {
-        const current = await captureCurrentDocument(browser, tracker, deadline);
-
-        tracker.stop();
-
-        return { afterCapture: await readAfterCapture(), captured: current };
-      },
+    const challenge = await timeStage(
+      "challenge",
+      async () => await waitForChallenge(tracker, deadline),
       deadline,
     );
 
-    const { document, html } = captured;
-    const relayFailure = relayFailureFor(relay, document);
+    const first = await timeStage(
+      "capture",
+      async () => await captureUnlessLateChallenge(render, challenge),
+      deadline,
+    );
 
-    if (relayFailure !== undefined) {
-      throw relayFailure;
-    }
+    const rendered =
+      first.kind === "rendered"
+        ? first.rendered
+        : await recaptureAfterLateChallenge(render, challenge, first.evidence);
 
-    const details = tracker.responseOf(document);
-
-    return {
-      afterCapture,
-      source: {
-        ...details,
-        block: classifyResponse({
-          html,
-          requestUrls: tracker.requestUrls(document),
-          response: details,
-        }),
-        html,
-        requestUrls: tracker.requestUrls(document),
-      },
-    };
+    return { afterCapture: rendered.afterCapture, source: sourceOf(relay, tracker, rendered) };
   } finally {
     tracker.reportDropped();
     tracker.stop();

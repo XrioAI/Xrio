@@ -368,6 +368,8 @@ const sendFilledPage = (response: ServerResponse, marker: string, filler: number
   );
 };
 
+const ARTICLE = `<article>${"The fixture contains ordinary article content and useful prose. ".repeat(120)}</article>`;
+
 const routes = new Map<
   string,
   (response: ServerResponse, origins: FixtureOrigins, request: IncomingMessage) => void
@@ -806,8 +808,76 @@ const routes = new Map<
   ],
 ]);
 
+const challengeRounds = (name: string): number => {
+  if (name === "four-challenges") {
+    return 4;
+  }
+
+  return name === "same-vendor" || name === "two-vendors" ? 2 : 1;
+};
+
+const setChallengeHeader = (response: ServerResponse, name: string, step: number): void => {
+  if (name === "late-request") {
+    return;
+  }
+
+  const header = name === "two-vendors" && step === 2 ? "x-datadome-response" : "cf-mitigated";
+  response.setHeader(header, "challenge");
+};
+
+const challengeScript = (name: string, step: number): string => {
+  let script = "";
+
+  if (name === "in-place") {
+    script = `setTimeout(() => { document.title = "Article"; document.body.innerHTML = ${JSON.stringify(ARTICLE)}; }, 300);`;
+  } else if (name !== "never") {
+    const target =
+      name === "navigation" || name === "late-request"
+        ? "/challenge/content"
+        : `/challenge/${name}?step=${step + 1}`;
+
+    script = `setTimeout(() => { location.href = ${JSON.stringify(target)}; }, 750);`;
+
+    if (name === "late-request") {
+      script +=
+        'document.addEventListener("DOMContentLoaded", () => { setTimeout(() => { fetch("/cdn-cgi/challenge-platform/h/g/orchestrate/test"); }, 0); });';
+    }
+  }
+
+  return script;
+};
+
+const challengePage = (
+  request: IncomingMessage,
+  response: ServerResponse,
+  { origin }: FixtureOrigins,
+): void => {
+  const url = new URL(request.url ?? "/", origin);
+  const name = url.pathname.slice("/challenge/".length);
+  const step = Number(url.searchParams.get("step") ?? "1");
+
+  if (name === "content" || step > challengeRounds(name)) {
+    sendPage(response, name, ARTICLE);
+
+    return;
+  }
+
+  setChallengeHeader(response, name, step);
+  response.setHeader("content-type", "text/html");
+  response.end(
+    `<html><head><title>Just a moment...</title></head><body><script>${challengeScript(name, step)}</script></body></html>`,
+  );
+};
+
 export const conformancePages: FixtureHandler = (request, response, origins) => {
   const { pathname } = new URL(request.url ?? "/", origins.origin);
+
+  if (pathname.startsWith("/challenge/")) {
+    challengePage(request, response, origins);
+
+    return;
+  }
+
   const route = routes.get(pathname);
 
   recordRequest(pathname);

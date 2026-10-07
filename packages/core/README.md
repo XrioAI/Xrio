@@ -87,7 +87,7 @@ Both modes accept HTML and XHTML. Browser modes reject JSON, XML, PDF, and denie
 
 Current limits, lifted in later releases:
 
-- There is no challenge wait, and `waitFor` is not available yet.
+- `waitFor` is not available yet.
 
 A browser scrape with `proxy` sends Chrome through a local relay on 127.0.0.1 that lives for that one visit. The relay holds the proxy credentials and dials the proxy itself, so Chrome's argv and profile never carry them. Chrome cannot send the relay a token, so the relay admits any client on 127.0.0.1 while the visit lasts. Chrome resolves no names itself (`--host-resolver-rules=MAP * ^NOTFOUND,EXCLUDE 127.0.0.1`), so target names reach only the proxy. It sends loopback addresses through the relay too (`--proxy-bypass-list=<-loopback>`), and the relay refuses them. WebRTC is limited to proxied traffic, because the profile sets `webrtc.ip_handling_policy` to `disable_non_proxied_udp`. A browser scrape without a proxy starts no relay. The relay records why a tunnel or request failed, so a browser scrape reports a 407, an unreachable proxy and a refused tunnel with the same codes as http mode. That holds when Chrome's navigation fails with a proxy or tunnel net error, and when the relay recorded a failure for the host of a plain `http://` document, whose error response Chrome would otherwise return as the page. A `net::ERR_PROXY_*` or `net::ERR_TUNNEL_*` the relay cannot attribute stays `NETWORK_ERROR` with `details.netError`.
 
@@ -142,6 +142,18 @@ When the caller aborts, the scrape rejects with `signal.reason`, as native APIs 
 
 HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` or `application/xhtml+xml` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded with the same charset rules as HTML, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. In browser modes, `body` holds the response body when it is at most 64 KiB, and is empty otherwise. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
 
+### Browser waits
+
+Browser modes wait for recognised challenges after DOMContentLoaded. Each round polls every 250 ms for a loaded replacement document, for at most 20 seconds. A scrape permits three rounds across vendors and reserves one second for capture. Each captured document uses its own request log.
+
+`block.challenge` is `null` when no challenge wait occurred, including every http scrape. Otherwise it contains `rounds`, with `vendor`, `rule`, and `waitedMs`, and one outcome:
+
+- `passed`: a replacement document passed the challenge.
+- `passed_in_place`: the page replaced the challenge body within the same document.
+- `rounds_exhausted`: the captured document was still a challenge when no wait remained, such as after three rounds.
+- `budget_exhausted`: a round used its full 20-second budget.
+- `deadline`: the scrape deadline shortened a round.
+
 ### Identity report
 
 `identity` says what Xrio configured for the scrape and how much of it was observed. It is not evidence that a site accepted the browser. Checking `identity.mode` narrows its type in TypeScript. A scrape that rejects carries no report, and the `identity-chosen` event (see the diagnostics channels above) names the identity its browser was launched with. In headed mode that event's `record` and `digests.device` are `null`, because the record holds what Chrome presented, which only the launch read knows.
@@ -169,7 +181,7 @@ In browser modes it is `{ mode, seed, record, digests, binary, exit, surfaces, o
 - `vendor`: the vendor whose evidence decided the verdict, or `null`.
 - `evidence`: every rule that fired, ordered by tier, each `{ rule, tier, family, vendor, detail }`. `detail` is at most 160 characters. It never includes cookie values, query-string values (only the names of parameters that have one), or the value of a header that matters only by its presence.
 - `passedChallenges`: rules that prove a challenge was issued but did not decide, because the captured document is not shaped like an interstitial. The challenge was passed, or the page was served around it.
-- `challenge`: `null` in http mode. Browser modes will report their challenge wait here, with its `outcome` and one entry per round; until that wait exists, it is `null` there too.
+- `challenge`: `null` in http mode and when no challenge wait occurred. Otherwise it contains the wait's `outcome` and one entry per round. See [Browser waits](#browser-waits).
 
 Evidence has tiers. E0 decides alone. E1 decides alone. Its markup rules fire only on a document small enough to be an interstitial (at most 50,000 characters of HTML and 5,000 of text, counted as code points with entities decoded), and the vendor sensors that also load on working pages need fewer than 100 text characters as well; an E1 challenge cookie needs only an HTML response. Every pass over the markup, the request URLs and the cookies runs in time linear in its input, and markup rules that apply at any size read only the first 1 MiB of the document, so a hostile page cannot stall classification. E2 is weak, and decides `blocked` only when two signals come from different families; one family is `suspect`. Status codes are E2 at most, so a 403 alone is never `blocked`. E3 suppressors cancel E1 and E2 for non-HTML, JSON and XML bodies; a body counts as XML only when it opens with an XML declaration and holds no `<html>` element. These page-shape thresholds come from [crawl4ai](https://github.com/unclecode/crawl4ai) (Apache-2.0).
 
