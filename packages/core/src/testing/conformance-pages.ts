@@ -678,6 +678,16 @@ const routes = new Map<
     },
   ],
   [
+    "/noscript",
+    (response) => {
+      sendPage(
+        response,
+        "noscript",
+        `${ARTICLE}<noscript><a href="/fallback">Fallback link</a><img src="/fallback.png" alt="Fallback image">Fallback text</noscript>`,
+      );
+    },
+  ],
+  [
     "/late-selector",
     (response) => {
       sendPage(

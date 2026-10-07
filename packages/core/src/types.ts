@@ -76,13 +76,15 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
 }[Format];
 
 export interface SourceDocument extends ResponseDetails {
+  scriptsRan: boolean;
   html: string;
   block: BlockReport;
   requestUrls: readonly string[];
   identity: IdentityReport;
 }
 
-export type RenderedDocument = Pick<SourceDocument, "html" | "url">;
+export type RenderedDocument = Pick<SourceDocument, "html" | "url"> &
+  Partial<Pick<SourceDocument, "scriptsRan">>;
 
 export type ResolvedMode = HttpMode | BrowserMode;
 

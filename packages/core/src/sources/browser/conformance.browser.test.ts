@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
+import { extractContent } from "../../content/formats.ts";
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { knobOf } from "../../humanizer/contracts.ts";
@@ -678,6 +679,20 @@ describe.each(MODES)("documents captured whatever their URL or readiness, %s", (
   });
 });
 
+describe.each(MODES)("converted formats, %s", (mode) => {
+  serveFixturePages();
+
+  it("omits noscript from every converted format and retains the captured HTML", async () => {
+    const source = await load(mode, "/noscript");
+    const { content } = extractContent(source);
+    expect(source.html).toContain("<noscript>");
+    expect(content.markdown).not.toContain("Fallback");
+    expect(content.text).not.toContain("Fallback");
+    expect(content.links).toStrictEqual([]);
+    expect(content.images).toStrictEqual([]);
+  });
+});
+
 describe.each(MODES)("body previews, %s", (mode) => {
   serveFixturePages();
 
@@ -1295,6 +1310,7 @@ describe.each(MODES)("challenge waits, %s", (mode) => {
     const source = await load(mode, `/challenge/${route}`, timeoutMs);
     expect(source.block.challenge?.outcome).toBe(outcome);
     expect(source.block.challenge?.rounds).toHaveLength(rounds);
+    expect(source.scriptsRan).toBeTruthy();
   });
 });
 

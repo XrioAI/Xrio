@@ -148,6 +148,7 @@ const readDocument = async (
     html,
     identity: identityNow(),
     requestUrls,
+    scriptsRan: false,
   };
 };
 

@@ -589,6 +589,7 @@ const sourceOf = (
     block: classifyResponse({ ...input, challenge }),
     html: captured.html,
     requestUrls: input.requestUrls,
+    scriptsRan: true,
   };
 };
 
