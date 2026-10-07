@@ -44,11 +44,11 @@ The default mode is `headed`, so a client needs `browserPath` unless it picks an
 
 Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client.
 
-### Standalone proxy manager
+### Internal proxy manager
 
-`ProxyManager` manages one proxy and its optional provider session. It is not yet connected to `XrioClient.scrape()` or browser modes. Browser integration is tracked in [XRI-40](https://linear.app/proxidize/issue/XRI-40/integrate-proxy-manager-with-headed-and-headless-browser-modes). The caller owns scrape retries and translates results into `success`, `blocked`, `transient_connection_failure`, or `other_failure`. Authentication failures, invalid options, cancellation, exhausted scrape deadlines, and content-conversion errors belong to `other_failure`.
+`ProxyManager` manages one proxy and its optional provider session. The manager, its lookup types, and the config loader are internal and are not exported from `@xrio/core`. They are not yet connected to `XrioClient.scrape()` or browser modes. Browser integration is tracked in [XRI-40](https://linear.app/proxidize/issue/XRI-40/integrate-proxy-manager-with-headed-and-headless-browser-modes). The caller owns scrape retries and translates results into a `RotationSignal`: `success`, `blocked`, `transient_connection_failure`, or `other_failure`. Authentication failures, invalid options, cancellation, exhausted scrape deadlines, and content-conversion errors belong to `other_failure`.
 
-The manager discovers one `xrio.config.ts`, `.mts`, `.js`, or `.mjs` in the working directory. It does not search parents; multiple matching files or invalid configuration fail with `INVALID_OPTIONS`. Config files default-export a synchronous object. TypeScript uses Node's native type stripping: use erasable types, explicit relative import extensions, and no top-level `await` or tsconfig path aliases. Use `.mts` or `.mjs` for an ESM config inside a CommonJS project. Config modules follow Node's module cache; there is no hot reload.
+The internal `loadXrioConfig()` loader discovers one `xrio.config.ts`, `.mts`, `.js`, or `.mjs` in the working directory. It does not search parents; multiple matching files or invalid configuration fail with `INVALID_OPTIONS`. Config files default-export a synchronous object. TypeScript uses Node's native type stripping: use erasable types, explicit relative import extensions, and no top-level `await` or tsconfig path aliases. Use `.mts` or `.mjs` for an ESM config inside a CommonJS project. Config modules follow Node's module cache; there is no hot reload. The package exports `XrioConfig` for typing this file.
 
 ```ts
 // xrio.config.ts
@@ -64,32 +64,32 @@ export default {
 
 Exactly one literal `{session}` in the username or password enables rotation. The manager generates the initial ID and never writes it back to the config. `session` options are optional, defaulting to eight numeric characters; `alphanumeric` and integer lengths from 1 to 256 are supported. A URL without the placeholder is preserved unchanged, even if its credentials contain a provider-style session suffix. Format rules must fit the proxy provider. Generating a new session requests a new association; it cannot guarantee a different IP.
 
-Construct `new ProxyManager()` to use discovery, or `new ProxyManager(config)` with a complete `ProxyConfig` to replace discovery, without merging. Management configuration is separate from `XrioClient` constructor/scrape options. `loadXrioConfig()` exposes the same loader and preserves other managers' sections for their own validation.
+The future initializer should call `loadXrioConfig()` once, then pass each manager its section. Construct `new ProxyManager(config.proxy)` after checking that the proxy section exists. The constructor requires configuration values and performs no file discovery. Management configuration is separate from `XrioClient` constructor/scrape options; there is no merging or precedence ladder. The loader preserves other managers' sections for their own validation.
 
-| Method                                       | Behavior                                                                                                                                            |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `get_proxy_connection_string()`              | Returns the current connection string without rotating or making a network request.                                                                 |
-| `get_proxy_info(connection, signal?)`        | Looks up complete `{ exit_ip, country, timezone, locale }` information through an issued connection.                                                |
-| `should_rotate_session(connection, outcome)` | Returns `true` for a current managed session's `blocked` or `transient_connection_failure` outcome, otherwise `false`. Does not change the session. |
-| `change_session()`                           | Rotates immediately and returns the new connection string; throws when rotation is not configured.                                                  |
+| Method                                     | Behavior                                                                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getProxyConnectionString()`               | Returns the current connection string without rotating or making a network request.                                                                 |
+| `getProxyInfo(connection, deadline)`       | Looks up complete `{ exitIp, country, timezone, locale }` information through an issued connection, within the caller's `Deadline`.                 |
+| `shouldRotateSession(connection, outcome)` | Returns `true` for a current managed session's `blocked` or `transient_connection_failure` outcome, otherwise `false`. Does not change the session. |
+| `changeSession()`                          | Rotates immediately and returns the new connection string; throws when rotation is not configured.                                                  |
 
 Keep the exact connection used by a scrape and pass it back with its outcome. Results for previous connections return `false`. The caller applies the recommendation explicitly:
 
 ```ts
-if (manager.should_rotate_session(connection, outcome)) {
-  manager.change_session();
+if (manager.shouldRotateSession(connection, outcome)) {
+  manager.changeSession();
 }
 ```
 
-Previously issued connections remain valid for in-flight work. Issued sessions are retained for the manager's lifetime to prevent reuse; exhausting a small session space fails explicitly rather than resurrecting an old session.
+Previously issued connections remain valid for in-flight work. Issued sessions are retained for the manager's lifetime to prevent reuse; failing to generate an unused session throws `PROXY_SESSION_GENERATION_FAILED` rather than resurrecting an old session.
 
-The four methods above are public. Configuration, the current connection, and previously issued connections are runtime-private `#` fields. The future consuming module will obtain a connection, perform the scrape, check whether rotation is warranted, and call `change_session()` when needed; it does not supply a transport to the manager.
+The four methods above are public on the internal class. Configuration, the current connection, and previously issued connections are runtime-private `#` fields. The future consuming module will obtain a connection, perform the scrape, check whether rotation is warranted, and call `changeSession()` when needed; it does not supply a transport to the manager.
 
 `info.ts` owns the metadata HTTP requests, using the existing HTTP client and relay to route through the exact proxy, including DNS. These requests reject redirects and never fall back to a direct connection. The manager does not perform scrape requests.
 
-Information lookups try [ipwho.is](https://ipwhois.io/documentation), then [anonymous ipapi.is](https://ipapi.is/free-tier.html), without keys. Each service has a five-second budget; caller cancellation stops both. Responses must contain a valid IP, recognized country, and valid named timezone. Anonymous ipapi country names are matched against normalized English `Intl.DisplayNames` values; unrecognized names fail. Locale is the likely country default inferred through `Intl.Locale`, not a measured language preference. Each lookup returns one provider's complete observation, without mixing fields or caching it as a guarantee about later requests.
+Information lookups try [ipwho.is](https://ipwhois.io/documentation), then [anonymous ipapi.is](https://ipapi.is/free-tier.html), without keys. Both services share one five-second budget within the caller's deadline. The primary gets at most 2.5 seconds, leaving time for the fallback; the fallback can use the remaining total budget. Caller cancellation stops both. Responses must contain a valid IP, recognized country, and valid named timezone. Anonymous ipapi country names are matched against normalized English `Intl.DisplayNames` values; unrecognized names fail. Locale is the likely country default inferred through `Intl.Locale`, not a measured language preference. Each lookup returns one provider's complete observation, without mixing fields or caching it as a guarantee about later requests.
 
-If both providers fail, the method throws `PROXY_INFO_UNAVAILABLE` without exposing transport credentials or changing the session. It never substitutes local IP or fingerprint values. Free service quotas still apply, especially for shared exit IPs.
+Proxy authentication and reachability failures immediately throw `PROXY_AUTH_FAILED` or `PROXY_UNREACHABLE`, without trying another service through the same failed proxy. If neither service supplies complete information within the lookup budget, the method throws `PROXY_INFO_UNAVAILABLE`. Caller deadline failures retain `TIMEOUT`, and caller cancellation retains its original reason. Errors never expose proxy credentials or change the session. Lookups never substitute local IP or fingerprint values. The future consumer must propagate these failures before launching a browser. Free service quotas still apply, especially for shared exit IPs.
 
 ### Browser modes
 

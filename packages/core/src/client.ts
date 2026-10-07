@@ -27,17 +27,7 @@ export type {
 
 export { isXrioError, XrioError } from "./errors.ts";
 
-export { loadXrioConfig } from "./config.ts";
-
 export type { XrioConfig } from "./config.ts";
-
-export { ProxyManager } from "./proxy/manager.ts";
-
-export type { ScrapeOutcome } from "./proxy/manager.ts";
-
-export type { ProxyConfig, SessionOptions, SessionTemplate } from "./proxy/config.ts";
-
-export type { ProxyInfo } from "./proxy/info.ts";
 
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
 

@@ -5,12 +5,12 @@ import { createSession } from "wreq-js";
 
 import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
-import { XrioError } from "../errors.ts";
+import { isXrioError, XrioError } from "../errors.ts";
 import { parseProxy } from "../options.ts";
 import { startRelay } from "../relay/relay.ts";
 
 export interface ProxyInfo {
-  exit_ip: string;
+  exitIp: string;
   /** ISO 3166-1 alpha-2 country code. */
   country: string;
   /** IANA time zone reported for the observed exit IP. */
@@ -19,7 +19,9 @@ export interface ProxyInfo {
   locale: string;
 }
 
-const LOOKUP_TIMEOUT_MS = 5000;
+const EXIT_BUDGET_MS = 5000;
+
+const PRIMARY_BUDGET_MS = EXIT_BUDGET_MS / 2;
 
 // ISO 3166-1 alpha-2 codes from IANA tzdata's public-domain iso3166.tab (2025-07-01).
 const COUNTRY_CODES = new Set(
@@ -60,7 +62,7 @@ const proxyInfo = (ip: unknown, country: unknown, timezone: unknown): ProxyInfo 
     const inferred = new Intl.Locale(`und-${country}`).maximize().minimize();
     const locale = new Intl.Locale(inferred, { region: country }).toString();
 
-    return { country, exit_ip: ip, locale, timezone };
+    return { country, exitIp: ip, locale, timezone };
   } catch {
     return undefined;
   }
@@ -108,8 +110,8 @@ const fromIpApi = (body: unknown): ProxyInfo | undefined => {
 };
 
 const services = [
-  { parse: fromIpWho, url: "https://ipwho.is/" },
-  { parse: fromIpApi, url: "https://api.ipapi.is/" },
+  { parse: fromIpWho, timeoutMs: PRIMARY_BUDGET_MS, url: "https://ipwho.is/" },
+  { parse: fromIpApi, timeoutMs: EXIT_BUDGET_MS, url: "https://api.ipapi.is/" },
 ];
 
 const requestProxyJson = async (
@@ -118,30 +120,44 @@ const requestProxyJson = async (
   deadline: Deadline,
 ): Promise<{ status: number; body: unknown }> => {
   await using relay = await startRelay(parseProxy(connection), deadline);
-  await using session = await createSession({ proxy: relay.url, timeout: 0 });
-  // Fixed HTTPS endpoints only; rejecting redirects also prevents a redirect to a local target.
-  const response = await session.fetch(url, { redirect: "error", signal: deadline.signal });
 
-  return { body: response.ok ? await response.json() : undefined, status: response.status };
+  try {
+    await using session = await createSession({ proxy: relay.url, timeout: 0 });
+    // Fixed HTTPS endpoints only; rejecting redirects also prevents a redirect to a local target.
+    const response = await session.fetch(url, { redirect: "error", signal: deadline.signal });
+
+    return { body: response.ok ? await response.json() : undefined, status: response.status };
+  } catch (error) {
+    throw relay.failureFor(new URL(url).hostname) ?? error;
+  }
 };
 
 export const lookupProxyInfo = async (
   connection: string,
-  signal?: AbortSignal,
+  deadline: Deadline,
   requestJson = requestProxyJson,
 ): Promise<ProxyInfo> => {
+  deadline.throwIfExpired();
+  using budget = deadline.startStage(EXIT_BUDGET_MS);
+
   for (const service of services) {
-    signal?.throwIfAborted();
-    using deadline = startDeadline(LOOKUP_TIMEOUT_MS, signal);
+    deadline.throwIfExpired();
+
+    if (budget.signal.aborted) {
+      break;
+    }
+
+    using attempt = startDeadline(service.timeoutMs, budget.signal);
 
     try {
       // oxlint-disable-next-line eslint/no-await-in-loop -- only call the fallback when the primary fails.
       const response = await untilDeadline(
-        async () => await requestJson(service.url, connection, deadline),
-        deadline,
+        async () => await requestJson(service.url, connection, attempt),
+        attempt,
       );
 
       deadline.throwIfExpired();
+      attempt.throwIfExpired();
 
       const info =
         response.status >= 200 && response.status < 300 ? service.parse(response.body) : undefined;
@@ -149,9 +165,14 @@ export const lookupProxyInfo = async (
       if (info !== undefined) {
         return info;
       }
-    } catch {
-      // Transport errors may contain credentials; do not expose them as causes.
-      signal?.throwIfAborted();
+    } catch (error) {
+      deadline.throwIfExpired();
+
+      if (isXrioError(error, "PROXY_AUTH_FAILED") || isXrioError(error, "PROXY_UNREACHABLE")) {
+        throw error;
+      }
+
+      // Other request errors may contain credentials; do not expose them as causes.
     }
   }
 

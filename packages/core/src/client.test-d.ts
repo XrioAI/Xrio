@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from "vite-plus/test";
 
-import { isXrioError, ProxyManager, XrioClient, XrioError } from "./client.ts";
+import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import type {
   BlockEvidence,
   BlockReport,
@@ -11,19 +11,24 @@ import type {
   ClientOptions,
   ErrorCode,
   InvalidOptionsError,
-  ProxyConfig,
-  ProxyInfo,
   ScrapeFormat,
   ScrapeResult,
   StructuredContent,
   XrioErrorCode,
   XrioConfig,
 } from "./client.ts";
+import type { Deadline } from "./deadline.ts";
+import type { ProxyConfig } from "./proxy/config.ts";
+import type { ProxyInfo } from "./proxy/info.ts";
+import { ProxyManager } from "./proxy/manager.ts";
+import type { RotationSignal } from "./proxy/manager.ts";
 
 declare const error: unknown;
 
+declare const deadline: Deadline;
+
 describe("XrioClient types", () => {
-  it("exports the standalone proxy contract and typed configuration", () => {
+  it("keeps the proxy manager internal while exposing typed configuration", () => {
     const config = {
       proxy: {
         session: { format: "numeric", length: 8 },
@@ -34,13 +39,19 @@ describe("XrioClient types", () => {
     const manager = new ProxyManager(config.proxy);
 
     expectTypeOf<keyof ProxyManager>().toEqualTypeOf<
-      "get_proxy_connection_string" | "get_proxy_info" | "should_rotate_session" | "change_session"
+      "getProxyConnectionString" | "getProxyInfo" | "shouldRotateSession" | "changeSession"
     >();
 
-    expectTypeOf(manager.get_proxy_connection_string()).toEqualTypeOf<string>();
-    expectTypeOf(manager.change_session()).toEqualTypeOf<string>();
-    expectTypeOf(manager.get_proxy_info("connection")).toEqualTypeOf<Promise<ProxyInfo>>();
-    expectTypeOf(manager.should_rotate_session("connection", "blocked")).toEqualTypeOf<boolean>();
+    expectTypeOf(manager.getProxyConnectionString()).toEqualTypeOf<string>();
+    expectTypeOf(manager.changeSession()).toEqualTypeOf<string>();
+    expectTypeOf(manager.getProxyInfo("connection", deadline)).toEqualTypeOf<Promise<ProxyInfo>>();
+    expectTypeOf(manager.shouldRotateSession("connection", "blocked")).toEqualTypeOf<boolean>();
+    expectTypeOf<
+      Parameters<ProxyManager["shouldRotateSession"]>[1]
+    >().toEqualTypeOf<RotationSignal>();
+
+    // @ts-expect-error The caller must supply the proxy configuration explicitly.
+    void new ProxyManager();
 
     // @ts-expect-error Explicit session settings require a literal placeholder.
     const missingPlaceholder: ProxyConfig = { session: { length: 8 }, url: "http://proxy.test" };

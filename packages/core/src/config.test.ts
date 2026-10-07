@@ -88,9 +88,10 @@ describe("configuration discovery", () => {
     expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
   });
 
-  it("discovers a typed config automatically when constructing the standalone manager", () => {
+  it("loads configuration explicitly before passing its proxy section to the manager", () => {
     const directory = workspace();
     const managerModule = new URL("proxy/manager.ts", import.meta.url).href;
+    const configModule = new URL("config.ts", import.meta.url).href;
 
     writeFileSync(
       path.join(directory, "xrio.config.mts"),
@@ -104,13 +105,44 @@ describe("configuration discovery", () => {
         "-e",
         `
       import { ProxyManager } from ${JSON.stringify(managerModule)};
-      const manager = new ProxyManager();
-      process.stdout.write(manager.get_proxy_connection_string());
+      import { loadXrioConfig } from ${JSON.stringify(configModule)};
+      const config = loadXrioConfig();
+      const manager = new ProxyManager(config.proxy);
+      process.stdout.write(manager.getProxyConnectionString());
     `,
       ],
       { cwd: directory, encoding: "utf-8" },
     );
 
     expect(stdout).toMatch(/^http:\/\/user-\d{8}:secret@proxy\.test$/u);
+  });
+
+  it("does not execute configuration from the working directory during manager construction", () => {
+    const directory = workspace();
+    const managerModule = new URL("proxy/manager.ts", import.meta.url).href;
+
+    writeFileSync(
+      path.join(directory, "xrio.config.mjs"),
+      'process.stdout.write("Unexpected config load"); export default {};',
+    );
+
+    const stdout = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import { ProxyManager } from ${JSON.stringify(managerModule)};
+      try { new ProxyManager(); } catch (error) {
+        if (error.code !== "INVALID_OPTIONS") throw error;
+      }
+      const manager = new ProxyManager({ url: "http://proxy.test:8080" });
+      process.stdout.write(manager.getProxyConnectionString());
+    `,
+      ],
+      { cwd: directory, encoding: "utf-8" },
+    );
+
+    expect(stdout).toBe("http://proxy.test:8080");
   });
 });

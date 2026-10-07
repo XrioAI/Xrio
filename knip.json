@@ -9,7 +9,13 @@
       ]
     },
     "packages/core": {
-      "entry": ["src/client.ts!", "scripts/*.ts!", "examples/*.ts"],
+      "entry": [
+        "src/client.ts!",
+        "src/config.ts!",
+        "src/proxy/manager.ts!",
+        "scripts/*.ts!",
+        "examples/*.ts"
+      ],
       "project": ["src/**/*.ts!", "scripts/*.ts!", "examples/*.ts", "!src/testing/**!"]
     }
   }

@@ -2,9 +2,9 @@
 import { invalidOptions } from "../errors.ts";
 import { parseProxy } from "../options.ts";
 
-export type SessionTemplate = `${string}{session}${string}`;
+type SessionTemplate = `${string}{session}${string}`;
 
-export interface SessionOptions {
+interface SessionOptions {
   format?: "numeric" | "alphanumeric";
   length?: number;
 }

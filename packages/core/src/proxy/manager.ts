@@ -1,13 +1,13 @@
 import { randomInt } from "node:crypto";
 
-import { loadXrioConfig } from "../config.ts";
-import { invalidOptions } from "../errors.ts";
+import type { Deadline } from "../deadline.ts";
+import { invalidOptions, XrioError } from "../errors.ts";
 import { resolveProxyConfig, SESSION_PLACEHOLDER } from "./config.ts";
 import type { ProxyConfig } from "./config.ts";
 import { lookupProxyInfo } from "./info.ts";
 import type { ProxyInfo } from "./info.ts";
 
-export type ScrapeOutcome =
+export type RotationSignal =
   | "success"
   | "blocked"
   | "transient_connection_failure"
@@ -26,41 +26,39 @@ export class ProxyManager {
   readonly #connections = new Set<string>();
   #connection: string;
 
-  public constructor(config: ProxyConfig | undefined = loadXrioConfig().proxy) {
+  public constructor(config: ProxyConfig) {
     this.#config = resolveProxyConfig(config);
     this.#connection = this.#config.url;
 
     if (this.#config.session === undefined) {
       this.#connections.add(this.#connection);
     } else {
-      this.change_session();
+      this.changeSession();
     }
   }
 
-  public get_proxy_connection_string(): string {
+  public getProxyConnectionString(): string {
     return this.#connection;
   }
 
-  public async get_proxy_info(connection_string: string, signal?: AbortSignal): Promise<ProxyInfo> {
-    if (!this.#connections.has(connection_string)) {
+  public async getProxyInfo(connectionString: string, deadline: Deadline): Promise<ProxyInfo> {
+    if (!this.#connections.has(connectionString)) {
       throw invalidOptions("Proxy information requires a connection issued by this manager.");
     }
 
-    return await lookupProxyInfo(connection_string, signal);
+    return await lookupProxyInfo(connectionString, deadline);
   }
 
   /** Checks whether rotation is warranted without changing the session. */
-  public should_rotate_session(connection_string: string, outcome: ScrapeOutcome): boolean {
+  public shouldRotateSession(connectionString: string, outcome: RotationSignal): boolean {
     const eligibleFailure = outcome === "blocked" || outcome === "transient_connection_failure";
 
     return (
-      eligibleFailure &&
-      connection_string === this.#connection &&
-      this.#config.session !== undefined
+      eligibleFailure && connectionString === this.#connection && this.#config.session !== undefined
     );
   }
 
-  public change_session(): string {
+  public changeSession(): string {
     const { session, url } = this.#config;
 
     if (session === undefined) {
@@ -85,6 +83,10 @@ export class ProxyManager {
       }
     }
 
-    throw new Error("Could not generate an unused proxy session; increase proxy.session.length.");
+    throw new XrioError(
+      "PROXY_SESSION_GENERATION_FAILED",
+      "Could not generate an unused proxy session; increase proxy.session.length.",
+      { details: undefined },
+    );
   }
 }
