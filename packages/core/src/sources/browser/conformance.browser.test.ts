@@ -182,6 +182,7 @@ const ALLOWED_PAIRS = new Set([
   "shared_worker Runtime.runIfWaitingForDebugger",
   "other Network.enable",
   "other Runtime.runIfWaitingForDebugger",
+  "main Network.getResponseBody",
 ]);
 
 const FAVICON = "/favicon.ico";
@@ -663,6 +664,17 @@ describe.each(MODES)("documents captured whatever their URL or readiness, %s", (
       cookies: ["empty-html-403=1; Path=/"],
       headers: { "content-type": "text/html", "x-page": "empty-html-403" },
       status: 403,
+    });
+  });
+});
+
+describe.each(MODES)("body previews, %s", (mode) => {
+  serveFixturePages();
+
+  it("previews a JSON body in details.body", async () => {
+    await expect(load(mode, "/json")).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { body: '{"page":"json"}' },
     });
   });
 });

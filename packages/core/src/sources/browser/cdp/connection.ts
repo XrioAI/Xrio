@@ -42,6 +42,11 @@ const CHILD_SCOPES = [
   "shared_worker",
 ] as const satisfies readonly TargetScope[];
 
+const PREVIEW_BUFFERS: ParamsOf<"Network.enable", "main"> = {
+  maxResourceBufferSize: 65_536,
+  maxTotalBufferSize: 1_048_576,
+};
+
 const NO_BODY_BUFFERS: ParamsOf<"Network.enable", "worker"> = {
   maxResourceBufferSize: 0,
   maxTotalBufferSize: 0,
@@ -327,7 +332,9 @@ class PipeConnection {
     this.#sessions.set(sessionId, target);
 
     void settleQuietly([
-      this.send(target, "Network.enable", NO_BODY_BUFFERS, this.#lifetime),
+      target.scope === "main"
+        ? this.send(target, "Network.enable", PREVIEW_BUFFERS, this.#lifetime)
+        : this.send(target, "Network.enable", NO_BODY_BUFFERS, this.#lifetime),
       ...(hostsChildren(target)
         ? [this.send(target, "Target.setAutoAttach", EVERY_CHILD, this.#lifetime)]
         : []),

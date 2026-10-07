@@ -157,6 +157,17 @@ class Tab {
     };
   };
 
+  readonly responseBody = async (requestId: string, deadline: Deadline): Promise<string> => {
+    const { body, base64Encoded } = await this.#send(
+      this.#main,
+      "Network.getResponseBody",
+      { requestId },
+      deadline.signal,
+    );
+
+    return base64Encoded ? Buffer.from(body, "base64").toString("utf-8") : body;
+  };
+
   readonly navigate = async (url: string, deadline: Deadline): Promise<void> => {
     deadline.throwIfExpired();
     await untilAborted(this.#ready, deadline.signal);
@@ -486,6 +497,7 @@ const connect = (chrome: SpawnedChrome, lifetime: AbortSignal): Connected => {
       navigate: opener.navigate,
       onEvent: opener.onEvent,
       product: parseChromeProduct(product),
+      responseBody: opener.responseBody,
     };
   })();
 

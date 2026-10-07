@@ -57,6 +57,7 @@ export interface DriverBrowser {
     deadline: Deadline,
   ) => Promise<Result>;
   readonly close: (budgetMs: number) => Promise<void>;
+  readonly responseBody: (requestId: string, deadline: Deadline) => Promise<string>;
 }
 
 export const CLOSE_BUDGET_MS = 2000;

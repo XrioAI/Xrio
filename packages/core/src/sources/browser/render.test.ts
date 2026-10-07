@@ -65,6 +65,7 @@ const scriptedBrowser = (navigation: Navigation): DriverBrowser => {
       };
     },
     product: { headless: true, major: 150, version: "150.0.0.0" },
+    responseBody: async () => await Promise.resolve(""),
   };
 };
 
@@ -210,5 +211,15 @@ describe("content type", () => {
     run.emit({ ...next, type: "dom-content-loaded" });
     const { source } = await run.result;
     expect(source.status).toBe(201);
+  });
+
+  it("returns a non-HTML response preview and block report", async () => {
+    const run = startedRender(documentHop({ headers: [["content-type", "application/json"]] }));
+
+    using _deadline = run.deadline;
+    await expect(run.result).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { block: { verdict: "ok" }, body: '{"preview":true}', status: 200 },
+    });
   });
 });

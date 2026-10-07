@@ -358,11 +358,28 @@ const captureHtml = async (
   return await readSlices(browser, reply, deadline);
 };
 
-const requireHtmlDocument = (tracker: PageTracker, document: DocumentHop): void => {
+const requireHtmlDocument = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  document: DocumentHop,
+  deadline: Deadline,
+): Promise<void> => {
   const details = tracker.responseOf(document);
 
   if (!isHtmlContentType(details.headers["content-type"])) {
-    throw unsupportedContentType(details, tracker.requestUrls(document), "");
+    let preview = "";
+
+    try {
+      preview = await browser.responseBody(document.requestId, deadline);
+    } catch (error) {
+      deadline.throwIfExpired();
+
+      if (isDriverFailure(error, "browser-gone")) {
+        throw browserCrashed(error);
+      }
+    }
+
+    throw unsupportedContentType(details, tracker.requestUrls(document), preview);
   }
 };
 
@@ -374,7 +391,7 @@ const captureIfCurrent = async (
   const document = await tracker.documentLoaded(deadline);
 
   try {
-    requireHtmlDocument(tracker, document);
+    await requireHtmlDocument(browser, tracker, document, deadline);
 
     const html = await captureHtml(browser, deadline);
 
@@ -430,7 +447,7 @@ export const renderDocument = async <Reading>(
       async () => {
         await navigateTo(browser, tracker, url, relay, deadline);
         const document = await tracker.documentLoaded(deadline);
-        requireHtmlDocument(tracker, document);
+        await requireHtmlDocument(browser, tracker, document, deadline);
       },
       deadline,
     );

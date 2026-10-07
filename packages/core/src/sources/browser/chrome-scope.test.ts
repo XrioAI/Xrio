@@ -100,6 +100,7 @@ const fakeBrowser = (): DriverBrowser => ({
   },
   onEvent: () => () => {},
   product: parseChromeProduct("Chrome/154.0.8037.57"),
+  responseBody: async () => await Promise.resolve(""),
 });
 
 describe("ChromeScope retirement", () => {

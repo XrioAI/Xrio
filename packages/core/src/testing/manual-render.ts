@@ -83,6 +83,7 @@ const controlledBrowser = (first: DocumentHop) => {
       };
     },
     product: { headless: true, major: 154, version: "154.0.0.0" },
+    responseBody: async () => await Promise.resolve('{"preview":true}'),
   };
 
   return {

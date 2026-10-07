@@ -42,6 +42,7 @@ const ALLOWED_COMMANDS = {
   "Browser.getVersion": ["browser"],
   "Browser.setDownloadBehavior": ["browser"],
   "Network.enable": EVERY_TARGET,
+  "Network.getResponseBody": ["main"],
   "Page.bringToFront": ["main"],
   "Page.createIsolatedWorld": ["main"],
   "Page.enable": ["main"],
@@ -86,13 +87,24 @@ interface EveryChild extends AutoAttach {
   readonly filter?: never;
 }
 
+interface PreviewBuffers {
+  readonly maxResourceBufferSize: 65_536;
+  readonly maxTotalBufferSize: 1_048_576;
+}
+
+interface NoBodyBuffers {
+  readonly maxResourceBufferSize: 0;
+  readonly maxTotalBufferSize: 0;
+}
+
 type Narrowed<Table extends { [Name in Method]: ProtocolParams<Name> }> = Table;
 
 type ParamsIn<Kind extends Scope> = Narrowed<{
   "Browser.close": NoParams;
   "Browser.getVersion": NoParams;
   "Browser.setDownloadBehavior": { readonly behavior: "deny" };
-  "Network.enable": { readonly maxResourceBufferSize: 0; readonly maxTotalBufferSize: 0 };
+  "Network.enable": Kind extends "main" ? PreviewBuffers : NoBodyBuffers;
+  "Network.getResponseBody": { readonly requestId: string };
   "Page.bringToFront": NoParams;
   "Page.createIsolatedWorld": { readonly frameId: string; readonly worldName: "" };
   "Page.enable": NoParams;
