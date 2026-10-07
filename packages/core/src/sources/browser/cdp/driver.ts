@@ -130,6 +130,7 @@ class Tab {
   readonly #downloads = new Set<string>();
   #downloadsIdle = Promise.withResolvers<"idle">();
   #navigated = false;
+  #navigationUrl: string | undefined;
   #document: CommittedDocument | undefined;
   readonly #commits = new Set<string>();
   #nextCommit = Promise.withResolvers<"committed">();
@@ -161,6 +162,7 @@ class Tab {
     await untilAborted(this.#ready, deadline.signal);
     await this.#untilFocused(deadline);
     this.#navigated = true;
+    this.#navigationUrl = url;
     this.#commits.clear();
 
     const {
@@ -171,6 +173,7 @@ class Tab {
 
     if (isDownload) {
       this.#downloadStarted(NAVIGATION_DOWNLOAD);
+      this.#emit({ type: "download", url: this.#navigationUrl ?? url });
     }
 
     if (errorText !== "") {
@@ -276,6 +279,10 @@ class Tab {
     }
 
     if (event.method === "Page.downloadWillBegin") {
+      if (event.params.frameId === this.#main.targetId) {
+        this.#emit({ type: "download", url: event.params.url });
+      }
+
       this.#downloadStarted(event.params.guid);
 
       if (event.params.frameId === this.#main.targetId) {
@@ -326,6 +333,10 @@ class Tab {
     }
 
     for (const driverEvent of this.#frame.translate(session, event)) {
+      if (driverEvent.type === "document-request") {
+        this.#navigationUrl = driverEvent.url;
+      }
+
       if (driverEvent.type === "commit") {
         this.#adopt(driverEvent.loaderId);
         this.#commits.add(driverEvent.loaderId);

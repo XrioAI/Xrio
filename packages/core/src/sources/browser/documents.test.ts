@@ -123,6 +123,18 @@ describe("document identity", () => {
     expect(currentDocument(state)?.response?.status).toBe(403);
   });
 
+  it("forgets a download once the page commits another document", () => {
+    const download: DriverEvent = { type: "download", url: "https://example.test/file.zip" };
+    const next = documentHop({ loaderId: "L2", requestId: "R2" });
+    const downloading = recorded([...loaded(documentHop()), download]);
+    const moved = recorded([...loaded(documentHop()), download, ...loaded(next)]);
+
+    expect([downloading.downloadUrl, moved.downloadUrl]).toStrictEqual([
+      "https://example.test/file.zip",
+      undefined,
+    ]);
+  });
+
   it("separates documents whose loader names match in different sessions", () => {
     const first = documentHop();
     const second = documentHop({ sessionId: "S2", status: 403 });

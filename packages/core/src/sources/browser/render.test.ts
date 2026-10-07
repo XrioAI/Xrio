@@ -1,5 +1,6 @@
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -196,5 +197,18 @@ describe("content type", () => {
     expect(events.observed.filter((event) => event === "raw-header-fallback")).toHaveLength(
       fallbacks,
     );
+  });
+
+  it("loads the document a page navigates to after starting a download", async () => {
+    const next = documentHop({ loaderId: "L2", requestId: "R2", status: 201 });
+    const run = startedRender(documentHop());
+    using _deadline = run.deadline;
+    run.emit({ type: "download", url: "https://example.test/file.zip" });
+    run.emit({ hop: next, type: "document-response" });
+    run.emit({ ...next, type: "commit" });
+    await nextTurn();
+    run.emit({ ...next, type: "dom-content-loaded" });
+    const { source } = await run.result;
+    expect(source.status).toBe(201);
   });
 });

@@ -4,11 +4,13 @@ import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { XrioError } from "../../errors.ts";
 import type { Relay } from "../../proxy/relay.ts";
 import type { ResponseDetails, SourceDocument } from "../../types.ts";
+import { isHtmlContentType, unsupportedContentType } from "../content-type.ts";
 import { networkFailure } from "../net-error.ts";
 import {
   currentDocument,
   documentKey,
   documentResponse,
+  downloadResponse,
   emptyDocuments,
   MAX_REQUEST_URLS,
   rawHeadersOf,
@@ -130,6 +132,9 @@ class PageTracker {
   get lastRequestUrl(): string | undefined {
     return this.#state.lastRequestUrl;
   }
+  get downloaded(): boolean {
+    return this.#state.downloadUrl !== undefined;
+  }
 
   loadedDocument(): DocumentHop | undefined {
     if (this.#state.failed) {
@@ -158,6 +163,12 @@ class PageTracker {
 
         if (document !== undefined) {
           resolve(document);
+
+          return;
+        }
+
+        if (this.downloaded) {
+          reject(this.downloadError());
 
           return;
         }
@@ -192,6 +203,10 @@ class PageTracker {
       this.#waiters.delete(check);
       deadline.signal.removeEventListener("abort", abort);
     }
+  }
+
+  downloadError(): XrioError<"UNSUPPORTED_CONTENT_TYPE"> {
+    return unsupportedContentType(downloadResponse(this.#state), [], "");
   }
 
   isCurrent(document: DocumentHop): boolean {
@@ -275,6 +290,10 @@ const navigateTo = async (
         return;
       }
 
+      if (tracker.downloaded) {
+        throw tracker.downloadError();
+      }
+
       const failingHop = tracker.lastRequestUrl;
 
       throw (
@@ -339,6 +358,14 @@ const captureHtml = async (
   return await readSlices(browser, reply, deadline);
 };
 
+const requireHtmlDocument = (tracker: PageTracker, document: DocumentHop): void => {
+  const details = tracker.responseOf(document);
+
+  if (!isHtmlContentType(details.headers["content-type"])) {
+    throw unsupportedContentType(details, tracker.requestUrls(document), "");
+  }
+};
+
 const captureIfCurrent = async (
   browser: DriverBrowser,
   tracker: PageTracker,
@@ -347,6 +374,8 @@ const captureIfCurrent = async (
   const document = await tracker.documentLoaded(deadline);
 
   try {
+    requireHtmlDocument(tracker, document);
+
     const html = await captureHtml(browser, deadline);
 
     return html !== undefined && tracker.isCurrent(document) ? { document, html } : undefined;
@@ -400,7 +429,8 @@ export const renderDocument = async <Reading>(
       "navigation",
       async () => {
         await navigateTo(browser, tracker, url, relay, deadline);
-        await tracker.documentLoaded(deadline);
+        const document = await tracker.documentLoaded(deadline);
+        requireHtmlDocument(tracker, document);
       },
       deadline,
     );

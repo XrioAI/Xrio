@@ -33,6 +33,7 @@ export type DriverEvent =
       headers: RawHeaders;
     }
   | ({ type: "request"; url: string } & DocumentIdentity)
+  | { type: "download"; url: string }
   | { type: "crash" }
   | { type: "disconnect" };
 

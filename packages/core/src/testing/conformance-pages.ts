@@ -531,6 +531,12 @@ const routes = new Map<
     },
   ],
   [
+    "/redirect-to-download",
+    (response) => {
+      redirect(response, "/download", "download-hop");
+    },
+  ],
+  [
     "/json",
     (response) => {
       response.setHeader("content-type", "application/json");

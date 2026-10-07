@@ -9,6 +9,7 @@ import type { HttpIdentityReport } from "../humanizer/report.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { SourceDocument } from "../types.ts";
+import { isHtmlContentType, unsupportedContentType } from "./content-type.ts";
 import { decodeBody } from "./decode.ts";
 import { networkFailure } from "./net-error.ts";
 import { responseDetailsFrom } from "./response.ts";
@@ -117,19 +118,16 @@ const readDocument = async (
 ): Promise<SourceDocument> => {
   const details = responseDetailsFrom(response.url, response.status, response.headers);
   const contentType = details.headers["content-type"] ?? "";
-  const [mediaType] = contentType.split(";");
   const body = NULL_BODY_STATUSES.has(response.status) ? null : response.body;
 
-  if (mediaType.trim().toLowerCase() !== "text/html" || body === null) {
-    const received = body === null ? "no response body" : contentType || "no content type";
-    const block = classifyResponse({ html: undefined, requestUrls, response: details });
+  if (body === null) {
+    throw unsupportedContentType(details, requestUrls, null);
+  }
+
+  if (!isHtmlContentType(contentType)) {
     const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline, response.url);
 
-    throw new XrioError(
-      "UNSUPPORTED_CONTENT_TYPE",
-      `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
-      { details: { ...details, block, body: decodeBody(preview.bytes, contentType) } },
-    );
+    throw unsupportedContentType(details, requestUrls, decodeBody(preview.bytes, contentType));
   }
 
   const { bytes, truncated } = await readBody(body, MAX_BODY_BYTES, deadline, response.url);

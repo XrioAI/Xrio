@@ -38,6 +38,7 @@ export interface Documents {
   readonly droppedState: number;
   readonly droppedUrls: number;
   readonly lastRequestUrl: string | undefined;
+  readonly downloadUrl: string | undefined;
   readonly failed: boolean;
 }
 
@@ -49,6 +50,7 @@ const requestKey = ({ sessionId, requestId }: { sessionId: string; requestId: st
 
 export const emptyDocuments = (): Documents => ({
   current: undefined,
+  downloadUrl: undefined,
   droppedState: 0,
   droppedUrls: 0,
   failed: false,
@@ -213,14 +215,20 @@ export const recordDocumentEvent = (state: Documents, event: DriverEvent): Docum
         ...previous,
         loaded: previous.loaded || event.type === "dom-content-loaded",
       });
-      const current = event.type === "commit" ? key : state.current;
+      const isCommit = event.type === "commit";
+      const current = isCommit ? key : state.current;
 
       return {
         ...state,
         current,
+        downloadUrl: isCommit ? undefined : state.downloadUrl,
         droppedState: state.droppedState + bounded(records, MAX_DOCUMENTS, current),
         records,
       };
+    }
+
+    case "download": {
+      return { ...state, downloadUrl: event.url };
     }
 
     case "crash":
@@ -270,4 +278,28 @@ export const documentResponse = (state: Documents, hop: DocumentHop): ResponseDe
   const details = responseDetailsFrom(hop.url, hop.status, raw.headers);
 
   return { ...details, headers: { ...effective.headers, ...details.headers } };
+};
+
+export const downloadResponse = (state: Documents): ResponseDetails => {
+  const record = [...state.records.values()].findLast(
+    (entry) =>
+      entry.navigation?.url === state.downloadUrl || entry.response?.url === state.downloadUrl,
+  );
+
+  if (record?.response !== undefined) {
+    return documentResponse(state, record.response);
+  }
+
+  const navigation = record?.navigation;
+
+  const raw =
+    navigation === undefined || record === undefined
+      ? undefined
+      : state.responses
+          .get(
+            requestKey({ requestId: navigation.requestId, sessionId: record.identity.sessionId }),
+          )
+          ?.extras.at(-1);
+
+  return responseDetailsFrom(state.downloadUrl ?? "", raw?.status ?? 0, raw?.headers ?? []);
 };

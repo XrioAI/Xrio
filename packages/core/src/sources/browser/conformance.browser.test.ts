@@ -611,13 +611,14 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     },
   );
 
-  it("returns a 403 with an empty body as data", async () => {
-    const document = await load(mode, "/empty-403");
-
-    expect(document).toMatchObject({
-      cookies: ["empty-403=1; Path=/"],
-      headers: { "x-page": "empty-403" },
-      status: 403,
+  it("rejects an untyped empty 403 and keeps its response details", async () => {
+    await expect(load(mode, "/empty-403")).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: {
+        cookies: ["empty-403=1; Path=/"],
+        headers: { "x-page": "empty-403" },
+        status: 403,
+      },
     });
   });
 
@@ -632,17 +633,19 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     expect(markerOf(xhtml.html.replace("/>", ">"))).toBe("xhtml");
   });
 
-  it("captures Chrome's viewers for JSON, XML and PDF until Phase 4 gates them", async () => {
-    const [json, xml, pdf] = [
-      await load(mode, "/json"),
-      await load(mode, "/xml"),
-      await load(mode, "/pdf"),
-    ];
-
-    expect(json.html).toContain('<pre>{"page":"json"}</pre>');
-    expect(xml.html).toContain("xml-viewer-style");
-    expect(pdf.html).toContain("pdf_embedder.css");
-    expect([json.status, xml.status, pdf.status]).toStrictEqual([200, 200, 200]);
+  it.each([
+    { contentType: "application/json", route: "/json" },
+    { contentType: "application/xml", route: "/xml" },
+    { contentType: "application/pdf", route: "/pdf" },
+  ])("rejects $route before capturing Chrome's viewer", async ({ route, contentType }) => {
+    await expect(load(mode, route)).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: {
+        block: { challenge: null },
+        headers: { "content-type": contentType },
+        status: 200,
+      },
+    });
   });
 });
 
@@ -964,7 +967,7 @@ describe.each(MODES)("the drawn device, %s", (mode) => {
 describe.each(MODES)("browser lifecycle, %s", (mode) => {
   serveFixturePages();
 
-  it.each(["/download", "/no-content"])("reports %s as an aborted navigation", async (route) => {
+  it.each(["/no-content"])("reports %s as an aborted navigation", async (route) => {
     await expect(load(mode, route)).rejects.toMatchObject({
       code: "NETWORK_ERROR",
       details: { netError: "net::ERR_ABORTED" },
@@ -1093,11 +1096,23 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
 describe.each(MODES)("downloads on our CDP client, %s", (mode) => {
   serveFixturePages();
 
+  it("keeps the final response details of a redirected download", async () => {
+    await expect(load(mode, "/redirect-to-download")).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: {
+        headers: { "content-type": "application/octet-stream" },
+        status: 200,
+        url: `${server.origin}/download`,
+      },
+    });
+  });
+
   it("lets a denied download settle, so teardown finishes well within its budget", async () => {
     using stages = recordStages();
 
     await expect(load(mode, "/download")).rejects.toMatchObject({
-      details: { netError: "net::ERR_ABORTED" },
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { headers: { "content-type": "application/octet-stream" }, status: 200 },
     });
     expect(stages.timings.get("teardown")).toBeLessThan(DOWNLOAD_TEARDOWN_BOUND_MS);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -1144,7 +1159,7 @@ const visitFailures: VisitFailure[] = [
     route: "/static",
   },
   {
-    error: { code: "NETWORK_ERROR", details: { netError: "net::ERR_ABORTED" } },
+    error: { code: "UNSUPPORTED_CONTENT_TYPE" },
     name: "a download",
     route: "/download",
   },
