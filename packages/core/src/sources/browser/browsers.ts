@@ -9,20 +9,16 @@ import type { DocumentRequest, SourceDocument } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
   createScratchDir,
-  findBrowserPid,
-  killProcessGroup,
   prepareProfile,
-  PROCESS_SCAN_BUDGET_MS,
-  removeScratchDir,
   scratchRoot,
   sweepAbandonedScratch,
-  waitForExit,
 } from "./browser-process.ts";
+import { ChromeScope } from "./chrome-scope.ts";
+import type { RetireSteps } from "./chrome-scope.ts";
 import { planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
-import { settleWithin, withinSignal } from "./lifetime.ts";
-import { CLEANUP_BUDGET_MS, CLOSE_BUDGET_MS, DriverError, TEARDOWN_BUDGET_MS } from "./port.ts";
-import type { BrowserDriver, CleanupSink, DriverBrowser } from "./port.ts";
+import { DriverError } from "./port.ts";
+import type { BrowserDriver, ChromeProduct, DriverBrowser } from "./port.ts";
 import { renderDocument } from "./render.ts";
 
 const BYTES_PER_BROWSER = 512 * 1024 * 1024;
@@ -31,17 +27,7 @@ const STDERR_TAIL_CHARS = 8192;
 
 const MIN_CHROME_MAJOR = 150;
 
-const CHROME_MAJOR = /(?<major>\d+)\./u;
-
 type BrowserRequest = DocumentRequest & { mode: "headless" | "headed"; browserPath: string };
-
-interface TeardownSteps {
-  readonly findBrowserPid: typeof findBrowserPid;
-  readonly waitForExit: typeof waitForExit;
-  readonly removeScratchDir: typeof removeScratchDir;
-}
-
-const defaultSteps: TeardownSteps = { findBrowserPid, removeScratchDir, waitForExit };
 
 export interface Browsers {
   readonly load: (request: BrowserRequest) => Promise<SourceDocument>;
@@ -81,14 +67,9 @@ const sweepOnce = async (): Promise<void> => {
 const launchFailed = (message: string, stderr: string, cause?: unknown): XrioError =>
   new XrioError("BROWSER_LAUNCH_FAILED", message, { cause, details: { stderr } });
 
-const assertSupported = (product: string): void => {
-  const major = Number(CHROME_MAJOR.exec(product)?.groups?.major);
-
-  if (!(major >= MIN_CHROME_MAJOR)) {
-    throw launchFailed(
-      `Chrome ${product || "of unknown version"} is older than ${MIN_CHROME_MAJOR}.`,
-      "",
-    );
+const assertSupported = ({ major, version }: ChromeProduct): void => {
+  if (major < MIN_CHROME_MAJOR) {
+    throw launchFailed(`Chrome ${version} is older than ${MIN_CHROME_MAJOR}.`, "");
   }
 };
 
@@ -123,14 +104,14 @@ const writeProfile = async (plan: LaunchPlan): Promise<void> => {
 
 const startBrowser = async (
   driver: BrowserDriver,
+  scope: ChromeScope,
   plan: LaunchPlan,
   deadline: Deadline,
-  deferCleanup: CleanupSink,
 ): Promise<DriverBrowser> => {
   await writeProfile(plan);
 
   try {
-    return await timeStage("launch", async () => await driver.launch(plan, deadline, deferCleanup));
+    return await timeStage("launch", async () => await scope.launch(driver, plan, deadline));
   } catch (error) {
     deadline.throwIfExpired();
 
@@ -146,111 +127,21 @@ const startBrowser = async (
   }
 };
 
-const stopBrowser = async (
-  plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
-  cleanups: readonly Promise<void>[],
-  steps: TeardownSteps,
-  signal: AbortSignal,
-): Promise<boolean> => {
-  await withinSignal(async () => {
-    await settleWithin(Promise.allSettled(cleanups), CLEANUP_BUDGET_MS);
-  }, signal);
-
-  if (browser !== undefined) {
-    await withinSignal(async () => {
-      await settleWithin(browser.close(CLOSE_BUDGET_MS), CLOSE_BUDGET_MS);
-    }, signal);
-  }
-
-  const scanSignal = AbortSignal.any([signal, AbortSignal.timeout(PROCESS_SCAN_BUDGET_MS)]);
-
-  const [scan] = await Promise.allSettled([
-    withinSignal(
-      async () =>
-        await steps.findBrowserPid(plan.directories.profile, PROCESS_SCAN_BUDGET_MS, scanSignal),
-      scanSignal,
-    ),
-  ]);
-
-  signal.throwIfAborted();
-  const group = (scan.status === "fulfilled" ? scan.value : undefined) ?? browser?.pid;
-
-  if (group === undefined) {
-    return scan.status === "fulfilled" && !scanSignal.aborted;
-  }
-
-  killProcessGroup(group);
-
-  return await withinSignal(async () => await steps.waitForExit(group, signal), signal);
-};
-
-const tearDown = async (
-  scratch: ScratchDir,
-  plan: LaunchPlan,
-  browser: DriverBrowser | undefined,
-  cleanups: readonly Promise<void>[],
-  steps: TeardownSteps,
-): Promise<void> => {
-  const signal = AbortSignal.timeout(TEARDOWN_BUDGET_MS);
-  let exited = false;
-
-  try {
-    exited = await timeStage(
-      "teardown",
-      async () =>
-        await withinSignal(
-          async () => await stopBrowser(plan, browser, cleanups, steps, signal),
-          signal,
-        ),
-    );
-
-    if (exited) {
-      await withinSignal(async () => {
-        await steps.removeScratchDir(scratch, signal);
-      }, signal);
-
-      return;
-    }
-
-    publishInternalEvent({
-      detail: `Chrome outlived its teardown; ${scratch.path} is left for the sweep.`,
-      event: "teardown-incomplete",
-    });
-  } catch (error) {
-    if (!exited && browser !== undefined) {
-      killProcessGroup(browser.pid);
-    }
-
-    publishInternalEvent({
-      detail: `Teardown of ${scratch.path} failed: ${messageOf(error)}`,
-      event: "teardown-incomplete",
-    });
-  }
-};
-
-const renderInScratch = async (
+const renderInScope = async (
   driver: BrowserDriver,
   request: BrowserRequest,
-  scratch: ScratchDir,
+  scope: ChromeScope,
   result: PromiseWithResolvers<SourceDocument>,
-  steps: TeardownSteps,
 ): Promise<void> => {
-  const plan = planFor(request, scratch);
-  const cleanups: Promise<void>[] = [];
-  let browser: DriverBrowser | undefined;
-
   try {
-    browser = await startBrowser(driver, plan, request.deadline, (cleanup) => {
-      cleanups.push(cleanup);
-    });
-    publishInternalEvent({ detail: String(browser.pid), event: "browser-launched" });
+    const plan = planFor(request, scope.scratch);
+    const browser = await startBrowser(driver, scope, plan, request.deadline);
     assertSupported(browser.product);
     result.resolve(await renderDocument(browser, request.url, request.deadline));
   } catch (error) {
     result.reject(error);
   } finally {
-    await tearDown(scratch, plan, browser, cleanups, steps);
+    await scope.retire();
   }
 };
 
@@ -258,16 +149,12 @@ const runInBrowser = async (
   driver: BrowserDriver,
   request: BrowserRequest,
   result: PromiseWithResolvers<SourceDocument>,
-  steps: TeardownSteps,
+  steps: Partial<RetireSteps>,
 ): Promise<void> => {
   try {
-    await renderInScratch(
-      driver,
-      request,
-      await createOwnedScratch(request.deadline),
-      result,
-      steps,
-    );
+    const scope = new ChromeScope(await createOwnedScratch(request.deadline), steps);
+
+    await renderInScope(driver, request, scope, result);
   } catch (error) {
     result.reject(error);
   }
@@ -276,9 +163,8 @@ const runInBrowser = async (
 export const createBrowsers = (
   driver: BrowserDriver,
   maxBrowsers = defaultMaxBrowsers(),
-  overrides: Partial<TeardownSteps> = {},
+  steps: Partial<RetireSteps> = {},
 ): Browsers => {
-  const steps = { ...defaultSteps, ...overrides };
   const queue = new Set<() => void>();
   const accepted = new Set<Promise<SourceDocument>>();
   const idleWaiters = new Set<() => void>();

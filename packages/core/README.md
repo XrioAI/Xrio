@@ -46,7 +46,7 @@ Configure a client default with `new XrioClient({ mode: "http" })` or override i
 
 ### Browser modes
 
-`headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright), navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once.
+`headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through Xrio's own client over Chrome's DevTools pipe, which sends only a fixed list of DevTools commands, navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once. A captured document over 32 Mi UTF-16 code units rejects with `RESPONSE_TOO_LARGE`.
 
 Current limits, lifted in later releases:
 
@@ -125,7 +125,7 @@ try {
 | `NETWORK_ERROR`            | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504). Browser modes add `details.netError`, Chrome's `net::ERR_*` name. |
 | `TLS_CERTIFICATE_INVALID`  | `XrioError` | The certificate was rejected.                                                                                                                                                     |
 | `TOO_MANY_REDIRECTS`       | `XrioError` | More than 20 redirects.                                                                                                                                                           |
-| `RESPONSE_TOO_LARGE`       | `XrioError` | The decompressed body is over 32 MiB.                                                                                                                                             |
+| `RESPONSE_TOO_LARGE`       | `XrioError` | The decompressed body is over 32 MiB, or a browser capture is over 32 Mi UTF-16 code units.                                                                                       |
 | `PROXY_AUTH_FAILED`        | `XrioError` | The proxy answered 407, or a SOCKS5 proxy rejected the credentials.                                                                                                               |
 | `PROXY_UNREACHABLE`        | `XrioError` | Xrio could not connect to the proxy, or it did not speak the expected protocol.                                                                                                   |
 | `PROXY_CONNECT_FAILED`     | `XrioError` | The proxy refused the tunnel with another non-2xx status. `details.status` holds it.                                                                                              |
@@ -155,7 +155,7 @@ The client resolves options, loads the document with `sources/http.ts` in http m
 - `proxy/relay.ts` owns proxy dialing, refusals, and failure attribution.
 - `blocks/rules.ts` is the ruleset as typed data; `blocks/classify.ts` turns a response into a block report.
 - `sources/` owns document loading and response handling, returning a `SourceDocument`.
-- `sources/browser/` owns browser modes: `launch-plan.ts` plans Chrome's argv, environment, and profile files; `browser-process.ts` owns scratch directories, teardown, and the startup sweep; `port.ts` is the driver interface, implemented by `patchright/driver.ts`, the only code lint lets import Patchright; `render.ts` navigates and captures; `browsers.ts` limits concurrency.
+- `sources/browser/` owns browser modes: `launch-plan.ts` plans Chrome's argv, environment, and profile files; `browser-process.ts` owns scratch directories, Chrome's spawn, and the startup sweep; `group-lifetime.ts` owns Chrome's process group and counts it as gone once no member is alive, so zombies that nothing reaps do not hold up teardown; `chrome-scope.ts` owns one Chrome's scratch directory and process group and retires both; `port.ts` is the driver interface, implemented by `cdp/driver.ts` over the DevTools pipe; `render.ts` navigates and captures; `browsers.ts` limits concurrency.
 - `diagnostics.ts` publishes stage timings and internal events.
 - `content/formats.ts` exposes separate HTML, Markdown, and structured-content operations.
 - `content/document.ts` owns shared HTML interpretation and URL-resolution rules.

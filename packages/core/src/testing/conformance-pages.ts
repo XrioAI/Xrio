@@ -1,8 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { closedLoopbackPort } from "./fixture-server.ts";
 import type { FixtureHandler, FixtureOrigins } from "./fixture-server.ts";
 
 const HUGE_DOM_ELEMENTS = 200_000;
+
+const SLICED_FILLER_CODE_UNITS = 4 * 1024 * 1024;
+
+const OVERSIZED_FILLER_CODE_UNITS = 33 * 1024 * 1024;
 
 const CYRILLIC_WINDOWS_1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
 
@@ -95,6 +100,14 @@ const recordRequest = (pathname: string): void => {
 
 const hugeBody = (): string => "<p>x</p>".repeat(HUGE_DOM_ELEMENTS);
 
+const sendFilledPage = (response: ServerResponse, marker: string, filler: number): void => {
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.setHeader("x-page", marker);
+  response.end(
+    `<!DOCTYPE html><html><head><meta name="xrio-page" content="${marker}"></head><body><!--${"x".repeat(filler)}--><p id="last">${marker}-end</p></body></html>`,
+  );
+};
+
 const routes = new Map<
   string,
   (response: ServerResponse, origins: FixtureOrigins, request: IncomingMessage) => void
@@ -121,6 +134,32 @@ const routes = new Map<
     "/landing",
     (response, _origins, request) => {
       sendPage(response, "landing", `<p id="sent-cookies">${request.headers.cookie ?? ""}</p>`);
+    },
+  ],
+  [
+    "/redirect-to-closed-port",
+    (response) => {
+      void (async () => {
+        const port = await closedLoopbackPort();
+
+        sendPage(
+          response,
+          "redirect-to-closed-port",
+          "",
+          `<script>location.replace("http://127.0.0.1:${port}/");</script><script src="/hang"></script>`,
+        );
+      })();
+    },
+  ],
+  [
+    "/replace-with-blank",
+    (response) => {
+      sendPage(
+        response,
+        "replace-with-blank",
+        "",
+        '<script>location.replace("about:blank");</script><script src="/hang"></script>',
+      );
     },
   ],
   [
@@ -185,6 +224,38 @@ const routes = new Map<
   ["/after-worker.js", holdScriptUntilRequested("/from-worker")],
   [
     "/from-worker",
+    (response) => {
+      response.end("ok");
+    },
+  ],
+  [
+    "/nested-worker",
+    (response) => {
+      requestedPaths.delete("/from-nested");
+      sendPage(
+        response,
+        "nested-worker",
+        '<script>new Worker("/outer-worker.js");</script><script src="/after-nested-worker.js"></script>',
+      );
+    },
+  ],
+  [
+    "/outer-worker.js",
+    (response) => {
+      response.setHeader("content-type", "text/javascript");
+      response.end('new Worker("/inner-worker.js");');
+    },
+  ],
+  [
+    "/inner-worker.js",
+    (response) => {
+      response.setHeader("content-type", "text/javascript");
+      response.end('fetch("/from-nested");');
+    },
+  ],
+  ["/after-nested-worker.js", holdScriptUntilRequested("/from-nested")],
+  [
+    "/from-nested",
     (response) => {
       response.end("ok");
     },
@@ -259,6 +330,18 @@ const routes = new Map<
     },
   ],
   [
+    "/sliced",
+    (response) => {
+      sendFilledPage(response, "sliced", SLICED_FILLER_CODE_UNITS);
+    },
+  ],
+  [
+    "/too-large",
+    (response) => {
+      sendFilledPage(response, "too-large", OVERSIZED_FILLER_CODE_UNITS);
+    },
+  ],
+  [
     "/legacy-charset",
     (response) => {
       response.writeHead(200, {
@@ -291,6 +374,13 @@ const routes = new Map<
         "x-page": "basic-auth",
       });
       response.end(page("basic-auth"));
+    },
+  ],
+  [
+    "/empty-403",
+    (response) => {
+      response.writeHead(403, { "set-cookie": "empty-403=1; Path=/", "x-page": "empty-403" });
+      response.end();
     },
   ],
   [

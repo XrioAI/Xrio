@@ -7,7 +7,19 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { findBrowserPid, sweepAbandonedScratch, waitForExit } from "./browser-process.ts";
+import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
+import { sweepAbandonedScratch } from "./browser-process.ts";
+import { waitForGroupExit } from "./group-lifetime.ts";
+
+const EXIT_WAIT_MS = 5000;
+
+const SWEEP_TIMEOUT_MS = 8000;
+
+const waitForExit = async (pid: number, parent?: AbortSignal): Promise<boolean> =>
+  await waitForGroupExit(
+    pid,
+    AbortSignal.any([AbortSignal.timeout(EXIT_WAIT_MS), ...(parent === undefined ? [] : [parent])]),
+  );
 
 const SCAN_BUDGET_MS = 1000;
 
@@ -46,13 +58,27 @@ const stopChild = async (child: ChildProcess): Promise<void> => {
 const startChild = async (profile: string): Promise<ChildProcess> => {
   const child = spawn(
     process.execPath,
-    ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${profile}`],
-    { stdio: "ignore" },
+    ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${profile}`, "about:blank"],
+    { detached: true, stdio: "ignore" },
   );
 
   await once(child, "spawn");
 
   return child;
+};
+
+const abandonDirectory = async (root: string): Promise<string> => {
+  const formerOwner = await startChild("xrio-former-owner");
+  const abandoned = path.join(root, "abandoned");
+
+  await stopChild(formerOwner);
+  await mkdir(abandoned, { mode: 0o700 });
+  await writeFile(
+    path.join(abandoned, "xrio-owner.json"),
+    JSON.stringify({ createdAt: 0, pid: formerOwner.pid }),
+  );
+
+  return abandoned;
 };
 
 describe("process exit waiting", () => {
@@ -105,36 +131,6 @@ describe("process exit waiting", () => {
 });
 
 describe.runIf(process.platform === "darwin")("macOS process scanning", () => {
-  it("kills a hung ps child and returns no PID when its own budget expires", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "xrio-hung-ps-"));
-    const pidFile = await createHungPs(directory);
-    let pid: number | undefined;
-
-    try {
-      vi.stubEnv("PATH", directory);
-      const scanning = findBrowserPid("xrio-hung-ps", SCAN_BUDGET_MS);
-      await vi.waitFor(async () => {
-        pid = Number(await readFile(pidFile, "utf-8"));
-        expect(pid).toBeGreaterThan(0);
-      });
-      await expect(scanning).resolves.toBeUndefined();
-
-      if (pid === undefined) {
-        throw new Error("The ps child did not record its process ID.");
-      }
-
-      expect({ exited: await waitForExit(pid) }).toStrictEqual({ exited: true });
-    } finally {
-      vi.unstubAllEnvs();
-
-      if (pid !== undefined) {
-        killPid(pid);
-      }
-
-      await rm(directory, { force: true, recursive: true });
-    }
-  });
-
   it("keeps an abandoned directory when checking for its browser times out", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-hung-ps-"));
     const abandoned = path.join(root, "abandoned");
@@ -181,40 +177,73 @@ describe.runIf(process.platform === "darwin")("macOS process scanning", () => {
   });
 
   it("rejects promptly when ps cannot be spawned", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "xrio-no-ps-"));
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-no-ps-"));
 
     try {
-      vi.stubEnv("PATH", directory);
+      await abandonDirectory(root);
+      vi.stubEnv("PATH", root);
       const startedAt = performance.now();
-      await expect(findBrowserPid("xrio-no-ps", 10_000)).rejects.toMatchObject({
+      await expect(sweepAbandonedScratch(root, Date.now())).rejects.toMatchObject({
         code: "ENOENT",
       });
       expect(performance.now() - startedAt).toBeLessThan(SCAN_BUDGET_MS);
     } finally {
       vi.unstubAllEnvs();
-      await rm(directory, { force: true, recursive: true });
+      await rm(root, { force: true, recursive: true });
     }
   });
 });
 
-describe.runIf(process.platform === "linux")("Linux process scanning", () => {
-  it("finds a real child with the matching profile marker", async () => {
-    const profile = path.join(tmpdir(), `xrio-scan-${crypto.randomUUID()}`);
-    const child = await startChild(profile);
+describe("process scanning in the sweep", () => {
+  it("kills the browser of an abandoned directory, then removes it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-browser-"));
+    const abandoned = await abandonDirectory(root);
+    const browser = await startChild(path.join(abandoned, "profile"));
 
     try {
-      if (child.pid === undefined) {
-        throw new Error("The child did not receive a process ID.");
-      }
-
-      await expect(findBrowserPid(profile, SCAN_BUDGET_MS)).resolves.toBe(child.pid);
+      await expect(sweepAbandonedScratch(root, Date.now())).resolves.toStrictEqual([abandoned]);
+      expect(browser.signalCode).toBe("SIGKILL");
     } finally {
-      await stopChild(child);
+      await stopChild(browser);
+      await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("returns no PID for a profile with no matching process", async () => {
-    const profile = path.join(tmpdir(), `xrio-absent-${crypto.randomUUID()}`);
-    await expect(findBrowserPid(profile, 50)).resolves.toBeUndefined();
+  it("removes an abandoned directory that no browser uses", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-idle-"));
+    const abandoned = await abandonDirectory(root);
+
+    try {
+      await expect(sweepAbandonedScratch(root, Date.now())).resolves.toStrictEqual([abandoned]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
+});
+
+describe.runIf(process.platform === "linux")("sweeping after a non-reaping parent", () => {
+  it(
+    "removes an abandoned directory whose killed browser leaves only unreaped zombies",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "xrio-sweep-zombie-"));
+
+      try {
+        const abandoned = await abandonDirectory(root);
+
+        await using group = await holdUnreapedGroup({
+          argument: `--user-data-dir=${path.join(abandoned, "profile")}`,
+          leader: "running",
+        });
+
+        const zombie = { group: group.leader, state: "Z" };
+
+        await expect(sweepAbandonedScratch(root, Date.now())).resolves.toStrictEqual([abandoned]);
+        await expect(processStateOf(group.leader)).resolves.toStrictEqual(zombie);
+        await expect(processStateOf(group.member)).resolves.toStrictEqual(zombie);
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    SWEEP_TIMEOUT_MS,
+  );
 });

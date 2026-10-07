@@ -1,4 +1,5 @@
-import { createReadStream, createWriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
+import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -11,6 +12,12 @@ const SCENARIOS = [
   "crash-on-navigate",
   "ignore-close",
   "slow-start",
+  "navigate-during-capture",
+  "commit-after-capture-error",
+  "exit-after-capture-error",
+  "pipe-closes-on-navigate",
+  "startup-blank-commit",
+  "evaluate-throws",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -27,6 +34,12 @@ const SCENARIO_NAMES = new Set<string>(SCENARIOS);
 const FRAGMENT_BYTES = 7;
 
 const SLOW_START_MS = 30_000;
+
+const AFTER_CAPTURE_ERROR_MS = 50;
+
+const STARTUP_BLANK_MS = 100;
+
+const BETWEEN_REPLY_AND_COMMIT_MS = 50;
 
 const TARGET_ID = "T1";
 
@@ -53,6 +66,14 @@ const isCommand = (value: unknown): value is Command =>
   typeof value.method === "string" &&
   (!("sessionId" in value) || typeof value.sessionId === "string");
 
+const readsByValue = (params: unknown): params is { awaitPromise: true; returnByValue: true } =>
+  typeof params === "object" &&
+  params !== null &&
+  "returnByValue" in params &&
+  params.returnByValue === true &&
+  "awaitPromise" in params &&
+  params.awaitPromise === true;
+
 const hasUrl = (params: unknown): params is { url: string } =>
   typeof params === "object" &&
   params !== null &&
@@ -65,6 +86,8 @@ const scenario: Scenario = isScenario(requested) ? requested : "normal";
 
 const PRODUCT = scenario === "old" ? "HeadlessChrome/120.0.0.0" : "HeadlessChrome/154.0.8037.57";
 
+const TARGET_NAVIGATED = { code: -32_000, message: "Inspected target navigated or closed" };
+
 const FRAME_NOT_IN_TARGET = {
   code: -32_000,
   message: "Frame with the given id does not belong to the target.",
@@ -72,11 +95,13 @@ const FRAME_NOT_IN_TARGET = {
 
 const output = createWriteStream("", { fd: 4 });
 
-const input = createReadStream("", { encoding: "utf-8", fd: 3 });
+const input = new Socket({ fd: 3, readable: true }).setEncoding("utf-8");
 
 const pageSessions: string[] = [];
 
 let currentUrl = "about:blank";
+
+let navigatedDuringCapture = false;
 
 const writeFragmented = async (text: string): Promise<void> => {
   for (let start = 0; start < text.length; start += FRAGMENT_BYTES) {
@@ -143,13 +168,13 @@ const attachPage = (sessionId: string, parentSession?: string): Json => {
 const onEveryPageSession = (method: string, params: Json): Json[] =>
   pageSessions.map((sessionId) => ({ method, params, sessionId }));
 
-const navigationEvents = (url: string): Json[] => [
+const navigationEvents = (url: string, loaderId = "L1"): Json[] => [
   ...onEveryPageSession("Network.requestWillBeSent", {
     documentURL: url,
     frameId: TARGET_ID,
-    loaderId: "L1",
+    loaderId,
     request: { headers: {}, method: "GET", url },
-    requestId: "L1",
+    requestId: loaderId,
     type: "Document",
   }),
   ...onEveryPageSession("Network.responseReceivedExtraInfo", {
@@ -158,36 +183,56 @@ const navigationEvents = (url: string): Json[] => [
       "Set-Cookie": "a=1\nb=2",
       "X-Fake": "yes",
     },
-    requestId: "L1",
+    requestId: loaderId,
     statusCode: 200,
   }),
   ...onEveryPageSession("Network.responseReceived", {
     frameId: TARGET_ID,
     hasExtraInfo: true,
-    loaderId: "L1",
-    requestId: "L1",
+    loaderId,
+    requestId: loaderId,
     response: { headers: { "Content-Type": "text/html" }, mimeType: "text/html", status: 200, url },
     type: "Document",
   }),
 ];
 
-const commitEvents = (url: string): Json[] => [
+const commitEvents = (url: string, loaderId = "L1"): Json[] => [
   ...onEveryPageSession("Page.lifecycleEvent", {
     frameId: TARGET_ID,
-    loaderId: "L1",
+    loaderId,
     name: "init",
     timestamp: 1,
   }),
-  ...onEveryPageSession("Page.frameNavigated", { frame: frame("L1", url), type: "Navigation" }),
+  ...onEveryPageSession("Page.frameNavigated", { frame: frame(loaderId, url), type: "Navigation" }),
   ...onEveryPageSession("Page.lifecycleEvent", {
     frameId: TARGET_ID,
-    loaderId: "L1",
+    loaderId,
     name: "DOMContentLoaded",
     timestamp: 2,
   }),
 ];
 
 const CAPTURED_PAGE: Json = { result: { type: "string", value: PAGE_HTML } };
+
+const THROWN: Json = {
+  exceptionDetails: {
+    columnNumber: 0,
+    exception: { description: "Error: fake page failure", type: "object" },
+    exceptionId: 1,
+    lineNumber: 0,
+    text: "Uncaught",
+  },
+  result: { type: "object" },
+};
+
+const UTILITY_SCRIPT: Json = {
+  result: {
+    className: "UtilityScript",
+    description: "UtilityScript",
+    objectId: "U1",
+    type: "object",
+  },
+};
 
 const fixedResults = new Map<string, Json>([
   [
@@ -207,17 +252,6 @@ const fixedResults = new Map<string, Json>([
   ["DOM.querySelectorAll", { nodeIds: [] }],
   ["Page.addScriptToEvaluateOnNewDocument", { identifier: "1" }],
   ["Page.createIsolatedWorld", { executionContextId: 5 }],
-  [
-    "Runtime.evaluate",
-    {
-      result: {
-        className: "UtilityScript",
-        description: "UtilityScript",
-        objectId: "U1",
-        type: "object",
-      },
-    },
-  ],
   [
     "Target.getTargetInfo",
     {
@@ -261,6 +295,87 @@ const navigate = (url: string | undefined, committed: Json): Json[] => {
   currentUrl = url ?? "about:blank";
 
   return [...navigationEvents(currentUrl), committed, ...commitEvents(currentUrl)];
+};
+
+const CAPTURE_ERROR_SCENARIOS = new Set<Scenario>([
+  "navigate-during-capture",
+  "commit-after-capture-error",
+  "exit-after-capture-error",
+]);
+
+const startupBlankCommit = (): Json[] => [
+  ...onEveryPageSession("Page.frameNavigated", {
+    frame: frame("BLANK", "about:blank"),
+    type: "Navigation",
+  }),
+  ...onEveryPageSession("Page.lifecycleEvent", {
+    frameId: TARGET_ID,
+    loaderId: "BLANK",
+    name: "DOMContentLoaded",
+    timestamp: 0,
+  }),
+];
+
+const enablePage = async (enabled: Json): Promise<void> => {
+  if (scenario !== "startup-blank-commit") {
+    await write([enabled]);
+
+    return;
+  }
+
+  await delay(STARTUP_BLANK_MS);
+  await write([enabled, ...startupBlankCommit()]);
+};
+
+const answerNavigate = async (url: string | undefined, committed: Json): Promise<void> => {
+  if (scenario === "pipe-closes-on-navigate") {
+    input.destroy();
+    output.destroy();
+    await delay(SLOW_START_MS);
+
+    return;
+  }
+
+  if (scenario !== "startup-blank-commit") {
+    await write(navigate(url, committed));
+
+    return;
+  }
+
+  currentUrl = url ?? "about:blank";
+  await write([...navigationEvents(currentUrl), committed]);
+  await delay(BETWEEN_REPLY_AND_COMMIT_MS);
+  await write(commitEvents(currentUrl));
+};
+
+const evaluateByValue = async (reply: Json, failed: Json): Promise<void> => {
+  if (
+    !CAPTURE_ERROR_SCENARIOS.has(scenario) ||
+    navigatedDuringCapture ||
+    currentUrl === "about:blank"
+  ) {
+    await write([reply]);
+
+    return;
+  }
+
+  navigatedDuringCapture = true;
+  const replacement = [...navigationEvents(currentUrl, "L2"), ...commitEvents(currentUrl, "L2")];
+
+  if (scenario === "navigate-during-capture") {
+    await write([failed, ...replacement]);
+
+    return;
+  }
+
+  await write([failed]);
+  await delay(AFTER_CAPTURE_ERROR_MS);
+
+  if (scenario === "exit-after-capture-error") {
+    process.exit(1);
+  }
+
+  await write(replacement);
 };
 
 const closeBrowser = async (closed: Json): Promise<void> => {
@@ -318,12 +433,25 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
       break;
     }
 
+    case "Runtime.evaluate": {
+      await (readsByValue(params)
+        ? evaluateByValue(
+            reply(scenario === "evaluate-throws" ? THROWN : CAPTURED_PAGE),
+            onSession(sessionId, { error: TARGET_NAVIGATED, id }),
+          )
+        : write([reply(UTILITY_SCRIPT)]));
+      break;
+    }
+
+    case "Page.enable": {
+      await enablePage(reply({}));
+      break;
+    }
+
     case "Page.navigate": {
-      await write(
-        navigate(
-          hasUrl(params) ? params.url : undefined,
-          reply({ frameId: TARGET_ID, loaderId: "L1" }),
-        ),
+      await answerNavigate(
+        hasUrl(params) ? params.url : undefined,
+        reply({ frameId: TARGET_ID, loaderId: "L1" }),
       );
       break;
     }

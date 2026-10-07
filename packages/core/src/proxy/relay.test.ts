@@ -1,13 +1,18 @@
 import { once } from "node:events";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { inspect } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../deadline.ts";
 import { resolveClientOptions } from "../options.ts";
-import { startFakeHttpProxy, startFakeSocksProxy } from "../testing/fake-proxies.ts";
+import {
+  startFakeHttpProxy,
+  startFakeSocksProxy,
+  TEST_ONLY_CERT,
+} from "../testing/fake-proxies.ts";
 import { closedLoopbackPort, listenOnLoopback } from "../testing/fixture-server.ts";
 import { manualClock } from "../testing/manual-clock.ts";
 import { startRelay } from "./relay.ts";
@@ -116,6 +121,36 @@ describe(startRelay, () => {
     expect(fake.requests).toStrictEqual([
       { authority: "origin.test:443", authorization: `Basic ${btoa("us:er:p@ss")}` },
     ]);
+  });
+
+  it("keeps the client's half open after the target half-closes through an HTTPS proxy", async () => {
+    const trusted = getCACertificates("default");
+    const afterTargetEnd = Promise.withResolvers<string>();
+
+    const closesFirst = createServer({ allowHalfOpen: true }, (socket) => {
+      socket.end("target-done");
+      void readAll(socket).then(afterTargetEnd.resolve);
+    });
+
+    setDefaultCACertificates([...trusted, TEST_ONLY_CERT.toString()]);
+
+    try {
+      await using fake = await startFakeHttpProxy({
+        secure: true,
+        tunnelTo: await listenOnLoopback(closesFirst),
+      });
+
+      await using relay = await startRelay(proxyEndpoint(fake.url), startDeadline(10_000));
+      const socket = await sendConnect(relay.url, "origin.test:443");
+
+      await expect(readAll(socket)).resolves.toMatch(/^HTTP\/1\.1 200 .*target-done$/su);
+      socket.end("client-late");
+
+      await expect(afterTargetEnd.promise).resolves.toBe("client-late");
+    } finally {
+      setDefaultCACertificates(trusted);
+      closesFirst.close();
+    }
   });
 
   it("tunnels through SOCKS5 with credentials and leaves DNS to the proxy", async () => {

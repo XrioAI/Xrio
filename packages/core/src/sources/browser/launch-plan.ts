@@ -25,8 +25,6 @@ export interface LaunchDirectories {
 
 export interface LaunchPlan {
   executable: string;
-  headless: boolean;
-  switches: readonly string[];
   args: readonly string[];
   env: Readonly<Record<string, string>>;
   directories: LaunchDirectories;
@@ -52,7 +50,7 @@ const DISABLED_FEATURES = [
   "AimServerRequestOnStartupEnabled",
 ] as const;
 
-const patchrightBaselineSwitches = [
+const chromeBaselineSwitches = [
   "--disable-field-trial-config",
   "--disable-background-networking",
   "--disable-background-timer-throttling",
@@ -79,7 +77,7 @@ const patchrightBaselineSwitches = [
   "--disable-blink-features=AutomationControlled",
 ] as const;
 
-const patchrightHeadlessSwitches = [
+const chromeHeadlessSwitches = [
   "--headless",
   "--mute-audio",
   `--blink-settings=${HEADLESS_POINTER_SETTINGS}`,
@@ -153,7 +151,7 @@ const profileFiles = (directories: LaunchDirectories): ProfileFile[] => [
     path: path.join(directories.profile, "Default", "Preferences"),
   },
   {
-    contents: JSON.stringify({ dns_over_https: { mode: "off" } }),
+    contents: JSON.stringify({ auth: { schemes: "" }, dns_over_https: { mode: "off" } }),
     path: path.join(directories.profile, "Local State"),
   },
 ];
@@ -161,17 +159,11 @@ const profileFiles = (directories: LaunchDirectories): ProfileFile[] => [
 export const planLaunch = (request: LaunchRequest): LaunchPlan => {
   const directories = directoriesIn(request.scratchDir);
 
-  const baselineSwitches = [
-    ...patchrightBaselineSwitches,
-    ...(request.headless ? patchrightHeadlessSwitches : []),
-  ];
-
-  const switches = xrioSwitches(request, directories);
-
   return {
     args: [
-      ...baselineSwitches,
-      ...switches,
+      ...chromeBaselineSwitches,
+      ...(request.headless ? chromeHeadlessSwitches : []),
+      ...xrioSwitches(request, directories),
       `--user-data-dir=${directories.profile}`,
       "--remote-debugging-pipe",
       "about:blank",
@@ -180,7 +172,5 @@ export const planLaunch = (request: LaunchRequest): LaunchPlan => {
     env: childEnvironment(request, directories),
     executable: request.browserPath,
     files: profileFiles(directories),
-    headless: request.headless,
-    switches,
   };
 };

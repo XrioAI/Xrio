@@ -13,16 +13,79 @@ import type {
   RawHeaders,
 } from "./port.ts";
 
+const SLICE_CODE_UNITS = 4 * 1024 * 1024;
+
+const MAX_CAPTURE_CODE_UNITS = 32 * 1024 * 1024;
+
 const CAPTURE_EXPRESSION = `(() => {
   const root = document.documentElement;
   const doctype = document.doctype ? new XMLSerializer().serializeToString(document.doctype) : "";
+  const html = root ? doctype + root.outerHTML : "";
 
-  return root ? doctype + root.outerHTML : "";
+  if (html.length <= ${SLICE_CODE_UNITS}) {
+    return html;
+  }
+
+  if (html.length > ${MAX_CAPTURE_CODE_UNITS}) {
+    return { tooLarge: html.length };
+  }
+
+  const key = Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(36)).join("");
+
+  globalThis[key] = html;
+
+  return { key, length: html.length, slices: Math.ceil(html.length / ${SLICE_CODE_UNITS}) };
 })()`;
+
+const sliceExpression = (key: string, index: number, isLast: boolean): string => `(() => {
+  const key = ${JSON.stringify(key)};
+  const html = globalThis[key];
+
+  if (${isLast}) {
+    delete globalThis[key];
+  }
+
+  return typeof html === "string"
+    ? html.slice(${index * SLICE_CODE_UNITS}, ${(index + 1) * SLICE_CODE_UNITS})
+    : null;
+})()`;
+
+interface TooLarge {
+  tooLarge: number;
+}
+
+interface Parked {
+  key: string;
+  length: number;
+  slices: number;
+}
 
 const isHtml = (value: unknown): value is string => typeof value === "string";
 
+const isTooLarge = (value: unknown): value is TooLarge =>
+  typeof value === "object" &&
+  value !== null &&
+  "tooLarge" in value &&
+  typeof value.tooLarge === "number";
+
+const isParked = (value: unknown): value is Parked =>
+  typeof value === "object" &&
+  value !== null &&
+  "key" in value &&
+  typeof value.key === "string" &&
+  "length" in value &&
+  typeof value.length === "number" &&
+  "slices" in value &&
+  typeof value.slices === "number";
+
+const isCaptureReply = (value: unknown): value is string | TooLarge | Parked =>
+  isHtml(value) || isTooLarge(value) || isParked(value);
+
+const isSlice = (value: unknown): value is string | null => value === null || isHtml(value);
+
 const MAX_REQUEST_URLS = 4000;
+
+const COMMITTED_ERROR_PAGE = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
 
 const MAX_REQUEST_URL_CHARS = 2048;
 
@@ -34,6 +97,11 @@ interface RawHeaderEvent {
 const browserCrashed = (cause?: unknown): XrioError =>
   new XrioError("BROWSER_CRASHED", "The browser or its renderer died mid-scrape.", {
     cause,
+    details: undefined,
+  });
+
+const committedWithoutResponse = (): XrioError =>
+  new XrioError("NETWORK_ERROR", "The page committed a document that had no HTTP response.", {
     details: undefined,
   });
 
@@ -69,25 +137,6 @@ class PageTracker {
     this.#stop();
   }
 
-  async unlessBrowserDies<Result>(operation: Promise<Result>): Promise<Result> {
-    const { promise, reject } = Promise.withResolvers<never>();
-
-    const check = () => {
-      if (this.#failure !== undefined) {
-        reject(this.#failure);
-      }
-    };
-
-    this.#waiters.add(check);
-    check();
-
-    try {
-      return await Promise.race([operation, promise]);
-    } finally {
-      this.#waiters.delete(check);
-    }
-  }
-
   async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
     deadline.throwIfExpired();
     const { promise, resolve, reject } = Promise.withResolvers<DocumentHop>();
@@ -97,6 +146,8 @@ class PageTracker {
         reject(this.#failure);
       } else if (this.#document !== undefined && this.#loaded.has(this.#document.loaderId)) {
         resolve(this.#document);
+      } else if (this.#loadedWithoutResponse()) {
+        reject(committedWithoutResponse());
       }
     };
 
@@ -114,6 +165,14 @@ class PageTracker {
       this.#waiters.delete(check);
       deadline.signal.removeEventListener("abort", abort);
     }
+  }
+
+  #loadedWithoutResponse(): boolean {
+    return (
+      this.#document === undefined &&
+      this.#committedLoader !== undefined &&
+      this.#loaded.has(this.#committedLoader)
+    );
   }
 
   isCurrent(document: DocumentHop): boolean {
@@ -139,7 +198,7 @@ class PageTracker {
     switch (event.type) {
       case "commit": {
         this.#committedLoader = event.loaderId;
-        this.#document = this.#responses.get(event.loaderId) ?? this.#document;
+        this.#document = this.#responses.get(event.loaderId);
         break;
       }
 
@@ -205,6 +264,10 @@ const navigateTo = async (browser: DriverBrowser, url: URL, deadline: Deadline):
     await browser.navigate(url.href, deadline);
   } catch (error) {
     if (isDriverFailure(error, "navigation-failed")) {
+      if (error.reason.netError === COMMITTED_ERROR_PAGE) {
+        return;
+      }
+
       throw navigationError(url, error, error.reason.netError);
     }
 
@@ -226,6 +289,54 @@ interface CapturedDocument {
   document: DocumentHop;
 }
 
+const readSlices = async (
+  browser: DriverBrowser,
+  { key, length, slices }: Parked,
+  deadline: Deadline,
+): Promise<string | undefined> => {
+  const parts: string[] = [];
+
+  for (let index = 0; index < slices; index += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- each slice is read from the one parked string, in order.
+    const slice = await browser.evaluateIsolated(
+      sliceExpression(key, index, index === slices - 1),
+      isSlice,
+      deadline,
+    );
+
+    if (slice === null) {
+      return undefined;
+    }
+
+    parts.push(slice);
+  }
+
+  const html = parts.join("");
+
+  return html.length === length ? html : undefined;
+};
+
+const captureHtml = async (
+  browser: DriverBrowser,
+  deadline: Deadline,
+): Promise<string | undefined> => {
+  const reply = await browser.evaluateIsolated(CAPTURE_EXPRESSION, isCaptureReply, deadline);
+
+  if (isHtml(reply)) {
+    return reply;
+  }
+
+  if (isTooLarge(reply)) {
+    throw new XrioError(
+      "RESPONSE_TOO_LARGE",
+      `The captured document is ${reply.tooLarge} UTF-16 code units, more than ${MAX_CAPTURE_CODE_UNITS}.`,
+      { details: undefined },
+    );
+  }
+
+  return await readSlices(browser, reply, deadline);
+};
+
 const captureIfCurrent = async (
   browser: DriverBrowser,
   tracker: PageTracker,
@@ -234,11 +345,9 @@ const captureIfCurrent = async (
   const document = await tracker.documentLoaded(deadline);
 
   try {
-    const html = await tracker.unlessBrowserDies(
-      browser.evaluateIsolated(CAPTURE_EXPRESSION, isHtml, deadline),
-    );
+    const html = await captureHtml(browser, deadline);
 
-    return tracker.isCurrent(document) ? { document, html } : undefined;
+    return html !== undefined && tracker.isCurrent(document) ? { document, html } : undefined;
   } catch (error) {
     if (isDriverFailure(error, "document-replaced")) {
       return undefined;

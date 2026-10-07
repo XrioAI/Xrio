@@ -4,7 +4,7 @@ import { clientClosed } from "./errors.ts";
 import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
 import { createBrowsers } from "./sources/browser/browsers.ts";
 import type { Browsers } from "./sources/browser/browsers.ts";
-import { patchrightDriver } from "./sources/browser/patchright/driver.ts";
+import { cdpDriver } from "./sources/browser/cdp/driver.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type {
   ClientDefaults,
@@ -56,7 +56,7 @@ export class XrioClient {
 
   constructor(options: ClientOptions) {
     this.#defaults = resolveClientOptions(options);
-    this.#browsers = createBrowsers(patchrightDriver, this.#defaults.maxBrowsers);
+    this.#browsers = createBrowsers(cdpDriver, this.#defaults.maxBrowsers);
   }
 
   scrape<Format extends ScrapeFormat>(
