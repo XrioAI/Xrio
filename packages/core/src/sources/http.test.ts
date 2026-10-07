@@ -469,6 +469,16 @@ describe("http mode edge responses", () => {
     }
   });
 
+  it("keeps wreq's text out of a failure that names no request URI", async () => {
+    await expect(
+      client.scrape({ format: "html", url: "http://a{b}.test/page" }),
+    ).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      details: undefined,
+      message: "The request to http://a{b}.test/page failed.",
+    });
+  });
+
   it("sends HTTP/1.1 headers in Chrome's order and case, keeping the connection alive", async () => {
     const requestHeads: string[] = [];
 

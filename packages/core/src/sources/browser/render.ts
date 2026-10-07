@@ -1,9 +1,10 @@
 import { classifyResponse } from "../../blocks/classify.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
-import { redactUrl, XrioError } from "../../errors.ts";
+import { XrioError } from "../../errors.ts";
 import type { Relay } from "../../proxy/relay.ts";
 import type { ResponseDetails, SourceDocument } from "../../types.ts";
+import { networkFailure } from "../net-error.ts";
 import { responseDetailsFrom } from "../response.ts";
 import { DriverError } from "./port.ts";
 import type {
@@ -258,12 +259,6 @@ class PageTracker {
   }
 }
 
-const navigationError = (url: URL, failure: DriverError, netError: string): XrioError =>
-  new XrioError("NETWORK_ERROR", `Loading ${redactUrl(url)} failed with ${netError}.`, {
-    cause: failure,
-    details: { netError },
-  });
-
 const relayFailureOfHost = (relay: RelayFailures, url: string): XrioError | undefined => {
   const hostname = URL.parse(url)?.hostname;
 
@@ -309,8 +304,7 @@ const navigateTo = async (
       const failingHop = tracker.requestUrls.at(-1);
 
       throw (
-        relayFailureBehind(relay, failingHop, url, netError) ??
-        navigationError(url, error, netError)
+        relayFailureBehind(relay, failingHop, url, netError) ?? networkFailure(url, netError, error)
       );
     }
 

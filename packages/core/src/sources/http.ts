@@ -10,6 +10,7 @@ import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { SourceDocument } from "../types.ts";
 import { decodeBody } from "./decode.ts";
+import { networkFailure } from "./net-error.ts";
 import { responseDetailsFrom } from "./response.ts";
 import type { VisitPlan } from "./visit.ts";
 
@@ -46,8 +47,6 @@ const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 const LEADING_EMPTY_VALUES = /^(?:\s*,)+/u;
 
 const FAILURE_AFTER_REQUEST_URI = /for uri \(\S*\): (?<failure>.*)$/su;
-
-const CERTIFICATE_FAILURE = /CERTIFICATE_VERIFY_FAILED/u;
 
 const TUNNEL_FAILURE = /ProxyConnect/u;
 
@@ -157,6 +156,13 @@ const readDocument = async (
 const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {
   const failure = FAILURE_AFTER_REQUEST_URI.exec(error.message)?.groups?.failure ?? "";
 
+  if (failure === "") {
+    return new XrioError("NETWORK_ERROR", `The request to ${redactUrl(url)} failed.`, {
+      cause: error,
+      details: undefined,
+    });
+  }
+
   if (TUNNEL_FAILURE.test(failure)) {
     return (
       relay.failureFor(url.hostname) ??
@@ -167,21 +173,7 @@ const translateRequestError = (error: RequestError, url: URL, relay: Relay): Xri
     );
   }
 
-  if (CERTIFICATE_FAILURE.test(failure)) {
-    return new XrioError(
-      "TLS_CERTIFICATE_INVALID",
-      `The certificate for ${url.host} was rejected.`,
-      {
-        cause: error,
-        details: undefined,
-      },
-    );
-  }
-
-  return new XrioError("NETWORK_ERROR", `The request to ${redactUrl(url)} failed.`, {
-    cause: error,
-    details: undefined,
-  });
+  return networkFailure(url, failure, error);
 };
 
 const fetchOnce = async (
