@@ -565,13 +565,13 @@ describe("the identity report's secrets", () => {
       proxy: proxy.url.replace("://", "://user:secret@"),
     });
 
-    const result = client.scrape({ format: "html", url: "http://origin.test/" });
+    const result = client.scrape({ format: "html", url: "https://origin.test/" });
 
     await expect(result).rejects.toMatchObject({ code: "PROXY_AUTH_FAILED" });
     await expect(result).rejects.toSatisfy(
       (error) => !inspect(error, { depth: Infinity }).includes("secret"),
     );
-    expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["ipwho.is:443"]);
+    expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["origin.test:443"]);
   });
 
   it("holds no scratch path in a browser report or a launch error", async () => {

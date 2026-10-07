@@ -207,14 +207,11 @@ describe("proxy and identity integration", () => {
       };
 
       const before = structuredClone(config);
-      const lookedUp: (string | ProxyEndpoint)[] = [];
 
       const { plans, scrapes } = harness({
         config,
-        proxyInfo: async (endpoint) => {
-          lookedUp.push(endpoint);
-
-          return await Promise.resolve(proxyObservation);
+        proxyInfo: () => {
+          throw new Error("HTTP scrapes must not call geolocation.");
         },
       });
 
@@ -227,10 +224,8 @@ describe("proxy and identity integration", () => {
 
       try {
         await scrapes.start(request, deadline).answer;
-        expect(plans[0].proxy).toBe(lookedUp[0]);
         expect(plans[0].proxy?.credentials?.username).toMatch(username);
         expect(config).toStrictEqual(before);
-        expect(lookedUp).toHaveLength(1);
       } finally {
         await scrapes.close();
       }
@@ -355,12 +350,12 @@ describe("proxy and identity integration", () => {
     using deadline = startDeadline(1000);
 
     const a = scrapes.start(
-      { ...intent, route: parseProxy("http://a:secret@proxy.test") },
+      { ...browserIntent, route: parseProxy("http://a:secret@proxy.test") },
       deadline,
     );
 
     const b = scrapes.start(
-      { ...intent, route: parseProxy("http://b:secret@proxy.test") },
+      { ...browserIntent, route: parseProxy("http://b:secret@proxy.test") },
       deadline,
     );
 
@@ -373,17 +368,17 @@ describe("proxy and identity integration", () => {
     expect(
       plans.map((plan) => [
         plan.proxy?.credentials?.username,
-        plan.kind === "http" ? plan.identity.inputs.headers : null,
+        plan.kind === "browser" ? plan.identity.chosen.surfaces.locale.tag : null,
       ]),
     ).toStrictEqual([
-      ["b", { "accept-language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7" }],
-      ["a", { "accept-language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7" }],
+      ["b", "fr-FR"],
+      ["a", "de-DE"],
     ]);
     expect(plans[0].proxy).toBe(lookedUp[1]);
     expect(plans[1].proxy).toBe(lookedUp[0]);
   });
 
-  it("sends inferred locale through the HTTP relay and keeps the configured session after a block", async () => {
+  it("sends en-US through the HTTP relay without a lookup and keeps the configured session after a block", async () => {
     const headers: (string | undefined)[] = [];
 
     await using origin = await startFixtureServer((request, response) => {
@@ -394,14 +389,11 @@ describe("proxy and identity integration", () => {
     });
 
     await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
-    const lookedUp: (string | ProxyEndpoint)[] = [];
 
     const { plans, scrapes } = harness({
       config: { proxy: { url: proxy.url.replace("://", "://user-{session}:secret@") } },
-      proxyInfo: async (endpoint) => {
-        lookedUp.push(endpoint);
-
-        return await Promise.resolve(proxyObservation);
+      proxyInfo: () => {
+        throw new Error("HTTP scrapes must not call geolocation.");
       },
       sources: {
         close: async () => {
@@ -430,19 +422,16 @@ describe("proxy and identity integration", () => {
         identity: first.identity,
         verdicts: [first.block.verdict, second.block.verdict],
       }).toMatchObject({
-        identity: { locale: "de-DE", mode: "http" },
+        identity: { locale: "en-US", mode: "http" },
         verdicts: ["blocked", "blocked"],
       });
       expect(JSON.stringify(first.identity)).not.toMatch(/secret|xrio:|127\.0\.0\.1/u);
-      expect(headers).toStrictEqual(
-        Array.from({ length: 2 }, () => "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"),
-      );
+      expect(headers).toStrictEqual(Array.from({ length: 2 }, () => "en-US,en;q=0.9"));
       const endpoint = plans[0].proxy;
       expect({
-        lookups: lookedUp.length,
         requests: proxy.requests.length,
-        sameRoute: lookedUp[1] === lookedUp[0],
-      }).toStrictEqual({ lookups: 2, requests: 2, sameRoute: true });
+        sameRoute: plans[1].proxy === plans[0].proxy,
+      }).toStrictEqual({ requests: 2, sameRoute: true });
       expect(proxy.requests.map(({ authorization }) => authorization)).toStrictEqual(
         Array.from(
           { length: 2 },

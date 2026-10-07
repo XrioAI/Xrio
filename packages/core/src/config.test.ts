@@ -57,7 +57,7 @@ describe("configuration discovery", () => {
       process.chdir(${JSON.stringify(elsewhere)});
       const codes = [];
       for (const [client, proxy] of [[configured], [overridden], [overridden, ${JSON.stringify(methodProxy.url)}], [configured]]) {
-        try { await client.scrape({ url: "http://target.invalid/", format: "html", proxy, timeoutMs: 5000 }); }
+        try { await client.scrape({ url: "https://target.invalid/", format: "html", proxy, timeoutMs: 5000 }); }
         catch (error) { codes.push(error.code); }
       }
       process.stdout.write(JSON.stringify(codes));

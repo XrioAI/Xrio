@@ -291,7 +291,7 @@ export const presentedLocale = ({ locale }: Pick<IdentityIntent, "locale">) => {
 export const identityForVisit = (
   pins: IdentityIntent,
   device: DeviceChoice,
-  inferredLocale: string | undefined,
+  inferredLocale?: string,
 ): IdentityIntent => {
   if (device.kind === "record") {
     return { ...pins, locale: device.record.policy.locale };

@@ -73,21 +73,22 @@ const comparisonFacts = async ({
 const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   const { dependencies, held, hold, intent } = context;
   const proxy = intent.route ?? dependencies.configuredProxy;
-  const route = routeFor(proxy);
-  const observation = proxy === undefined ? undefined : await dependencies.proxyInfo(proxy, held);
-
-  held.throwIfExpired();
-  const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
 
   if (intent.source.mode === "http") {
     return {
       capabilities: await comparisonFacts(context),
-      identity: httpIdentity({ locale: pins.locale }),
+      identity: httpIdentity(identityForVisit(intent.identity, hold.device)),
       kind: "http",
       proxy,
       url: intent.url,
     };
   }
+
+  const route = routeFor(proxy);
+  const observation = proxy === undefined ? undefined : await dependencies.proxyInfo(proxy, held);
+
+  held.throwIfExpired();
+  const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
 
   const capabilities = await dependencies.host.snapshotFor(intent.source.browserPath, held);
   const scrape = { mode: intent.source.mode, pins };
