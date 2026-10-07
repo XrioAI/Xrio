@@ -30,6 +30,7 @@ export interface InternalEvent {
     | "browser-launched"
     | "cdp-message-dropped"
     | "document-rebind"
+    | "document-state-dropped"
     | "raw-header-fallback"
     | "request-log-dropped"
     | "sweep-incomplete"

@@ -1,9 +1,13 @@
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { ChannelListener } from "node:diagnostics_channel";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import { XrioError } from "../../errors.ts";
+import { documentHop, startedRender } from "../../testing/manual-render.ts";
 import { DriverError } from "./port.ts";
-import type { DriverBrowser, DriverListener, ResultGuard } from "./port.ts";
+import type { DriverBrowser, DriverEvent, DriverListener, ResultGuard } from "./port.ts";
 import { renderDocument } from "./render.ts";
 
 type Navigation =
@@ -37,26 +41,19 @@ const scriptedBrowser = (navigation: Navigation): DriverBrowser => {
       if ("netError" in navigation) {
         for (const url of navigation.hops ?? []) {
           for (const listener of listeners) {
-            listener({ type: "request", url });
+            listener({ frameId: "F1", loaderId: "L1", sessionId: "S1", type: "request", url });
           }
         }
 
         throw new DriverError({ kind: "navigation-failed", netError: navigation.netError });
       }
 
-      const hop = {
-        headers: [],
-        isRedirect: false,
-        loaderId: "L1",
-        requestId: "R1",
-        status: 502,
-        url: navigation.documentUrl,
-      };
+      const hop = documentHop({ status: 502, url: navigation.documentUrl });
 
       for (const listener of listeners) {
         listener({ hop, type: "document-response" });
-        listener({ frameId: "F1", loaderId: "L1", type: "commit" });
-        listener({ frameId: "F1", loaderId: "L1", type: "dom-content-loaded" });
+        listener({ frameId: "F1", loaderId: "L1", sessionId: "S1", type: "commit" });
+        listener({ frameId: "F1", loaderId: "L1", sessionId: "S1", type: "dom-content-loaded" });
       }
     },
     onEvent: (listener) => {
@@ -145,5 +142,59 @@ describe("proxy failures behind a browser navigation", () => {
       502,
       "http://origin.test/page",
     ]);
+  });
+});
+
+const isEventMessage = (message: unknown): message is { event: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  typeof message.event === "string";
+
+const recordEvents = () => {
+  const observed: string[] = [];
+
+  const record: ChannelListener = (message) => {
+    if (isEventMessage(message)) {
+      observed.push(message.event);
+    }
+  };
+
+  subscribe("xrio:event", record);
+
+  return {
+    [Symbol.dispose]: () => {
+      unsubscribe("xrio:event", record);
+    },
+    observed,
+  };
+};
+
+const RAW_HEADERS: DriverEvent = {
+  headers: [["content-type", "text/html"]],
+  requestId: "R1",
+  sessionId: "S1",
+  status: 200,
+  type: "raw-headers",
+};
+
+describe("content type", () => {
+  it.each([
+    { fallbacks: 1, hop: { fromCache: false, hasExtraInfo: false }, raw: [] },
+    { fallbacks: 1, hop: { fromCache: true, hasExtraInfo: true }, raw: [] },
+    { fallbacks: 0, hop: { fromCache: false, hasExtraInfo: true }, raw: [RAW_HEADERS] },
+  ])("publishes $fallbacks renderer-header fallback for $hop", async ({ fallbacks, hop, raw }) => {
+    using events = recordEvents();
+    const run = startedRender(documentHop(hop));
+    using _deadline = run.deadline;
+
+    for (const event of raw) {
+      run.emit(event);
+    }
+
+    await run.result;
+    expect(events.observed.filter((event) => event === "raw-header-fallback")).toHaveLength(
+      fallbacks,
+    );
   });
 });

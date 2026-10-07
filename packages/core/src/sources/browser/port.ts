@@ -3,9 +3,17 @@ import type { LaunchPlan } from "./launch-plan.ts";
 
 export type RawHeaders = readonly (readonly [string, string])[];
 
-export interface DocumentHop {
-  requestId: string;
+export interface DocumentIdentity {
+  sessionId: string;
+  frameId: string;
   loaderId: string;
+}
+
+export interface DocumentHop extends DocumentIdentity {
+  requestId: string;
+  hopIndex: number;
+  hasExtraInfo: boolean;
+  fromCache: boolean;
   url: string;
   status: number;
   headers: RawHeaders;
@@ -13,11 +21,18 @@ export interface DocumentHop {
 }
 
 export type DriverEvent =
-  | { type: "commit"; frameId: string; loaderId: string }
-  | { type: "dom-content-loaded"; frameId: string; loaderId: string }
+  | ({ type: "commit" } & DocumentIdentity)
+  | ({ type: "dom-content-loaded" } & DocumentIdentity)
   | { type: "document-response"; hop: DocumentHop }
-  | { type: "raw-headers"; requestId: string; status: number; headers: RawHeaders }
-  | { type: "request"; url: string }
+  | ({ type: "document-request"; requestId: string; url: string } & DocumentIdentity)
+  | {
+      type: "raw-headers";
+      sessionId: string;
+      requestId: string;
+      status: number;
+      headers: RawHeaders;
+    }
+  | ({ type: "request"; url: string } & DocumentIdentity)
   | { type: "crash" }
   | { type: "disconnect" };
 

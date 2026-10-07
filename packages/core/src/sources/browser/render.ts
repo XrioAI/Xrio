@@ -5,15 +5,16 @@ import { XrioError } from "../../errors.ts";
 import type { Relay } from "../../proxy/relay.ts";
 import type { ResponseDetails, SourceDocument } from "../../types.ts";
 import { networkFailure } from "../net-error.ts";
-import { responseDetailsFrom } from "../response.ts";
+import {
+  currentDocument,
+  documentKey,
+  documentResponse,
+  emptyDocuments,
+  rawHeadersOf,
+  recordDocumentEvent,
+} from "./documents.ts";
 import { DriverError } from "./port.ts";
-import type {
-  DocumentHop,
-  DriverBrowser,
-  DriverErrorReason,
-  DriverEvent,
-  RawHeaders,
-} from "./port.ts";
+import type { DocumentHop, DriverBrowser, DriverErrorReason } from "./port.ts";
 
 const SLICE_CODE_UNITS = 4 * 1024 * 1024;
 
@@ -95,19 +96,9 @@ const PROXY_NET_ERROR = /^net::ERR_(?:PROXY|TUNNEL)_/u;
 
 type RelayFailures = Pick<Relay, "failureFor"> | undefined;
 
-interface RawHeaderEvent {
-  status: number;
-  headers: RawHeaders;
-}
-
 const browserCrashed = (cause?: unknown): XrioError =>
   new XrioError("BROWSER_CRASHED", "The browser or its renderer died mid-scrape.", {
     cause,
-    details: undefined,
-  });
-
-const committedWithoutResponse = (): XrioError =>
-  new XrioError("NETWORK_ERROR", "The page committed a document that had no HTTP response.", {
     details: undefined,
   });
 
@@ -120,18 +111,20 @@ const isDriverFailure = <Kind extends DriverErrorReason["kind"]>(
 class PageTracker {
   readonly requestUrls: string[] = [];
   droppedRequestUrls = 0;
-  #document: DocumentHop | undefined;
-  #committedLoader: string | undefined;
-  readonly #responses = new Map<string, DocumentHop>();
-  #failure: XrioError | undefined;
-  readonly #rawHeaders = new Map<string, RawHeaderEvent[]>();
-  readonly #loaded = new Set<string>();
+  #state = emptyDocuments();
   readonly #waiters = new Set<() => void>();
+  readonly #fallbacks = new Set<string>();
   readonly #stop: () => void;
+  readonly #failureOf: (document: DocumentHop) => XrioError | undefined;
 
-  constructor(browser: DriverBrowser) {
+  constructor(browser: DriverBrowser, failureOf: (document: DocumentHop) => XrioError | undefined) {
+    this.#failureOf = failureOf;
     this.#stop = browser.onEvent((event) => {
-      this.#record(event);
+      this.#state = recordDocumentEvent(this.#state, event);
+
+      if (event.type === "request") {
+        this.#recordRequest(event.url);
+      }
 
       for (const wake of this.#waiters) {
         wake();
@@ -143,17 +136,50 @@ class PageTracker {
     this.#stop();
   }
 
+  loadedDocument(): DocumentHop | undefined {
+    if (this.#state.failed) {
+      throw browserCrashed();
+    }
+
+    const record = currentDocument(this.#state);
+
+    const document = record?.loaded === true ? record.response : undefined;
+    const failure = document === undefined ? undefined : this.#failureOf(document);
+
+    if (failure !== undefined) {
+      throw failure;
+    }
+
+    return document;
+  }
+
   async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
     deadline.throwIfExpired();
     const { promise, resolve, reject } = Promise.withResolvers<DocumentHop>();
 
     const check = () => {
-      if (this.#failure !== undefined) {
-        reject(this.#failure);
-      } else if (this.#document !== undefined && this.#loaded.has(this.#document.loaderId)) {
-        resolve(this.#document);
-      } else if (this.#loadedWithoutResponse()) {
-        reject(committedWithoutResponse());
+      try {
+        const document = this.loadedDocument();
+
+        if (document !== undefined) {
+          resolve(document);
+
+          return;
+        }
+
+        const record = currentDocument(this.#state);
+
+        if (record?.loaded === true && record.response === undefined) {
+          reject(
+            new XrioError(
+              "NETWORK_ERROR",
+              "The page committed a document that had no HTTP response.",
+              { details: undefined },
+            ),
+          );
+        }
+      } catch (error) {
+        reject(error);
       }
     };
 
@@ -173,80 +199,37 @@ class PageTracker {
     }
   }
 
-  #loadedWithoutResponse(): boolean {
-    return (
-      this.#document === undefined &&
-      this.#committedLoader !== undefined &&
-      this.#loaded.has(this.#committedLoader)
-    );
-  }
-
   isCurrent(document: DocumentHop): boolean {
-    return this.#committedLoader === document.loaderId;
+    return this.#state.current === documentKey(document);
   }
 
   responseOf(document: DocumentHop): ResponseDetails {
-    const raw = this.#rawHeaders
-      .get(document.requestId)
-      ?.findLast(({ status }) => status === document.status);
+    const hop = JSON.stringify([document.requestId, document.hopIndex]);
 
-    if (raw === undefined) {
+    if (rawHeadersOf(this.#state, document) === undefined && !this.#fallbacks.has(hop)) {
+      this.#fallbacks.add(hop);
       publishInternalEvent({
-        detail: `No raw headers arrived for request ${document.requestId}; Set-Cookie is unavailable.`,
+        detail: `Using renderer headers for request ${document.requestId}, hop ${document.hopIndex}; raw headers are unavailable and Set-Cookie may be missing.`,
         event: "raw-header-fallback",
       });
     }
 
-    return responseDetailsFrom(document.url, document.status, raw?.headers ?? document.headers);
+    return documentResponse(this.#state, document);
   }
 
-  #record(event: DriverEvent): void {
-    switch (event.type) {
-      case "commit": {
-        this.#committedLoader = event.loaderId;
-        this.#document = this.#responses.get(event.loaderId);
-        break;
-      }
+  reportDropped(): void {
+    if (this.droppedRequestUrls > 0) {
+      publishInternalEvent({
+        detail: `The request log kept ${MAX_REQUEST_URLS} URLs and dropped ${this.droppedRequestUrls}.`,
+        event: "request-log-dropped",
+      });
+    }
 
-      case "dom-content-loaded": {
-        this.#loaded.add(event.loaderId);
-        break;
-      }
-
-      case "document-response": {
-        if (!event.hop.isRedirect) {
-          this.#responses.set(event.hop.loaderId, event.hop);
-        }
-
-        if (!event.hop.isRedirect && event.hop.loaderId === this.#committedLoader) {
-          this.#document = event.hop;
-        }
-
-        break;
-      }
-
-      case "raw-headers": {
-        const queued = this.#rawHeaders.get(event.requestId) ?? [];
-
-        queued.push({ headers: event.headers, status: event.status });
-        this.#rawHeaders.set(event.requestId, queued);
-        break;
-      }
-
-      case "request": {
-        this.#recordRequest(event.url);
-        break;
-      }
-
-      case "crash":
-      case "disconnect": {
-        this.#failure ??= browserCrashed();
-        break;
-      }
-
-      default: {
-        break;
-      }
+    if (this.#state.droppedState > 0) {
+      publishInternalEvent({
+        detail: `Dropped ${this.#state.droppedState} entries of document or response state.`,
+        event: "document-state-dropped",
+      });
     }
   }
 
@@ -309,15 +292,6 @@ const navigateTo = async (
     }
 
     throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
-  }
-};
-
-const reportDropped = (tracker: PageTracker): void => {
-  if (tracker.droppedRequestUrls > 0) {
-    publishInternalEvent({
-      detail: `The request log kept ${MAX_REQUEST_URLS} URLs and dropped ${tracker.droppedRequestUrls}.`,
-      event: "request-log-dropped",
-    });
   }
 };
 
@@ -428,7 +402,7 @@ export const renderDocument = async <Reading>(
   deadline: Deadline,
   readAfterCapture: () => Promise<Reading>,
 ): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
-  const tracker = new PageTracker(browser);
+  const tracker = new PageTracker(browser, (document) => relayFailureFor(relay, document));
 
   try {
     await timeStage(
@@ -461,8 +435,6 @@ export const renderDocument = async <Reading>(
 
     const details = tracker.responseOf(document);
 
-    reportDropped(tracker);
-
     return {
       afterCapture,
       source: {
@@ -477,6 +449,7 @@ export const renderDocument = async <Reading>(
       },
     };
   } finally {
+    tracker.reportDropped();
     tracker.stop();
   }
 };
