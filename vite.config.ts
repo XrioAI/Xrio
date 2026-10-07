@@ -1,15 +1,7 @@
-import { existsSync } from "node:fs";
-
 import { defineConfig } from "vite-plus";
 
 import oxfmtConfig from "./oxfmt.config.ts";
 import oxlintConfig from "./oxlint.config.ts";
-
-const BLOCK_FIXTURES = new URL("packages/core/src/blocks/fixtures/", import.meta.url);
-
-const BLOCK_TESTS_MISSING_FIXTURES = existsSync(BLOCK_FIXTURES)
-  ? []
-  : ["packages/core/src/blocks/*.test.ts"];
 
 const BROWSER_TESTS = "**/*.browser.test.ts";
 
@@ -25,12 +17,7 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          exclude: [
-            BROWSER_TESTS,
-            "**/node_modules/**",
-            "chromium-fork/**",
-            ...BLOCK_TESTS_MISSING_FIXTURES,
-          ],
+          exclude: [BROWSER_TESTS, "**/node_modules/**", "chromium-fork/**"],
           name: "unit",
         },
       },
