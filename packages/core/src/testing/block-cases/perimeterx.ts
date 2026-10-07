@@ -403,4 +403,22 @@ export const perimeterxCases = {
     url: "https://www.homegoods.example/search?q=desk%20lamp",
     why: "A PerimeterX block with no enforcement header is promoted by weak signals from three families.",
   },
+  tp_perimeterx_gt_header_403: {
+    cookies: [],
+    expect: {
+      decoys: [],
+      page: "interstitial_with_prose",
+      passedChallenges: [],
+      ruleIds: ["perimeterx_gt_header", "waf_status"],
+      vendor: "perimeterx",
+      verdict: "blocked",
+    },
+    headers: { "content-type": "text/html; charset=utf-8", "x-px-gt": "1" },
+    html: `<!DOCTYPE html><html lang="en"><head><title>Request refused</title></head><body><main><h1>We could not complete your request</h1><p>Requests from this connection have been refused for now. Wait a few minutes before trying again, and contact support if this keeps happening.</p></main></body></html>
+`,
+    requestUrls: ["https://www.shop.example/checkout"],
+    status: 403,
+    url: "https://www.shop.example/checkout",
+    why: "PerimeterX's x-px-gt header decides a short refusal page that carries no other marker.",
+  },
 } satisfies Record<string, BlockCase>;

@@ -86,4 +86,25 @@ export const impervaCases = {
     url: "https://www.pharma.example/products/generics",
     why: "Imperva's incident id and resource loader decide on a page with almost no prose.",
   },
+  tp_imperva_captcha_request_200: {
+    cookies: ["incap_ses_REDACTED=REDACTEDxxxxxxxxxxxxxxxx; Path=/"],
+    expect: {
+      decoys: [],
+      page: "interstitial_no_prose",
+      passedChallenges: [],
+      ruleIds: ["imperva_captcha_request", "imperva_resource"],
+      vendor: "imperva",
+      verdict: "blocked",
+    },
+    headers: { "content-type": "text/html", "x-cdn": "Imperva" },
+    html: `<html><head><meta name="robots" content="noindex,nofollow"></head><body><iframe id="main-iframe" src="/_Incapsula_Resource?SWCGHOEL=v2&amp;cb=REDACTED" frameborder="0" width="100%" height="100%"></iframe></body></html>
+`,
+    requestUrls: [
+      "https://shop.example.com/",
+      "https://shop.example.com/_Incapsula_Resource?SWCGHOEL=v2&cb=REDACTED",
+    ],
+    status: 200,
+    url: "https://shop.example.com/",
+    why: "Imperva's captcha resource request decides a page that holds nothing but the challenge iframe.",
+  },
 } satisfies Record<string, BlockCase>;

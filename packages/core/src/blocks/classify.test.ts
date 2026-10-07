@@ -8,7 +8,8 @@ import {
 } from "../testing/block-cases.ts";
 import type { ResponseDetails } from "../types.ts";
 import { classifyResponse } from "./classify.ts";
-import type { BlockInput, BlockReport } from "./classify.ts";
+import type { BlockReport } from "./classify.ts";
+import type { PageKind } from "./page-view.ts";
 import { gates, rules } from "./rules.ts";
 
 const everyCase = [...classifiedCases, ...failingCases];
@@ -61,47 +62,28 @@ const htmlResponse = (overrides: Partial<ResponseDetails> = {}): ResponseDetails
   ...overrides,
 });
 
-const CHALLENGES_WITHOUT_FIXTURES = new Map<string, BlockInput>([
-  [
-    "imperva_captcha_request",
-    {
-      html: EMPTY_SHELL,
-      requestUrls: ["https://shop.example/_Incapsula_Resource?SWCGHOEL=v2&cb=1"],
-      response: htmlResponse(),
-    },
-  ],
-  [
-    "perimeterx_gt_header",
-    {
-      html: EMPTY_SHELL,
-      requestUrls: [],
-      response: htmlResponse({ headers: { "content-type": "text/html", "x-px-gt": "1" } }),
-    },
-  ],
-]);
-
-const challengeInputFor = (rule: string): BlockInput | undefined => {
-  const named = classifiedCases.find(
-    ({ blockCase }) =>
-      blockCase.expect.verdict === "blocked" &&
-      blockCase.expect.ruleIds.some((ruleId) => ruleId === rule),
-  );
-
-  return named === undefined
-    ? CHALLENGES_WITHOUT_FIXTURES.get(rule)
-    : blockInputOf(named.blockCase);
-};
-
 const challengeCases = () =>
   [...challengeRules].map((rule) => {
-    const input = challengeInputFor(rule);
+    const named = classifiedCases.find(
+      ({ blockCase }) =>
+        blockCase.expect.verdict === "blocked" &&
+        blockCase.expect.ruleIds.some((ruleId) => ruleId === rule),
+    );
 
-    if (input === undefined) {
+    if (named === undefined) {
       throw new Error(`No challenge case covers ${rule}.`);
     }
 
-    return { input, rule };
+    return { input: blockInputOf(named.blockCase), rule };
   });
+
+const EVERY_PAGE_KIND = {
+  interstitial_heavy_script: true,
+  interstitial_no_prose: true,
+  interstitial_with_prose: true,
+  over_html_limit: true,
+  over_text_limit: true,
+} satisfies Record<PageKind, true>;
 
 describe("the block cases", () => {
   it.each(classifiedCases)("decides $id along its recorded path", ({ blockCase }) => {
@@ -114,6 +96,19 @@ describe("the block cases", () => {
       vendor: null,
       verdict: "unknown",
     });
+  });
+
+  it("fires every rule and reaches every page kind somewhere in the corpus", () => {
+    const firedRules = new Set(
+      everyCase.flatMap(({ blockCase }) =>
+        classifyResponse(blockInputOf(blockCase)).evidence.map((entry) => entry.rule),
+      ),
+    );
+
+    const reachedKinds = new Set(classifiedCases.map(({ blockCase }) => blockCase.expect.page));
+
+    expect(rules.map((rule) => rule.id).filter((id) => !firedRules.has(id))).toStrictEqual([]);
+    expect([...reachedKinds].toSorted()).toStrictEqual(Object.keys(EVERY_PAGE_KIND).toSorted());
   });
 
   it("keeps at most one evidence item per rule", () => {
