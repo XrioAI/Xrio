@@ -396,6 +396,31 @@ describe(classifyResponse, () => {
     expect(header).toMatchObject({ vendor: "cloudflare", verdict: "blocked" });
   });
 
+  it("reads a block page sent as a bare fragment as HTML", () => {
+    const report = classifyResponse({
+      html: "<div><h1>Access Denied</h1><p>Reference #18.6f2e1002.1786518982.2a3b4c</p></div>",
+      requestUrls: [],
+      response: htmlResponse({ status: 403 }),
+    });
+
+    expect(report).toMatchObject({ vendor: "akamai", verdict: "blocked" });
+    expect(ruleIdsOf(report)).toStrictEqual(["akamai_reference_id", "waf_status"]);
+  });
+
+  it("reads a block page sent as XHTML with an XML declaration as HTML", () => {
+    const report = classifyResponse({
+      html: '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Access Denied</h1><p>Reference #18.6f2e1002.1786518982.2a3b4c</p></body></html>',
+      requestUrls: [],
+      response: htmlResponse({
+        headers: { "content-type": "application/xhtml+xml" },
+        status: 403,
+      }),
+    });
+
+    expect(report).toMatchObject({ vendor: "akamai", verdict: "blocked" });
+    expect(ruleIdsOf(report)).toStrictEqual(["akamai_reference_id", "waf_status"]);
+  });
+
   it("promotes two weak signals only when they come from different families", () => {
     const titled = page("<p>Checking your browser before you continue.</p>").replace(
       "Catalog",
