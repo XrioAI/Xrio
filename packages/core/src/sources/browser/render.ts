@@ -4,6 +4,8 @@ import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { XrioError } from "../../errors.ts";
 import type { Relay } from "../../proxy/relay.ts";
+import { reportSkippedCookies } from "../../seed-cookies.ts";
+import type { SeedCookie } from "../../seed-cookies.ts";
 import type { ResponseDetails, SourceDocument, WaitFor } from "../../types.ts";
 import { isHtmlContentType, unsupportedContentType } from "../content-type.ts";
 import { networkFailure } from "../net-error.ts";
@@ -622,11 +624,18 @@ export const renderDocument = async <Reading>(
   deadline: Deadline,
   readAfterCapture: () => Promise<Reading>,
   waitFor?: WaitFor,
+  cookies: readonly SeedCookie[] = [],
 ): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
   const tracker = new PageTracker(browser, (document) => relayFailureFor(relay, document));
   const render: Render<Reading> = { browser, deadline, readAfterCapture, tracker, waitFor };
 
   try {
+    if (cookies.length > 0) {
+      const refused = await browser.seedCookies(cookies, deadline);
+
+      reportSkippedCookies(refused.map(({ name }) => ({ name, reason: "refused-by-chrome" })));
+    }
+
     await timeStage(
       "navigation",
       async () => {

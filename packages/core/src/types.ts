@@ -41,6 +41,7 @@ export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOver
   url: string;
   format: Format;
   proxy?: string;
+  cookies?: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
 };

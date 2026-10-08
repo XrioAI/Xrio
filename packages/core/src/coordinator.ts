@@ -20,6 +20,7 @@ import type { ScrapeOutcome } from "./outcome.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
 import { ProxyManager } from "./proxy/manager.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
+import { reportSkippedCookies } from "./seed-cookies.ts";
 import type { SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
@@ -77,6 +78,7 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   if (intent.source.mode === "http") {
     return {
       capabilities: await comparisonFacts(context),
+      cookies: intent.cookies.seeds,
       identity: httpIdentity(identityForVisit(intent.identity, hold.device)),
       kind: "http",
       proxy,
@@ -120,6 +122,7 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
     return {
       ...intent.source,
       capabilities,
+      cookies: intent.cookies.seeds,
       fonts,
       identity,
       kind: "browser",
@@ -198,6 +201,8 @@ const coordinate = async (
   dependencies: Dependencies,
   answer: Answer,
 ): Promise<void> => {
+  reportSkippedCookies(intent.cookies.skipped);
+
   try {
     await using hold = await dependencies.sessions.hold(
       intent.session,

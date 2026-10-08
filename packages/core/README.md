@@ -45,6 +45,30 @@ The default mode is `headed`, so a client needs `browserPath` unless it picks an
 
 Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client.
 
+### Request controls
+
+`cookies` accepts an array of `Set-Cookie` strings in every mode. Each seed is scoped to the scrape's target URL. A cookie without `Domain` is host-only and belongs only to the target host. A `Domain` must name the target host or one of its parents, and must not be a public suffix. Private suffixes such as `github.io` count as public suffixes. A public-suffix `Domain` equal to the target host, such as `Domain=localhost` on `http://localhost/`, makes a host-only cookie. `Path`, `Secure`, `HttpOnly`, `SameSite`, and expiration attributes determine the rest of the scope. HTTP mode uses its cookie jar. Browser modes set the cookies before navigation and let Chrome enforce their scope. HTTP mode never sends a `Secure` cookie over plain `http://`, `localhost` included, while Chrome treats `localhost` as secure and sends it there. Cookies without `HttpOnly` are visible to page scripts.
+
+`result.cookies` holds the `Set-Cookie` values of the final document only. They belong to the host of `result.url`, so they can seed a scrape of a URL on that host. After a redirect to another host, a scrape of the original URL would bind the host-only ones to the original host and skip the ones whose `Domain` is the final host.
+
+A malformed `Set-Cookie` string rejects with `INVALID_OPTIONS`. A well-formed seed that breaks one of the rules below is skipped in every mode, and the scrape continues without it. A browser scrape also skips a seed that Chrome itself refuses. Each skip publishes a `cookie-skipped` event on `xrio:event`. Its `detail` is JSON with the cookie's `name` and the `reason`, never its value. Each reason names one rule:
+
+- `domain-mismatch`. The `Domain` is not the target host or one of its parents.
+- `public-suffix-domain`. The `Domain` is a public suffix other than the target host.
+- `prefix-rules`. The name starts with `__Secure-`, `__Host-`, `__Http-`, or `__Host-Http-` in any letter case, and the cookie breaks that prefix's rules. Every prefix needs `Secure`. `__Http-` and `__Host-Http-` also need `HttpOnly`. `__Host-` and `__Host-Http-` also need a host-only cookie with a path of exactly `/`. Without `Path`, the path is the directory of the target URL.
+- `too-large`. The name and value together are longer than 4096 characters.
+- `path-too-long`. The path is longer than 1024 characters, including a path taken from the target URL.
+- `same-site-none-insecure`. The cookie sets `SameSite=None` without `Secure`.
+- `refused-by-chrome`. Chrome refused the seed for a rule the reasons above do not cover, such as a `Path` with non-ASCII characters. Only browser modes check for it.
+
+```ts
+const result = await xrio.scrape({
+  url: "https://example.com/account",
+  format: "html",
+  cookies: ["session=your-session; Path=/; Secure; HttpOnly; SameSite=Lax"],
+});
+```
+
 ### Proxy configuration and identity
 
 Proxy selection is **scrape argument → client argument → `config.proxy.url`**. Overrides select a complete concrete URL without changing the file or inheriting provider session settings. A `{session}` template is supported only in the config; passing one to the client or scrape method rejects with `INVALID_OPTIONS`.
@@ -185,7 +209,7 @@ await using xrio = new XrioClient({ mode: "headless", browserPath, maxBrowsers: 
 
 `await xrio.close()`, or leaving an `await using` block, rejects queued browser scrapes with `CLIENT_CLOSED` without launching Chrome. Running scrapes, and http scrapes, which never queue, finish under their own deadlines, and close resolves once every scrape has settled and every browser has been torn down. A revisit wanted after close launches no browser and returns the first document. If a Chrome outlives its teardown budget, a `teardown-incomplete` event says so and its profile is left for the startup sweep. A scrape started after `close()` rejects with `CLIENT_CLOSED`. Teardown always runs, even after a timeout: Chrome gets 2 seconds to close, then its process group is killed and its profile is deleted. Xrio installs no process signal handlers. If Node dies without closing, Chrome exits when its end of the debugging pipe closes, and the next process to launch a browser deletes profiles left behind for more than an hour, and the scratch directory of a fork probe as soon as the process that started it is gone, stopping the probe if it still runs.
 
-Stage timings (`scratch-sweep`, `queue`, `identity`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (the identity chosen for each browser, published as JSON before it launches so a failed scrape can still be attributed, fork probes, host renderer reads in `host-renderer-probed`, font stack checks, the Chrome argv of each browser a scrape launches as a JSON array in `browser-argv`, published before `browser-launched` and also when the launch then fails, which the fork probe's and the host renderer read's own launches do not publish, browser launches, document rebinds, raw-header fallbacks, dropped request URLs, and an incomplete teardown or startup sweep) on `xrio:event`. Each stage timing names its `outcome`, `ok`, `failed` or `aborted`, and the `scrapeId` of the scrape it belongs to, teardown included, and an event published during a scrape carries that `scrapeId` too. Nothing is printed by default.
+Stage timings (`scratch-sweep`, `queue`, `identity`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (the identity chosen for each browser, published as JSON before it launches so a failed scrape can still be attributed, fork probes, host renderer reads in `host-renderer-probed`, font stack checks, the Chrome argv of each browser a scrape launches as a JSON array in `browser-argv`, published before `browser-launched` and also when the launch then fails, which the fork probe's and the host renderer read's own launches do not publish, browser launches, document rebinds, raw-header fallbacks, dropped request URLs, skipped seed cookies in `cookie-skipped`, and an incomplete teardown or startup sweep) on `xrio:event`. Each stage timing names its `outcome`, `ok`, `failed` or `aborted`, and the `scrapeId` of the scrape it belongs to, teardown included, and an event published during a scrape carries that `scrapeId` too. Nothing is printed by default.
 
 `timeoutMs` is one deadline for the whole scrape, covering queueing and launching a browser, connecting, redirects, reading the body or capturing the page, and building the result. It defaults to 60,000 and must be a positive integer no greater than 2,147,483,647. When it passes, the scrape rejects with an `XrioError` whose `code` is `TIMEOUT`. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
 

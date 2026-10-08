@@ -27,6 +27,7 @@ const fetchThroughProxy = async (url: string, proxy?: string, locale = "en-US") 
   return await loadHttpDocument(
     {
       capabilities: null,
+      cookies: [],
       identity: httpIdentity({ locale }),
       kind: "http",
       proxy: proxy === undefined ? undefined : parseProxy(proxy),

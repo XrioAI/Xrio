@@ -267,7 +267,7 @@ const fetchFollowingRedirects = async (
 };
 
 export const loadHttpDocument = async (
-  { capabilities, identity, proxy, url }: Extract<VisitPlan, { kind: "http" }>,
+  { capabilities, identity, proxy, url, cookies }: Extract<VisitPlan, { kind: "http" }>,
   deadline: Deadline,
 ): Promise<SourceDocument> => {
   const { inputs, report } = identity;
@@ -279,6 +279,10 @@ export const loadHttpDocument = async (
     proxy: relay.url,
     timeout: 0,
   });
+
+  for (const { name, setCookieHeader } of cookies) {
+    session.setCookie(name, setCookieHeader.slice(setCookieHeader.indexOf("=") + 1), url);
+  }
 
   return await readDocument(
     await fetchFollowingRedirects(session, url, deadline, relay),

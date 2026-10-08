@@ -5,6 +5,7 @@ import type { HostSettings } from "./host-config.ts";
 import type { DeviceRecord } from "./humanizer/contracts.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
+import { parseSeedCookies } from "./seed-cookies.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientOptions,
@@ -261,8 +262,10 @@ export const resolveScrapeIntent = (
   }
 
   const source = sourceIntent(options, defaults, mode);
+  const cookies = parseSeedCookies(options.cookies, url);
 
   return {
+    cookies,
     format,
     identity: defaults.identity,
     route: proxy,

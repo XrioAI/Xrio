@@ -63,6 +63,17 @@ describe("the CDP commands our driver may send", () => {
       ),
     ).resolves.toBeVoid();
 
+    expectTypeOf(
+      send(
+        main,
+        "Network.setCookies",
+        { cookies: [{ name: "seed", url: "https://example.com/", value: "one" }] },
+        signal,
+      ),
+    ).resolves.toBeVoid();
+    // @ts-expect-error Cookie seeding belongs only to the main page.
+    void send(worker, "Network.setCookies", { cookies: [] }, signal);
+
     // @ts-expect-error Runtime.enable is never sent.
     void send(main, "Runtime.enable", {}, signal);
     // @ts-expect-error Emulation is never sent, focus emulation included.

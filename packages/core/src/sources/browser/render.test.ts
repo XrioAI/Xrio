@@ -6,6 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import { XrioError } from "../../errors.ts";
+import { parseSeedCookies } from "../../seed-cookies.ts";
 import { documentHop, startedRender } from "../../testing/manual-render.ts";
 import { DriverError } from "./port.ts";
 import type { DriverBrowser, DriverEvent, DriverListener, ResultGuard } from "./port.ts";
@@ -66,6 +67,7 @@ const scriptedBrowser = (navigation: Navigation): DriverBrowser => {
     },
     product: { headless: true, major: 150, version: "150.0.0.0" },
     responseBody: async () => await Promise.resolve(""),
+    seedCookies: async () => await Promise.resolve([]),
   };
 };
 
@@ -87,6 +89,34 @@ const render = async (navigation: Navigation, relay?: ReturnType<typeof relayFai
     startDeadline(10_000),
     async () => await Promise.resolve(null),
   );
+
+describe("cookie seeding failures", () => {
+  it("reports a lost browser while seeding as BROWSER_CRASHED", async () => {
+    using deadline = startDeadline(1000);
+    const url = new URL("https://origin.test/page");
+    const failure = new DriverError({ kind: "browser-gone" });
+
+    const browser = {
+      ...scriptedBrowser({ documentUrl: url.href }),
+      seedCookies: async () => {
+        await Promise.resolve();
+        throw failure;
+      },
+    };
+
+    await expect(
+      renderDocument(
+        browser,
+        url,
+        undefined,
+        deadline,
+        async () => {},
+        undefined,
+        parseSeedCookies(["seed=one"], url).seeds,
+      ),
+    ).rejects.toMatchObject({ cause: failure, code: "BROWSER_CRASHED" });
+  });
+});
 
 describe("proxy failures behind a browser navigation", () => {
   it("reports the relay's failure for the host when Chrome's tunnel fails", async () => {

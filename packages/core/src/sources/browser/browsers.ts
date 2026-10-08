@@ -258,6 +258,7 @@ const renderInScope = async (
       deadline,
       async () => await observeAfterCapture(browser, identity.read.afterCapture, deadline),
       plan.waitFor,
+      plan.cookies,
     );
 
     document.resolve({

@@ -43,6 +43,7 @@ const ALLOWED_COMMANDS = {
   "Browser.setDownloadBehavior": ["browser"],
   "Network.enable": EVERY_TARGET,
   "Network.getResponseBody": ["main"],
+  "Network.setCookies": ["main"],
   "Page.bringToFront": ["main"],
   "Page.createIsolatedWorld": ["main"],
   "Page.enable": ["main"],
@@ -105,6 +106,7 @@ type ParamsIn<Kind extends Scope> = Narrowed<{
   "Browser.setDownloadBehavior": { readonly behavior: "deny" };
   "Network.enable": Kind extends "main" ? PreviewBuffers : NoBodyBuffers;
   "Network.getResponseBody": { readonly requestId: string };
+  "Network.setCookies": ProtocolParams<"Network.setCookies">;
   "Page.bringToFront": NoParams;
   "Page.createIsolatedWorld": { readonly frameId: string; readonly worldName: "" };
   "Page.enable": NoParams;

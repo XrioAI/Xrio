@@ -1,4 +1,5 @@
 import type { Deadline } from "../../deadline.ts";
+import type { SeedCookie } from "../../seed-cookies.ts";
 import type { LaunchPlan } from "./launch-plan.ts";
 
 export type RawHeaders = readonly (readonly [string, string])[];
@@ -50,6 +51,10 @@ export interface ChromeProduct {
 export interface DriverBrowser {
   readonly product: ChromeProduct;
   readonly onEvent: (listener: DriverListener) => () => void;
+  readonly seedCookies: (
+    cookies: readonly SeedCookie[],
+    deadline: Deadline,
+  ) => Promise<readonly SeedCookie[]>;
   readonly navigate: (url: string, deadline: Deadline) => Promise<void>;
   readonly evaluateIsolated: <Result>(
     expression: string,

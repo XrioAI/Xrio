@@ -14,6 +14,7 @@ const browserPlan: VisitPlan = {
   browserArgs: [],
   browserPath: "/unused-browser",
   capabilities: { permittedCpus: 32, platform: "linux" },
+  cookies: [],
   fonts: {
     evidence: undefined,
     settle: async () => {
@@ -36,6 +37,7 @@ const browserPlan: VisitPlan = {
 
 const httpPlan: VisitPlan = {
   capabilities: null,
+  cookies: [],
   identity: httpIdentity(noPins),
   kind: "http",
   proxy: undefined,

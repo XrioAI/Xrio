@@ -1,5 +1,6 @@
 import type { CacheDir } from "./cache-dir.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
+import type { CookieSeeds } from "./seed-cookies.ts";
 import type { ProxyEndpoint, ScrapeFormat, WaitFor } from "./types.ts";
 
 type SourceIntent =
@@ -17,6 +18,7 @@ interface SessionIntent {
 
 export interface ScrapeIntent {
   readonly url: URL;
+  readonly cookies: CookieSeeds;
   readonly format: ScrapeFormat;
   readonly timeoutMs: number;
   readonly signal: AbortSignal | undefined;

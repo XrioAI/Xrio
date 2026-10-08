@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { Deadline } from "../../../deadline.ts";
+import type { SeedCookie } from "../../../seed-cookies.ts";
 import { spawnChrome } from "../browser-process.ts";
 import type { SpawnedChrome } from "../browser-process.ts";
 import { killProcessGroup, waitForGroupExit } from "../group-lifetime.ts";
@@ -54,6 +55,8 @@ const DIALOG_DISMISS_MS = { longest: 1500, shortest: 600 } as const;
 const CONTEXT_GONE = /Cannot find context with specified id|Execution context was destroyed/u;
 
 const NAVIGATED_AWAY = /Inspected target navigated or closed/u;
+
+const COOKIE_REFUSED = "Network.setCookies failed: Invalid cookie fields";
 
 interface CommittedDocument {
   readonly loaderId: string;
@@ -118,6 +121,43 @@ const replacedBy = (cause: unknown): DriverError | undefined =>
     ? new DriverError({ kind: "document-replaced" }, { cause })
     : undefined;
 
+const isCookieRefused = (cause: unknown): boolean =>
+  cause instanceof Error && cause.message.startsWith(COOKIE_REFUSED);
+
+const seedExpiry = (
+  expires: number | undefined,
+  maxAge: number | undefined,
+): number | undefined => {
+  if (maxAge === undefined) {
+    return expires;
+  }
+
+  return maxAge === 0 ? 0 : Date.now() / 1000 + maxAge;
+};
+
+const cookieParams = ({
+  name,
+  value,
+  url,
+  domain,
+  path,
+  secure,
+  httpOnly,
+  sameSite,
+  expires,
+  maxAge,
+}: SeedCookie) => ({
+  domain,
+  expires: seedExpiry(expires, maxAge),
+  httpOnly,
+  name,
+  path,
+  sameSite,
+  secure,
+  url,
+  value,
+});
+
 class Tab {
   readonly #send: Send;
   readonly #main: TargetSession<"main">;
@@ -166,6 +206,52 @@ class Tab {
     );
 
     return base64Encoded ? Buffer.from(body, "base64").toString("utf-8") : body;
+  };
+
+  readonly #setCookies = async (
+    cookies: readonly SeedCookie[],
+    deadline: Deadline,
+  ): Promise<void> => {
+    await this.#send(
+      this.#main,
+      "Network.setCookies",
+      { cookies: cookies.map(cookieParams) },
+      deadline.signal,
+    );
+  };
+
+  readonly seedCookies: DriverBrowser["seedCookies"] = async (cookies, deadline) => {
+    deadline.throwIfExpired();
+    await untilAborted(this.#ready, deadline.signal);
+
+    try {
+      await this.#setCookies(cookies, deadline);
+
+      return [];
+    } catch (error) {
+      if (!isCookieRefused(error)) {
+        throw error;
+      }
+    }
+
+    const outcomes = await Promise.allSettled(
+      cookies.map(async (cookie) => {
+        await this.#setCookies([cookie], deadline);
+      }),
+    );
+
+    const failure = outcomes.find(
+      (outcome): outcome is PromiseRejectedResult =>
+        outcome.status === "rejected" && !isCookieRefused(outcome.reason),
+    );
+
+    if (failure !== undefined) {
+      throw failure.reason instanceof Error
+        ? failure.reason
+        : new Error("Seeding a cookie failed.");
+    }
+
+    return cookies.filter((_cookie, index) => outcomes[index]?.status === "rejected");
   };
 
   readonly navigate = async (url: string, deadline: Deadline): Promise<void> => {
@@ -498,6 +584,7 @@ const connect = (chrome: SpawnedChrome, lifetime: AbortSignal): Connected => {
       onEvent: opener.onEvent,
       product: parseChromeProduct(product),
       responseBody: opener.responseBody,
+      seedCookies: opener.seedCookies,
     };
   })();
 
