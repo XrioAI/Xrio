@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { inspect, promisify } from "node:util";
@@ -8,11 +9,17 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { loadXrioConfig } from "./config.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
+import { listenOnLoopback } from "./testing/fixture-server.ts";
 
 const directories: string[] = [];
 
 // oxlint-disable-next-line typescript/strict-void-return -- Node explicitly provides the promisify overload for execFile.
 const execute = promisify(execFile);
+
+const NO_HOST = {
+  browserArgs: undefined,
+  identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
+};
 
 const workspace = () => {
   const directory = mkdtempSync(path.join(tmpdir(), "xrio-config-"));
@@ -79,6 +86,47 @@ describe("configuration discovery", () => {
     expect(loadXrioConfig(directory).proxy?.url).toBe(url);
   });
 
+  it("sends the config's host locale as Accept-Language on http scrapes", async () => {
+    const acceptLanguages: (string | undefined)[] = [];
+
+    const origin = createServer((request, response) => {
+      acceptLanguages.push(request.headers["accept-language"]);
+      response.setHeader("content-type", "text/html");
+      response.end("<p>ok</p>");
+    });
+
+    const port = await listenOnLoopback(origin);
+    const directory = workspace();
+    const clientModule = new URL("client.ts", import.meta.url).href;
+
+    writeFileSync(
+      path.join(directory, "xrio.config.mjs"),
+      'export default { host: { locale: "de-DE" } };',
+    );
+
+    try {
+      const { stdout } = await execute(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+      import { XrioClient } from ${JSON.stringify(clientModule)};
+      await using client = new XrioClient({ mode: "http" });
+      const result = await client.scrape({ url: "http://127.0.0.1:${port}/", format: "html", timeoutMs: 5000 });
+      process.stdout.write(result.identity.locale);
+    `,
+        ],
+        { cwd: directory, encoding: "utf-8", timeout: 20_000 },
+      );
+
+      expect(stdout).toBe("de-DE");
+      expect(acceptLanguages).toStrictEqual(["de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"]);
+    } finally {
+      origin.close();
+    }
+  });
+
   it.each(["ts", "mts", "js", "mjs"])(
     "loads a synchronous default export from xrio.config.%s",
     (extension) => {
@@ -91,6 +139,7 @@ describe("configuration discovery", () => {
       );
 
       expect(loadXrioConfig(directory)).toStrictEqual({
+        host: NO_HOST,
         proxy: {
           session: { format: "numeric", length: 8 },
           url: "http://user-{session}:secret@proxy.test",
@@ -118,7 +167,7 @@ describe("configuration discovery", () => {
 
     expect(failure).toMatchObject({
       code: "INVALID_OPTIONS",
-      message: "xrio.config supports only these top-level keys: proxy.",
+      message: "xrio.config supports only these top-level keys: host, proxy.",
     });
     expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
   });
@@ -133,7 +182,7 @@ describe("configuration discovery", () => {
       'export default { proxy: { url: "http://proxy.test" } };',
     );
 
-    expect(loadXrioConfig(child)).toStrictEqual({});
+    expect(loadXrioConfig(child)).toStrictEqual({ host: NO_HOST, proxy: undefined });
 
     writeFileSync(path.join(directory, "xrio.config.mts"), "export default {};");
 

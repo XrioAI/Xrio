@@ -4,6 +4,7 @@ import { inspect } from "node:util";
 
 import { describe, expect, it } from "vite-plus/test";
 
+import { resolveHostConfig } from "./host-config.ts";
 import type { DeviceRecord, HardwareTables } from "./humanizer/contracts.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
 import { refuseRecordOverrides, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
@@ -454,7 +455,65 @@ describe("browserArgs option", () => {
   );
 });
 
-describe("removed identity options", () => {
+describe("host settings from xrio.config", () => {
+  const host = resolveHostConfig({
+    browserArgs: ["--no-sandbox"],
+    hardware: { cores: 8 },
+    locale: "de-DE",
+    timezone: "Europe/Berlin",
+  });
+
+  const browser = { browserPath: "/browser", mode: "headless" } as const;
+
+  it("reach every scrape of the client as its identity pins", () => {
+    const defaults = resolveClientOptions(browser, host);
+
+    expect(resolveScrapeIntent(page, defaults).identity).toStrictEqual({
+      display: undefined,
+      hardware: {
+        cores: [{ value: 8, weight: 1 }],
+        gpu: undefined,
+        gpuPolicy: undefined,
+        memoryGb: undefined,
+      },
+      locale: "de-DE",
+      timezone: "Europe/Berlin",
+    });
+    expect(resolveScrapeIntent({ ...page, mode: "http" }, defaults).identity.locale).toBe("de-DE");
+  });
+
+  it("hand the config's browserArgs to browser scrapes", () => {
+    const defaults = resolveClientOptions(browser, host);
+
+    expect(resolveScrapeIntent(page, defaults).source).toStrictEqual({
+      browserArgs: ["--no-sandbox"],
+      browserPath: "/browser",
+      mode: "headless",
+    });
+  });
+
+  it("are replaced whole by the client's browserArgs, even an empty list", () => {
+    expect(
+      resolveScrapeIntent(
+        page,
+        resolveClientOptions({ ...browser, browserArgs: ["--disable-gpu-compositing"] }, host),
+      ).source,
+    ).toMatchObject({ browserArgs: ["--disable-gpu-compositing"] });
+    expect(
+      resolveScrapeIntent(page, resolveClientOptions({ ...browser, browserArgs: [] }, host)).source,
+    ).toMatchObject({ browserArgs: [] });
+  });
+
+  it("leave browserArgs empty when neither the client nor the config sets them", () => {
+    expect(
+      resolveScrapeIntent(page, resolveClientOptions(browser, resolveHostConfig({}))).source,
+    ).toMatchObject({
+      browserArgs: [],
+    });
+  });
+});
+
+describe("identity options moved to xrio.config", () => {
   it.each(["locale", "timezone", "display", "hardware"])(
     "rejects %s on both public boundaries",
     (field) => {
@@ -462,7 +521,7 @@ describe("removed identity options", () => {
 
       const expected: unknown = expect.objectContaining(
         refusalFor(
-          `${field} is no longer a client or scrape option. Identity settings are selected automatically.`,
+          `${field} is not a client or scrape option. Set it in the host section of xrio.config.`,
         ),
       );
 

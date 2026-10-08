@@ -1,5 +1,7 @@
 import { CacheDir, defaultCacheDir } from "./cache-dir.ts";
 import { invalidOptions, redactUrl } from "./errors.ts";
+import { resolveHostConfig } from "./host-config.ts";
+import type { HostSettings } from "./host-config.ts";
 import type { DeviceRecord } from "./humanizer/contracts.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
@@ -137,14 +139,17 @@ const resolveMaxBrowsers = (maxBrowsers: number | undefined): number | undefined
   return maxBrowsers;
 };
 
-const resolveBrowserArgs = (browserArgs: readonly string[] | undefined): readonly string[] =>
-  browserArgs === undefined ? [] : parseBrowserArgs(browserArgs);
+const resolveBrowserArgs = (
+  browserArgs: readonly string[] | undefined,
+  configured: readonly string[] | undefined,
+): readonly string[] =>
+  browserArgs === undefined ? (configured ?? []) : parseBrowserArgs(browserArgs);
 
 const refuseIdentityOptions = (options: ClientOptions | ScrapeOptions): void => {
   for (const field of ["locale", "timezone", "display", "hardware"]) {
     if (field in options) {
       throw invalidOptions(
-        `${field} is no longer a client or scrape option. Identity settings are selected automatically.`,
+        `${field} is not a client or scrape option. Set it in the host section of xrio.config.`,
       );
     }
   }
@@ -167,7 +172,10 @@ const explicitProxy = (value: string): ProxyEndpoint => {
   return proxy;
 };
 
-export const resolveClientOptions = (options?: ClientOptions): ClientDefaults => {
+export const resolveClientOptions = (
+  options?: ClientOptions,
+  host: HostSettings = resolveHostConfig(),
+): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
   }
@@ -176,7 +184,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
 
   const maxBrowsers = resolveMaxBrowsers(options.maxBrowsers);
   const mode = resolveMode(options);
-  const browserArgs = resolveBrowserArgs(options.browserArgs);
+  const browserArgs = resolveBrowserArgs(options.browserArgs, host.browserArgs);
   const proxy = options.proxy === undefined ? undefined : explicitProxy(options.proxy);
 
   const cacheDir =
@@ -185,7 +193,7 @@ export const resolveClientOptions = (options?: ClientOptions): ClientDefaults =>
   return {
     browser: { browserArgs, browserPath: options.browserPath },
     cacheDir,
-    identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
+    identity: host.identity,
     maxBrowsers,
     mode: mode.mode,
     route: proxy,

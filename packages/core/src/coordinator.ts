@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { Admission } from "./admission.ts";
 import { createAnswer } from "./answer.ts";
 import type { Answer } from "./answer.ts";
-import type { XrioConfig } from "./config.ts";
+import type { ResolvedConfig } from "./config.ts";
 import type { Deadline } from "./deadline.ts";
 import { inScrapeContext, timeStage } from "./diagnostics.ts";
 import { clientClosed } from "./errors.ts";
@@ -213,7 +213,7 @@ const coordinate = async (
 export const createScrapes = (
   dependencies: Omit<Dependencies, "random" | "configuredProxy" | "proxyInfo"> & {
     readonly random?: Dependencies["random"];
-    readonly config?: XrioConfig;
+    readonly config?: Pick<ResolvedConfig, "proxy">;
     readonly proxyInfo?: Dependencies["proxyInfo"];
   },
 ): Scrapes => {

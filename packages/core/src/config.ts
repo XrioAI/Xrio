@@ -4,14 +4,23 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import { invalidOptions } from "./errors.ts";
+import { resolveHostConfig } from "./host-config.ts";
+import type { HostConfig, HostSettings } from "./host-config.ts";
 import { resolveProxyConfig } from "./proxy/config.ts";
 import type { ProxyConfig } from "./proxy/config.ts";
 
 export interface XrioConfig {
   proxy?: ProxyConfig;
+  host?: HostConfig;
+}
+
+export interface ResolvedConfig {
+  readonly proxy: ProxyConfig | undefined;
+  readonly host: HostSettings;
 }
 
 const SECTIONS = {
+  host: resolveHostConfig,
   proxy: resolveProxyConfig,
 } as const satisfies Record<keyof XrioConfig, (value: unknown) => unknown>;
 
@@ -25,12 +34,16 @@ const rejectUnknownSections = (config: object): void => {
   }
 };
 
-const resolveSections = (config: object): XrioConfig => {
+const EMPTY_CONFIG: ResolvedConfig = { host: resolveHostConfig(), proxy: undefined };
+
+const resolveSections = (config: object): ResolvedConfig => {
   rejectUnknownSections(config);
 
-  return "proxy" in config && config.proxy !== undefined
-    ? { proxy: SECTIONS.proxy(config.proxy) }
-    : {};
+  return {
+    host: SECTIONS.host("host" in config ? config.host : undefined),
+    proxy:
+      "proxy" in config && config.proxy !== undefined ? SECTIONS.proxy(config.proxy) : undefined,
+  };
 };
 
 const CONFIG_FILES = ["xrio.config.ts", "xrio.config.mts", "xrio.config.js", "xrio.config.mjs"];
@@ -47,7 +60,7 @@ const isConfigModule = (value: unknown): value is { default: object } =>
   (Object.getPrototypeOf(value.default) === Object.prototype ||
     Object.getPrototypeOf(value.default) === null);
 
-export const loadXrioConfig = (directory = process.cwd()): XrioConfig => {
+export const loadXrioConfig = (directory = process.cwd()): ResolvedConfig => {
   const files = CONFIG_FILES.flatMap((file) => {
     const candidate = path.resolve(directory, file);
 
@@ -55,7 +68,7 @@ export const loadXrioConfig = (directory = process.cwd()): XrioConfig => {
   });
 
   if (files.length === 0) {
-    return {};
+    return EMPTY_CONFIG;
   }
 
   if (files.length > 1) {

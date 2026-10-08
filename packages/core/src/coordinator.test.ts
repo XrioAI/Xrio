@@ -4,7 +4,7 @@ import { createAdmission } from "./admission.ts";
 import type { Admission } from "./admission.ts";
 import { createAnswer } from "./answer.ts";
 import { classifyResponse } from "./blocks/classify.ts";
-import type { XrioConfig } from "./config.ts";
+import type { ResolvedConfig } from "./config.ts";
 import { createScrapes } from "./coordinator.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { XrioError } from "./errors.ts";
@@ -53,7 +53,7 @@ const firstDocument = documentFor("<p>First</p>");
 const secondDocument = documentFor("<p>Second</p>");
 
 interface HarnessOptions {
-  readonly config?: XrioConfig;
+  readonly config?: Pick<ResolvedConfig, "proxy">;
   readonly proxyInfo?: typeof lookupProxyInfo;
   readonly sources?: Sources;
   readonly admission?: Admission;
@@ -203,7 +203,7 @@ describe("proxy and identity integration", () => {
   ])(
     "selects a whole route for $clientProxy / $methodProxy",
     async ({ clientProxy, methodProxy, username }) => {
-      const config: XrioConfig = {
+      const config: Pick<ResolvedConfig, "proxy"> = {
         proxy: { url: "http://configured-{session}:secret@proxy.test" },
       };
 
