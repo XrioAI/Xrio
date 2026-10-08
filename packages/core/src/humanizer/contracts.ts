@@ -35,7 +35,9 @@ export interface NameRow extends Weighted {
   readonly name: string;
 }
 
-export type GpuPolicy = "matched" | "announce";
+export const GPU_POLICIES = ["matched", "announce"] as const;
+
+export type GpuPolicy = (typeof GPU_POLICIES)[number];
 
 export const DEFAULT_GPU_POLICY: GpuPolicy = "announce";
 

@@ -261,7 +261,9 @@ export const FORK_DUMP_SWITCH = "--xrio-dump-config";
 
 export const GL_PERSONA_MAX_NAME = 128;
 
-const GL_PERSONA_NAME = /^(?!\.)[\w.-]+$/u;
+export const GL_PERSONA_NAME_PATTERN = "^(?!\\.)[\\w.-]+$";
+
+const GL_PERSONA_NAME = new RegExp(GL_PERSONA_NAME_PATTERN, "u");
 
 export const isGlPersonaName = (
   name: unknown,

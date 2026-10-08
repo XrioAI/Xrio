@@ -10,6 +10,7 @@ import { resolveProxyConfig } from "./proxy/config.ts";
 import type { ProxyConfig } from "./proxy/config.ts";
 
 export interface XrioConfig {
+  $schema?: string;
   proxy?: ProxyConfig;
   host?: HostConfig;
 }
@@ -19,7 +20,16 @@ export interface ResolvedConfig {
   readonly host: HostSettings;
 }
 
+const resolveSchemaReference = (value: unknown): string | undefined => {
+  if (value !== undefined && typeof value !== "string") {
+    throw invalidOptions("$schema must be a string.");
+  }
+
+  return value;
+};
+
 const SECTIONS = {
+  $schema: resolveSchemaReference,
   host: resolveHostConfig,
   proxy: resolveProxyConfig,
 } as const satisfies Record<keyof XrioConfig, (value: unknown) => unknown>;
@@ -38,6 +48,7 @@ const EMPTY_CONFIG: ResolvedConfig = { host: resolveHostConfig(), proxy: undefin
 
 const resolveSections = (config: object): ResolvedConfig => {
   rejectUnknownSections(config);
+  SECTIONS.$schema("$schema" in config ? config.$schema : undefined);
 
   return {
     host: SECTIONS.host("host" in config ? config.host : undefined),

@@ -43,7 +43,8 @@ const notJson = (file: string) => `Could not read ${file} as JSON.`;
 
 const notOneObject = (file: string) => `${file} must contain one JSON object.`;
 
-const unknownSections = () => "xrio.config supports only these top-level keys: host, proxy.";
+const unknownSections = () =>
+  "xrio.config supports only these top-level keys: $schema, host, proxy.";
 
 const workspace = () => {
   const directory = mkdtempSync(path.join(tmpdir(), "xrio-config-"));
@@ -425,7 +426,7 @@ describe("configuration file formats", () => {
 
     expect(failure).toMatchObject({
       code: "INVALID_OPTIONS",
-      message: "xrio.config supports only these top-level keys: host, proxy.",
+      message: "xrio.config supports only these top-level keys: $schema, host, proxy.",
     });
     expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
   });

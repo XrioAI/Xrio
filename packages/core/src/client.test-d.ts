@@ -102,6 +102,7 @@ describe("XrioClient types", () => {
 
   it("types the host section and rejects unknown top-level keys", () => {
     const config = {
+      $schema: "./node_modules/@xrio/core/xrio.schema.json",
       host: {
         browserArgs: ["--no-sandbox"],
         display: {

@@ -1,0 +1,550 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Configuration for @xrio/core. XrioClient reads it from xrio.config.json in the working directory, or from the file that its configFile option names.",
+  "properties": {
+    "$schema": {
+      "description": "The location of this schema. Editors read it, and Xrio ignores it.",
+      "type": "string"
+    },
+    "host": {
+      "additionalProperties": false,
+      "description": "The locale, timezone, display and hardware that every scrape of the client presents, plus extra Chrome switches. Browser scrapes use each field the browser can present, and http scrapes use only locale. A scrape cannot override them. A browserArgs option on the client replaces host.browserArgs.",
+      "properties": {
+        "browserArgs": {
+          "description": "Chrome switches added to every browser scrape, each as \"--name\" or \"--name=value\". A browserArgs option on the client replaces this list. Switches Xrio manages are refused when the config loads.",
+          "items": {
+            "pattern": "^--[^=\\s]",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "display": {
+          "additionalProperties": false,
+          "description": "The screen, desktop panels and window a headless browser presents. Whatever is left out is drawn from Xrio's own tables. A headed browser keeps the real display.",
+          "properties": {
+            "screen": {
+              "description": "The screen size a headless browser presents, or a weighted table of sizes.",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "description": "A screen size in whole pixels.",
+                  "required": [
+                    "width",
+                    "height"
+                  ],
+                  "properties": {
+                    "height": {
+                      "description": "Screen height in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "width": {
+                      "description": "Screen width in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One row of a weighted table: a screen size in whole pixels, plus a weight.",
+                    "required": [
+                      "width",
+                      "height",
+                      "weight"
+                    ],
+                    "properties": {
+                      "height": {
+                        "description": "Screen height in whole pixels.",
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "width": {
+                        "description": "Screen width in whole pixels.",
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "weight": {
+                        "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            },
+            "taskbar": {
+              "description": "The space the desktop's panels take at each edge. The rest of the screen is the work area, which a maximized window fills and which screen.availWidth and screen.availHeight report. An empty object means no panels. Also takes a weighted table.",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "description": "The space the desktop's panels take at each edge, in whole pixels.",
+                  "properties": {
+                    "bottom": {
+                      "description": "Height of a panel along the bottom edge, in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "left": {
+                      "description": "Width of a panel along the left edge, in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "right": {
+                      "description": "Width of a panel along the right edge, in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "top": {
+                      "description": "Height of a panel along the top edge, in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One row of a weighted table: the space the desktop's panels take at each edge, in whole pixels, plus a weight.",
+                    "required": [
+                      "weight"
+                    ],
+                    "properties": {
+                      "bottom": {
+                        "description": "Height of a panel along the bottom edge, in whole pixels.",
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "left": {
+                        "description": "Width of a panel along the left edge, in whole pixels.",
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "right": {
+                        "description": "Width of a panel along the right edge, in whole pixels.",
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "top": {
+                        "description": "Height of a panel along the top edge, in whole pixels.",
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "weight": {
+                        "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            },
+            "window": {
+              "description": "The browser window: \"maximized\", a size with an optional position, or a weighted table of sizes and maximized rows.",
+              "oneOf": [
+                {
+                  "const": "maximized",
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": false,
+                  "description": "A window size in whole pixels, with an optional position.",
+                  "dependencies": {
+                    "x": [
+                      "y"
+                    ],
+                    "y": [
+                      "x"
+                    ]
+                  },
+                  "required": [
+                    "width",
+                    "height"
+                  ],
+                  "properties": {
+                    "height": {
+                      "description": "Window height in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "width": {
+                      "description": "Window width in whole pixels.",
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "x": {
+                      "description": "Distance from the left edge of the screen. Give x and y together.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "y": {
+                      "description": "Distance from the top edge of the screen. Give x and y together.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "description": "One row of a weighted table: a window size in whole pixels, with an optional position, plus a weight.",
+                        "dependencies": {
+                          "x": [
+                            "y"
+                          ],
+                          "y": [
+                            "x"
+                          ]
+                        },
+                        "required": [
+                          "width",
+                          "height",
+                          "weight"
+                        ],
+                        "properties": {
+                          "height": {
+                            "description": "Window height in whole pixels.",
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "width": {
+                            "description": "Window width in whole pixels.",
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "x": {
+                            "description": "Distance from the left edge of the screen. Give x and y together.",
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "y": {
+                            "description": "Distance from the top edge of the screen. Give x and y together.",
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "weight": {
+                            "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                            "exclusiveMinimum": 0,
+                            "type": "number"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "One row of a weighted table: a window that fills the work area, plus a weight.",
+                        "required": [
+                          "maximized",
+                          "weight"
+                        ],
+                        "properties": {
+                          "maximized": {
+                            "const": true,
+                            "description": "Fill the work area.",
+                            "type": "boolean"
+                          },
+                          "weight": {
+                            "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                            "exclusiveMinimum": 0,
+                            "type": "number"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "hardware": {
+          "additionalProperties": false,
+          "description": "The cores, memory and GL persona a browser presents, and the policy for choosing a GL persona. Only a package of Xrio's Chromium fork can present them. On stock Chrome, cores and memoryGb fall back to the host's own values, and a gpu pin rejects every browser scrape. Whatever is left out is drawn from Xrio's own tables.",
+          "properties": {
+            "cores": {
+              "description": "The logical core count a browser presents, or a weighted table of counts.",
+              "oneOf": [
+                {
+                  "description": "A whole number of cores.",
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One row of a weighted table: a whole number of cores, plus a weight.",
+                    "required": [
+                      "value",
+                      "weight"
+                    ],
+                    "properties": {
+                      "value": {
+                        "description": "A whole number of cores.",
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "weight": {
+                        "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            },
+            "gpu": {
+              "description": "The GL persona a browser presents, or a weighted table of personas. Only a fork package can present one, and on stock Chrome a gpu pin rejects every browser scrape.",
+              "oneOf": [
+                {
+                  "description": "The name of one of the Chromium fork package's GL personas.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^(?!\\.)[\\w.-]+$",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One row of a weighted table: the name of one of the Chromium fork package's GL personas, plus a weight.",
+                    "required": [
+                      "name",
+                      "weight"
+                    ],
+                    "properties": {
+                      "name": {
+                        "description": "The name of one of the Chromium fork package's GL personas.",
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^(?!\\.)[\\w.-]+$",
+                        "type": "string"
+                      },
+                      "weight": {
+                        "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            },
+            "gpuPolicy": {
+              "description": "When a hardware GL persona is presented. announce, the default, presents one over SwiftShader too. matched presents one only on a GPU whose own renderer equals it.",
+              "enum": [
+                "matched",
+                "announce"
+              ],
+              "type": "string"
+            },
+            "memoryGb": {
+              "description": "The device memory in GB a browser presents, or a weighted table of values.",
+              "oneOf": [
+                {
+                  "description": "A value Chrome reports for navigator.deviceMemory.",
+                  "enum": [
+                    2,
+                    4,
+                    8,
+                    16,
+                    32
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One row of a weighted table: a value Chrome reports for navigator.deviceMemory, plus a weight.",
+                    "required": [
+                      "value",
+                      "weight"
+                    ],
+                    "properties": {
+                      "value": {
+                        "description": "A value Chrome reports for navigator.deviceMemory.",
+                        "enum": [
+                          2,
+                          4,
+                          8,
+                          16,
+                          32
+                        ],
+                        "type": "integer"
+                      },
+                      "weight": {
+                        "description": "How likely a browser is to draw this row, relative to the weights of the other rows. A positive number.",
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "locale": {
+          "description": "The language tag every scrape presents, such as de-DE, written in its canonical casing. Xrio offers only the tags it has measured Chrome's language list for. It wins over the locale inferred from the proxy exit. In http mode it sets only Accept-Language.",
+          "enum": [
+            "ar-SA",
+            "bg-BG",
+            "cs-CZ",
+            "da-DK",
+            "de-AT",
+            "de-CH",
+            "de-DE",
+            "el-GR",
+            "en-AU",
+            "en-CA",
+            "en-GB",
+            "en-IE",
+            "en-IN",
+            "en-NZ",
+            "en-US",
+            "en-ZA",
+            "es-AR",
+            "es-CO",
+            "es-ES",
+            "es-MX",
+            "fi-FI",
+            "fr-BE",
+            "fr-CA",
+            "fr-CH",
+            "fr-FR",
+            "he-IL",
+            "hi-IN",
+            "hu-HU",
+            "id-ID",
+            "it-IT",
+            "ja-JP",
+            "ko-KR",
+            "nb-NO",
+            "nl-BE",
+            "nl-NL",
+            "pl-PL",
+            "pt-BR",
+            "pt-PT",
+            "ro-RO",
+            "ru-RU",
+            "sk-SK",
+            "sv-SE",
+            "th-TH",
+            "tr-TR",
+            "uk-UA",
+            "vi-VN",
+            "zh-CN",
+            "zh-HK",
+            "zh-TW"
+          ],
+          "type": "string"
+        },
+        "timezone": {
+          "description": "The IANA zone name a browser presents, such as Europe/Berlin. It wins over the proxy exit's zone, and http scrapes ignore it. Offsets such as +05:30 are refused when the config loads.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "proxy": {
+      "additionalProperties": false,
+      "description": "The proxy every scrape uses unless the client or the scrape passes its own proxy URL.",
+      "dependencies": {
+        "session": {
+          "properties": {
+            "url": {
+              "description": "A proxy with session settings needs a {session} placeholder in its URL.",
+              "pattern": "\\{session\\}",
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "session": {
+          "additionalProperties": false,
+          "description": "How Xrio generates the ID that replaces {session} in proxy.url. Xrio generates a new ID at runtime, so the config cannot name one.",
+          "properties": {
+            "format": {
+              "description": "The characters of a generated session ID. Defaults to numeric.",
+              "enum": [
+                "numeric",
+                "alphanumeric"
+              ],
+              "type": "string"
+            },
+            "length": {
+              "description": "The length of a generated session ID. Defaults to 8.",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "url": {
+          "description": "The proxy as scheme://[user:password@]host[:port], with http, https, socks5 or socks5h. A {session} placeholder in the username or password asks Xrio to generate a session ID.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "object",
+  "title": "xrio.config"
+}

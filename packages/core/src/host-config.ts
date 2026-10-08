@@ -1,5 +1,6 @@
 /* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-object-parameters -- This module is the runtime parser for untrusted host configuration. */
 import { invalidOptions } from "./errors.ts";
+import { GPU_POLICIES } from "./humanizer/contracts.ts";
 import type {
   DisplayTables,
   GpuPolicy,
@@ -109,8 +110,6 @@ const HARDWARE_FIELDS = new Set(["cores", "memoryGb", "gpu", "gpuPolicy"]);
 const HARDWARE_ROW_FIELDS = new Set(["value", "weight"]);
 
 const GPU_ROW_FIELDS = new Set(["name", "weight"]);
-
-const GPU_POLICIES: readonly GpuPolicy[] = ["matched", "announce"];
 
 const GPU_PERSONAS_EXPECTED =
   "host.hardware.gpu must be a GL persona name, or a non-empty weighted table of them.";
