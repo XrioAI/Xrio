@@ -47,6 +47,8 @@ Configure a client default with `new XrioClient({ mode: "http" })` or override i
 
 ### Request controls
 
+`headers` accepts a record of header names and string values in HTTP mode. Existing profile headers retain their positions; new headers follow them. After a redirect crosses an origin boundary, Xrio drops every caller header for the rest of that attempt, including `authorization`. The identity profile owns `user-agent`, `accept-language`, and the client hints Chrome sends, such as `sec-ch-ua` and `sec-ch-ua-platform`. The `cookies` option owns `cookie`. Supplying any of them rejects with `INVALID_OPTIONS`. Browser modes reject `headers` at runtime and in TypeScript. On a client whose default mode is `http`, TypeScript accepts `headers` only when the scrape also sets `mode: "http"`, because a scrape without `mode` is typed for the default `headed` mode.
+
 `cookies` accepts an array of `Set-Cookie` strings in every mode. Each seed is scoped to the scrape's target URL. A cookie without `Domain` is host-only and belongs only to the target host. A `Domain` must name the target host or one of its parents, and must not be a public suffix. Private suffixes such as `github.io` count as public suffixes. A public-suffix `Domain` equal to the target host, such as `Domain=localhost` on `http://localhost/`, makes a host-only cookie. `Path`, `Secure`, `HttpOnly`, `SameSite`, and expiration attributes determine the rest of the scope. HTTP mode uses its cookie jar. Browser modes set the cookies before navigation and let Chrome enforce their scope. HTTP mode never sends a `Secure` cookie over plain `http://`, `localhost` included, while Chrome treats `localhost` as secure and sends it there. Cookies without `HttpOnly` are visible to page scripts.
 
 `result.cookies` holds the `Set-Cookie` values of the final document only. They belong to the host of `result.url`, so they can seed a scrape of a URL on that host. After a redirect to another host, a scrape of the original URL would bind the host-only ones to the original host and skip the ones whose `Domain` is the final host.
@@ -65,6 +67,8 @@ A malformed `Set-Cookie` string rejects with `INVALID_OPTIONS`. A well-formed se
 const result = await xrio.scrape({
   url: "https://example.com/account",
   format: "html",
+  mode: "http",
+  headers: { authorization: "Bearer your-token" },
   cookies: ["session=your-session; Path=/; Secure; HttpOnly; SameSite=Lax"],
 });
 ```

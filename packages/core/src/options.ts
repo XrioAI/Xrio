@@ -3,6 +3,7 @@ import { invalidOptions, redactUrl } from "./errors.ts";
 import { resolveHostConfig } from "./host-config.ts";
 import type { HostSettings } from "./host-config.ts";
 import type { DeviceRecord } from "./humanizer/contracts.ts";
+import { parseRequestHeaders } from "./humanizer/request-headers.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
 import { parseSeedCookies } from "./seed-cookies.ts";
@@ -212,7 +213,11 @@ const sourceIntent = (
       throw invalidOptions("waitFor is only supported in browser modes.");
     }
 
-    return mode;
+    return { ...mode, headers: parseRequestHeaders(options.headers) };
+  }
+
+  if (options.headers !== undefined) {
+    throw invalidOptions("headers is only supported in http mode.");
   }
 
   const source = { ...mode, browserArgs: defaults.browser.browserArgs };

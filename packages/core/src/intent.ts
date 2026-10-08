@@ -4,7 +4,7 @@ import type { CookieSeeds } from "./seed-cookies.ts";
 import type { ProxyEndpoint, ScrapeFormat, WaitFor } from "./types.ts";
 
 type SourceIntent =
-  | { readonly mode: "http" }
+  | { readonly mode: "http"; readonly headers: Readonly<Record<string, string>> }
   | {
       readonly mode: "headless" | "headed";
       readonly browserPath: string;

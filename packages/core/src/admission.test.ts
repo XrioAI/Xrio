@@ -26,7 +26,7 @@ describe(createAdmission, () => {
     await expect(admission.slotFor(browser.source, request)).rejects.toMatchObject({
       code: "CLIENT_CLOSED",
     });
-    await using httpSlot = await admission.slotFor({ mode: "http" }, request);
+    await using httpSlot = await admission.slotFor({ headers: {}, mode: "http" }, request);
 
     expect(httpSlot).toBeDefined();
   });
@@ -53,7 +53,7 @@ describe(createAdmission, () => {
     const admission = createAdmission(1);
     using request = startDeadline(1000);
     await using _browserSlot = await admission.slotFor(browser.source, request);
-    await using httpSlot = await admission.slotFor({ mode: "http" }, request);
+    await using httpSlot = await admission.slotFor({ headers: {}, mode: "http" }, request);
 
     expect(httpSlot).toBeDefined();
   });

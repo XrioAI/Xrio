@@ -73,6 +73,8 @@ describe("the CDP commands our driver may send", () => {
     ).resolves.toBeVoid();
     // @ts-expect-error Cookie seeding belongs only to the main page.
     void send(worker, "Network.setCookies", { cookies: [] }, signal);
+    // @ts-expect-error Extra headers would leak across third-party browser requests.
+    void send(main, "Network.setExtraHTTPHeaders", { headers: {} }, signal);
 
     // @ts-expect-error Runtime.enable is never sent.
     void send(main, "Runtime.enable", {}, signal);

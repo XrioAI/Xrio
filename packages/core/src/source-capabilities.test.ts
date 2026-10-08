@@ -38,6 +38,7 @@ const browserPlan: VisitPlan = {
 const httpPlan: VisitPlan = {
   capabilities: null,
   cookies: [],
+  headers: {},
   identity: httpIdentity(noPins),
   kind: "http",
   proxy: undefined,

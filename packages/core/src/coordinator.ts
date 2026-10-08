@@ -79,6 +79,7 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
     return {
       capabilities: await comparisonFacts(context),
       cookies: intent.cookies.seeds,
+      headers: intent.source.headers,
       identity: httpIdentity(identityForVisit(intent.identity, hold.device)),
       kind: "http",
       proxy,

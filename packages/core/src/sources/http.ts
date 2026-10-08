@@ -6,6 +6,7 @@ import type { Deadline } from "../deadline.ts";
 import { redactUrl, XrioError } from "../errors.ts";
 import type { HttpInputs } from "../humanizer/humanizer.ts";
 import type { HttpIdentityReport } from "../humanizer/report.ts";
+import { requestHeaderOrder } from "../humanizer/request-headers.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { SourceDocument } from "../types.ts";
@@ -15,7 +16,10 @@ import { networkFailure } from "./net-error.ts";
 import { responseDetailsFrom } from "./response.ts";
 import type { VisitPlan } from "./visit.ts";
 
-const chromeProfile = ({ browser, headerOrder, headers, os }: HttpInputs) =>
+const chromeProfile = (
+  { browser, headerOrder, headers, os }: HttpInputs,
+  callerHeaders: Readonly<Record<string, string>>,
+) =>
   ({
     browser,
     defaultHeaders: { Connection: "keep-alive", ...headers },
@@ -30,7 +34,7 @@ const chromeProfile = ({ browser, headerOrder, headers, os }: HttpInputs) =>
         maxHeaderListSize: 262_144,
         settingsOrder: ["HeaderTableSize", "EnablePush", "InitialWindowSize", "MaxHeaderListSize"],
       },
-      origHeaders: [...headerOrder],
+      origHeaders: requestHeaderOrder(headerOrder, callerHeaders),
     },
     os,
   }) satisfies CreateSessionOptions;
@@ -180,12 +184,17 @@ const fetchOnce = async (
   url: URL,
   deadline: Deadline,
   relay: Relay,
+  headers: Readonly<Record<string, string>>,
 ): Promise<ClientResponse> => {
   deadline.throwIfExpired();
   let response: ClientResponse;
 
   try {
-    response = await session.fetch(url.href, { redirect: "manual", signal: deadline.signal });
+    response = await session.fetch(url.href, {
+      headers,
+      redirect: "manual",
+      signal: deadline.signal,
+    });
   } catch (error) {
     throw error instanceof RequestError ? translateRequestError(error, url, relay) : error;
   }
@@ -233,9 +242,10 @@ const fetchFollowingRedirects = async (
   url: URL,
   deadline: Deadline,
   relay: Relay,
+  headers: Readonly<Record<string, string>>,
   requestUrls: string[] = [],
 ): Promise<FollowedResponse> => {
-  const response = await fetchOnce(session, url, deadline, relay);
+  const response = await fetchOnce(session, url, deadline, relay, headers);
   const location = redirectTarget(response);
   const redirects = requestUrls.length;
 
@@ -257,17 +267,20 @@ const fetchFollowingRedirects = async (
     );
   }
 
+  const next = resolveRedirect(location, response.url);
+
   return await fetchFollowingRedirects(
     session,
-    resolveRedirect(location, response.url),
+    next,
     deadline,
     relay,
+    next.origin === url.origin ? headers : {},
     requestUrls,
   );
 };
 
 export const loadHttpDocument = async (
-  { capabilities, identity, proxy, url, cookies }: Extract<VisitPlan, { kind: "http" }>,
+  { capabilities, identity, proxy, url, headers, cookies }: Extract<VisitPlan, { kind: "http" }>,
   deadline: Deadline,
 ): Promise<SourceDocument> => {
   const { inputs, report } = identity;
@@ -275,7 +288,7 @@ export const loadHttpDocument = async (
   await using relay = await startRelay(proxy, deadline, "token");
 
   await using session = await createSession({
-    ...chromeProfile(inputs),
+    ...chromeProfile(inputs, headers),
     proxy: relay.url,
     timeout: 0,
   });
@@ -285,7 +298,7 @@ export const loadHttpDocument = async (
   }
 
   return await readDocument(
-    await fetchFollowingRedirects(session, url, deadline, relay),
+    await fetchFollowingRedirects(session, url, deadline, relay, headers),
     deadline,
     () => report(capabilities),
   );

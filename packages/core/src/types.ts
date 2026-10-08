@@ -21,9 +21,9 @@ export interface WaitFor {
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
 type ModeOverride =
-  | HttpMode
-  | (BrowserMode & { waitFor?: WaitFor })
-  | { mode?: never; browserPath?: never; waitFor?: WaitFor };
+  | (HttpMode & { headers?: Readonly<Record<string, string>> })
+  | (BrowserMode & { waitFor?: WaitFor; headers?: never })
+  | { mode?: never; browserPath?: never; waitFor?: WaitFor; headers?: never };
 
 export type ClientOptions = (
   | { mode: "http"; browserPath?: string }

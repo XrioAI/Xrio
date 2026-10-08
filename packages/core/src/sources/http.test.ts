@@ -28,6 +28,7 @@ const fetchThroughProxy = async (url: string, proxy?: string, locale = "en-US") 
     {
       capabilities: null,
       cookies: [],
+      headers: {},
       identity: httpIdentity({ locale }),
       kind: "http",
       proxy: proxy === undefined ? undefined : parseProxy(proxy),

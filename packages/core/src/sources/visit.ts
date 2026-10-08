@@ -27,6 +27,7 @@ export type VisitPlan =
     } & BrowserIntent)
   | {
       readonly kind: "http";
+      readonly headers: Readonly<Record<string, string>>;
       readonly url: URL;
       readonly cookies: readonly SeedCookie[];
       readonly capabilities: HostCapabilities | null;
