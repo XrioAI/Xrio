@@ -1,7 +1,7 @@
-import { decodeHTML } from "entities";
-
 import type { ResponseDetails } from "../types.ts";
-import { gates, rules } from "./rules.ts";
+import { viewPage } from "./page-view.ts";
+import type { PageKind, PageView } from "./page-view.ts";
+import { rules } from "./rules.ts";
 import type { BuiltinKind, Rule, Tier } from "./rules.ts";
 
 export type BlockVerdict = "ok" | "suspect" | "blocked" | "queued" | "unknown";
@@ -46,20 +46,6 @@ export interface BlockInput {
   requestUrls: readonly string[];
 }
 
-interface PageMeasure {
-  html: string;
-  text: string;
-  title: string;
-  htmlChars: number;
-  textChars: number;
-  scriptChars: number;
-}
-
-interface Span {
-  readonly start: number;
-  readonly end: number;
-}
-
 type RuleOf<Source extends Rule["source"]> = Extract<Rule, { source: Source }>;
 
 const DETAIL_LIMIT = 160;
@@ -85,22 +71,6 @@ const HTML_ROOTS = new Set([
   "style",
 ]);
 
-const SCRIPT_OPENER = /<(?<tag>script)\b/giu;
-
-const NON_TEXT_OPENER = /<(?<tag>style|noscript|template|svg|head)\b/giu;
-
-const closingTag = (tag: string): RegExp => new RegExp(`</${tag}\\s*>`, "giu");
-
-const CLOSING_TAGS = new Map(
-  ["script", "style", "noscript", "template", "svg", "head"].map((tag) => [tag, closingTag(tag)]),
-);
-
-const TITLE_OPENER = /<title/iu;
-
-const TITLE_CLOSER = /<\/title\s*>/iu;
-
-const ASTRAL = /[\u{10000}-\u{10FFFF}]/gu;
-
 const WHITESPACE = /\s+/gu;
 
 const FIRST_TAG = /^\s*(?:<!--.*?-->\s*)*<(?<root>[!A-Z_a-z][\w.:-]*)/su;
@@ -110,159 +80,6 @@ const shorten = (text: string): string => {
 
   return collapsed.length <= DETAIL_LIMIT ? collapsed : `${collapsed.slice(0, DETAIL_LIMIT - 1)}…`;
 };
-
-const visibleText = (markup: string): string =>
-  decodeHTML(markup).replaceAll(WHITESPACE, " ").trim();
-
-const codePointLength = (text: string): number => text.length - (text.match(ASTRAL)?.length ?? 0);
-
-const titleOf = (html: string): string => {
-  const opener = html.search(TITLE_OPENER);
-  const contentStart = opener === -1 ? 0 : html.indexOf(">", opener) + 1;
-
-  if (contentStart === 0) {
-    return "";
-  }
-
-  const rest = html.slice(contentStart);
-  const contentLength = rest.search(TITLE_CLOSER);
-
-  return contentLength === -1 ? "" : visibleText(rest.slice(0, contentLength));
-};
-
-const charactersIn = (html: string): number =>
-  html.length > 2 * gates.interstitialMaxHtmlChars ? html.length : codePointLength(html);
-
-const matchEndFrom = (markup: string, pattern: RegExp, from: number): number | undefined => {
-  const search = new RegExp(pattern, "giu");
-
-  search.lastIndex = from;
-  const match = search.exec(markup);
-
-  return match === null ? undefined : match.index + match[0].length;
-};
-
-const elementSpans = (markup: string, opener: RegExp): Span[] => {
-  const spans: Span[] = [];
-  const unclosed = new Set<string>();
-  let position = 0;
-
-  for (const match of markup.matchAll(opener)) {
-    const tag = match.groups?.tag?.toLowerCase() ?? "";
-    const closer = CLOSING_TAGS.get(tag);
-
-    if (match.index >= position && closer !== undefined && !unclosed.has(tag)) {
-      const openEnd = markup.indexOf(">", match.index + match[0].length);
-
-      if (openEnd === -1) {
-        break;
-      }
-
-      const end = matchEndFrom(markup, closer, openEnd + 1);
-
-      if (end === undefined) {
-        unclosed.add(tag);
-      } else {
-        spans.push({ end, start: match.index });
-        position = end;
-      }
-    }
-  }
-
-  return spans;
-};
-
-const openingTagSpans = (markup: string, opener: RegExp): Span[] => {
-  const spans: Span[] = [];
-  let position = 0;
-
-  for (const match of markup.matchAll(opener)) {
-    if (match.index >= position) {
-      const openEnd = markup.indexOf(">", match.index + match[0].length);
-
-      if (openEnd === -1) {
-        break;
-      }
-
-      position = openEnd + 1;
-      spans.push({ end: position, start: match.index });
-    }
-  }
-
-  return spans;
-};
-
-const delimitedSpans = (markup: string, opener: string, closer: string): Span[] => {
-  const spans: Span[] = [];
-  let start = markup.indexOf(opener);
-
-  while (start !== -1) {
-    const close = markup.indexOf(closer, start + opener.length);
-
-    if (close === -1) {
-      break;
-    }
-
-    const end = close + closer.length;
-
-    spans.push({ end, start });
-    start = markup.indexOf(opener, end);
-  }
-
-  return spans;
-};
-
-const withoutSpans = (markup: string, spans: readonly Span[]): string => {
-  const kept: string[] = [];
-  let position = 0;
-
-  for (const { end, start } of spans) {
-    kept.push(markup.slice(position, start));
-    position = end;
-  }
-
-  kept.push(markup.slice(position));
-
-  return kept.join(" ");
-};
-
-const charactersInSpans = (markup: string, spans: readonly Span[]): number => {
-  let characters = 0;
-
-  for (const { end, start } of spans) {
-    characters += codePointLength(markup.slice(start, end));
-  }
-
-  return characters;
-};
-
-const measurePage = (html: string): PageMeasure => {
-  const htmlChars = charactersIn(html);
-  const scanned = { html: html.slice(0, gates.domScanMaxChars), htmlChars, title: titleOf(html) };
-
-  if (htmlChars > gates.interstitialMaxHtmlChars) {
-    return { ...scanned, scriptChars: 0, text: "", textChars: 0 };
-  }
-
-  const scripts = elementSpans(html, SCRIPT_OPENER);
-  const withoutScripts = withoutSpans(html, scripts);
-  const scriptTags = openingTagSpans(withoutScripts, SCRIPT_OPENER);
-  const withoutScriptTags = withoutSpans(withoutScripts, scriptTags);
-  const prose = withoutSpans(withoutScriptTags, elementSpans(withoutScriptTags, NON_TEXT_OPENER));
-  const uncommented = withoutSpans(prose, delimitedSpans(prose, "<!--", "-->"));
-  const text = visibleText(withoutSpans(uncommented, delimitedSpans(uncommented, "<", ">")));
-
-  return {
-    ...scanned,
-    scriptChars: charactersInSpans(html, scripts) + charactersInSpans(withoutScripts, scriptTags),
-    text,
-    textChars: codePointLength(text),
-  };
-};
-
-const couldBeInterstitial = (page: PageMeasure): boolean =>
-  page.htmlChars <= gates.interstitialMaxHtmlChars &&
-  page.textChars <= gates.interstitialMaxTextChars;
 
 const isHtmlType = (contentType: string | undefined): boolean =>
   contentType !== undefined &&
@@ -415,30 +232,34 @@ const statusEvidence = (response: ResponseDetails): BlockEvidence[] =>
     rule.statuses.includes(response.status) ? [evidenceFor(rule, `status ${response.status}`)] : [],
   );
 
-const DOM_GATES = {
-  interstitial: (_page, interstitial) => interstitial,
-  no_prose: (page, interstitial) => interstitial && page.textChars < gates.minProseChars,
-  none: () => true,
-} satisfies Record<RuleOf<"dom">["gate"], (page: PageMeasure, interstitial: boolean) => boolean>;
+const PAGE_GATES = {
+  interstitial_heavy_script: { interstitial: true, noProse: true },
+  interstitial_no_prose: { interstitial: true, noProse: true },
+  interstitial_with_prose: { interstitial: true, noProse: false },
+  over_html_limit: { interstitial: false, noProse: false },
+  over_text_limit: { interstitial: false, noProse: false },
+} as const satisfies Record<PageKind, { interstitial: boolean; noProse: boolean }>;
 
-const domEvidence = (page: PageMeasure, interstitial: boolean): BlockEvidence[] =>
+const couldBeInterstitial = (kind: PageKind): boolean => PAGE_GATES[kind].interstitial;
+
+const DOM_GATES = {
+  interstitial: couldBeInterstitial,
+  no_prose: (kind) => PAGE_GATES[kind].noProse,
+  none: () => true,
+} satisfies Record<RuleOf<"dom">["gate"], (kind: PageKind) => boolean>;
+
+const domEvidence = (view: PageView): BlockEvidence[] =>
   rulesFrom("dom").flatMap((rule) => {
-    if (!DOM_GATES[rule.gate](page, interstitial)) {
+    if (!DOM_GATES[rule.gate](view.kind)) {
       return [];
     }
 
-    const match = rule.pattern.exec(page[rule.target]);
+    const match = rule.pattern.exec(view.targets[rule.target]);
 
     return match === null
       ? []
       : [evidenceFor(rule, `${rule.target} matched ${JSON.stringify(match[0])}`)];
   });
-
-const isThinTextHeavyScript = (page: PageMeasure): boolean =>
-  page.htmlChars <= gates.smallPageChars &&
-  page.textChars < gates.minProseChars &&
-  page.scriptChars >= gates.minScriptChars &&
-  page.scriptChars >= page.textChars * gates.scriptToTextRatio;
 
 interface DocumentEvidence {
   evidence: BlockEvidence[];
@@ -452,16 +273,15 @@ const documentEvidence = (
   isHtml: boolean,
 ): DocumentEvidence => {
   const contentType = response.headers["content-type"];
-  const page = measurePage(html);
-  const interstitial = couldBeInterstitial(page);
-  const evidence = isHtml ? domEvidence(page, interstitial) : [];
+  const view = viewPage(html);
+  const evidence = isHtml ? domEvidence(view) : [];
   const suppressors: BuiltinKind[] = [];
 
-  if (isHtml && isThinTextHeavyScript(page)) {
+  if (isHtml && view.kind === "interstitial_heavy_script") {
     evidence.push(
       evidenceFor(
         builtin("thin_text_heavy_script"),
-        `${page.htmlChars} char document, ${page.textChars} char text, ${page.scriptChars} char script`,
+        `${view.characters.html} char document, ${view.characters.text} char text, ${view.characters.script} char script`,
       ),
     );
   }
@@ -483,7 +303,7 @@ const documentEvidence = (
 
   return {
     evidence,
-    interstitial,
+    interstitial: couldBeInterstitial(view.kind),
     suppressed: suppressors.some((kind) => SUPPRESSING_KINDS.has(kind)),
   };
 };
