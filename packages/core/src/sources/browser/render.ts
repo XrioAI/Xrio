@@ -112,14 +112,64 @@ const isDriverFailure = <Kind extends DriverErrorReason["kind"]>(
 ): error is DriverError & { reason: Extract<DriverErrorReason, { kind: Kind }> } =>
   error instanceof DriverError && error.reason.kind === kind;
 
+const readSlices = async (
+  browser: DriverBrowser,
+  { key, length, slices }: Parked,
+  deadline: Deadline,
+): Promise<string | undefined> => {
+  const parts: string[] = [];
+
+  for (let index = 0; index < slices; index += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- each slice is read from the one parked string, in order.
+    const slice = await browser.evaluateIsolated(
+      sliceExpression(key, index, index === slices - 1),
+      isSlice,
+      deadline,
+    );
+
+    if (slice === null) {
+      return undefined;
+    }
+
+    parts.push(slice);
+  }
+
+  const html = parts.join("");
+
+  return html.length === length ? html : undefined;
+};
+
+const captureHtml = async (
+  browser: DriverBrowser,
+  deadline: Deadline,
+): Promise<string | undefined> => {
+  const reply = await browser.evaluateIsolated(CAPTURE_EXPRESSION, isCaptureReply, deadline);
+
+  if (isHtml(reply)) {
+    return reply;
+  }
+
+  if (isTooLarge(reply)) {
+    throw new XrioError(
+      "RESPONSE_TOO_LARGE",
+      `The captured document is ${reply.tooLarge} UTF-16 code units, more than ${MAX_CAPTURE_CODE_UNITS}.`,
+      { details: undefined },
+    );
+  }
+
+  return await readSlices(browser, reply, deadline);
+};
+
 class PageTracker {
   #state = emptyDocuments();
   readonly #waiters = new Set<() => void>();
   readonly #fallbacks = new Set<string>();
+  readonly #browser: DriverBrowser;
   readonly #stop: () => void;
   readonly #failureOf: (document: DocumentHop) => XrioError | undefined;
 
   constructor(browser: DriverBrowser, failureOf: (document: DocumentHop) => XrioError | undefined) {
+    this.#browser = browser;
     this.#failureOf = failureOf;
     this.#stop = browser.onEvent((event) => {
       this.#state = recordDocumentEvent(this.#state, event);
@@ -212,6 +262,24 @@ class PageTracker {
 
   isCurrent(document: DocumentHop): boolean {
     return this.#state.current === documentKey(document);
+  }
+
+  async currentHtml(document: DocumentHop, deadline: Deadline): Promise<string | undefined> {
+    if (!this.isCurrent(document)) {
+      return undefined;
+    }
+
+    try {
+      const html = await captureHtml(this.#browser, deadline);
+
+      return this.isCurrent(document) ? html : undefined;
+    } catch (error) {
+      if (isDriverFailure(error, "document-replaced")) {
+        return undefined;
+      }
+
+      throw error;
+    }
   }
 
   requestUrls(document: DocumentHop): readonly string[] {
@@ -310,54 +378,6 @@ interface CapturedDocument {
   html: string;
   document: DocumentHop;
 }
-
-const readSlices = async (
-  browser: DriverBrowser,
-  { key, length, slices }: Parked,
-  deadline: Deadline,
-): Promise<string | undefined> => {
-  const parts: string[] = [];
-
-  for (let index = 0; index < slices; index += 1) {
-    // oxlint-disable-next-line eslint/no-await-in-loop -- each slice is read from the one parked string, in order.
-    const slice = await browser.evaluateIsolated(
-      sliceExpression(key, index, index === slices - 1),
-      isSlice,
-      deadline,
-    );
-
-    if (slice === null) {
-      return undefined;
-    }
-
-    parts.push(slice);
-  }
-
-  const html = parts.join("");
-
-  return html.length === length ? html : undefined;
-};
-
-const captureHtml = async (
-  browser: DriverBrowser,
-  deadline: Deadline,
-): Promise<string | undefined> => {
-  const reply = await browser.evaluateIsolated(CAPTURE_EXPRESSION, isCaptureReply, deadline);
-
-  if (isHtml(reply)) {
-    return reply;
-  }
-
-  if (isTooLarge(reply)) {
-    throw new XrioError(
-      "RESPONSE_TOO_LARGE",
-      `The captured document is ${reply.tooLarge} UTF-16 code units, more than ${MAX_CAPTURE_CODE_UNITS}.`,
-      { details: undefined },
-    );
-  }
-
-  return await readSlices(browser, reply, deadline);
-};
 
 const requireHtmlDocument = async (
   browser: DriverBrowser,
@@ -492,7 +512,9 @@ const settledChallenge = (
   }
 
   if (challengeCandidate(blockInputOf(tracker, captured)) !== undefined) {
-    return report.outcome === "passed" ? { ...report, outcome: "rounds_exhausted" } : report;
+    return report.outcome === "passed" || report.outcome === "passed_in_place"
+      ? { ...report, outcome: "rounds_exhausted" }
+      : report;
   }
 
   const passedInPlace =

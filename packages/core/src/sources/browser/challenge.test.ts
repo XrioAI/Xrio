@@ -7,6 +7,7 @@ import {
   challengeHeaders,
   CONTENT,
   documentHop,
+  LARGE_CHALLENGE,
   PAGE_URL,
   startedRender,
 } from "../../testing/manual-render.ts";
@@ -122,7 +123,7 @@ describe("challenge waits", () => {
     ]);
   });
 
-  it("captures an in-place pass after the round ends, under the challenge response's status", async () => {
+  it("ends the round at the first tick after the page clears in place, under the challenge response's status", async () => {
     const run = startedRender(
       served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
     );
@@ -130,11 +131,106 @@ describe("challenge waits", () => {
     using _deadline = run.deadline;
     await nextTurn();
     run.setHtml(CONTENT);
-    await run.tick(20_000);
+    await run.tick(250);
     const { source } = await run.result;
-    expect(source.block.challenge?.outcome).toBe("passed_in_place");
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed_in_place",
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
+    });
     expect(source.status).toBe(403);
     expect(source.html).toBe(CONTENT);
+  });
+
+  it("waits the full round on a header-flagged page too large to read as a challenge, then settles on the capture", async () => {
+    const run = startedRender(
+      served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
+    );
+
+    using _deadline = run.deadline;
+    run.setHtml(LARGE_CHALLENGE);
+    await nextTurn();
+    await run.tick(250);
+    await run.tick(19_500);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed_in_place",
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
+    });
+    expect(source.html).toBe(LARGE_CHALLENGE);
+  });
+
+  it("reads a header-flagged page that is clean at the round start only once in the round", async () => {
+    const run = startedRender(
+      served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
+    );
+
+    using _deadline = run.deadline;
+    run.setHtml(LARGE_CHALLENGE);
+    await nextTurn();
+
+    for (let tick = 0; tick < 79; tick += 1) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each tick is one 250 ms poll of the round.
+      await run.tick();
+    }
+
+    expect(run.captures()).toBe(1);
+    await run.tick();
+    await run.result;
+  });
+
+  it("keeps waiting for a replacement when a page clean at the round start reads as a challenge and clears", async () => {
+    const run = startedRender(
+      served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
+    );
+
+    using _deadline = run.deadline;
+    run.setHtml(CONTENT);
+    await nextTurn();
+    run.setHtml(CHALLENGE);
+    await run.tick(250);
+    run.setHtml(CONTENT);
+    await run.tick(250);
+    await run.tick(19_500);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed_in_place",
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
+    });
+    expect(source.html).toBe(CONTENT);
+  });
+
+  it("passes a large header-flagged page when it commits a replacement document", async () => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.setHtml(LARGE_CHALLENGE);
+    await nextTurn();
+    run.commit(served(2));
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed",
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
+    });
+    expect(source.html).toBe(CONTENT);
+  });
+
+  it("keeps waiting while a page stays a challenge in place, then reports budget_exhausted", async () => {
+    const run = startedRender(
+      served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
+    );
+
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.setHtml(CHALLENGE);
+    await run.tick(19_750);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "budget_exhausted",
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
+    });
+    expect(source.html).toBe(CHALLENGE);
   });
 
   it.each([
@@ -261,7 +357,7 @@ describe("late challenges and selector waits", () => {
 });
 
 describe("selector waits after a challenge", () => {
-  it("still waits for the selector after an in-place pass that outlasted its round", async () => {
+  it("still waits for the selector after an in-place pass", async () => {
     const run = startedRender(
       served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
       30_000,
@@ -302,5 +398,29 @@ describe("settling the challenge outcome", () => {
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
     });
     expect(source.block.verdict).toBe("blocked");
+  });
+
+  it("reports rounds_exhausted when the capture after an in-place pass is a challenge again", async () => {
+    const run = startedRender(
+      served(1, { headers: challengeHeaders("cf-mitigated"), status: 403 }),
+      60_000,
+      READY,
+    );
+
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.setHtml(CONTENT);
+    await run.tick();
+    run.setHtml(CHALLENGE);
+    run.setSelector("matched");
+    await run.tick();
+    await run.tick();
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "rounds_exhausted",
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
+    });
+    expect(source.html).toBe(CHALLENGE);
   });
 });

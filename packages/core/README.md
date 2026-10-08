@@ -140,7 +140,7 @@ HTML responses return normally even for HTTP 403, 404, or 500; callers decide wh
 
 ### Browser waits
 
-Browser modes wait for recognised challenges after DOMContentLoaded. Each round polls every 250 ms for a loaded replacement document, for at most 20 seconds. A scrape permits three rounds across vendors and reserves one second for capture. Each captured document uses its own request log.
+Browser modes wait for recognised challenges after DOMContentLoaded. Each round polls every 250 ms for a loaded replacement document, for at most 20 seconds. Each tick also reads the current page when the page read as a challenge at the round start, and the wait ends early as `passed_in_place` once it has seen the page stop being a challenge, at the next tick after the page clears. A page that did not read as a challenge at the round start keeps waiting for its replacement document. A scrape permits three rounds across vendors and reserves one second for capture. Each captured document uses its own request log.
 
 `block.challenge` is `null` when no challenge wait occurred, including every http scrape. Otherwise it contains `rounds`, with `vendor`, `rule`, and `waitedMs`, and one outcome:
 

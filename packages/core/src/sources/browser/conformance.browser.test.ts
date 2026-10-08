@@ -1299,8 +1299,9 @@ describe.each(MODES)("challenge waits, %s", (mode) => {
 
   it.each([
     { outcome: "passed", rounds: 1, route: "navigation", timeoutMs: 20_000 },
-    { outcome: "passed_in_place", rounds: 1, route: "in-place", timeoutMs: 35_000 },
+    { outcome: "passed_in_place", rounds: 1, route: "in-place", timeoutMs: 20_000 },
     { outcome: "passed", rounds: 1, route: "late-request", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 1, route: "large", timeoutMs: 20_000 },
     { outcome: "passed", rounds: 2, route: "same-vendor", timeoutMs: 20_000 },
     { outcome: "passed", rounds: 2, route: "two-vendors", timeoutMs: 20_000 },
     { outcome: "budget_exhausted", rounds: 1, route: "never", timeoutMs: 35_000 },
@@ -1311,6 +1312,12 @@ describe.each(MODES)("challenge waits, %s", (mode) => {
     expect(source.block.challenge?.outcome).toBe(outcome);
     expect(source.block.challenge?.rounds).toHaveLength(rounds);
     expect(source.scriptsRan).toBeTruthy();
+  });
+
+  it("ends an in-place pass at the first poll after the page clears", async () => {
+    const source = await load(mode, "/challenge/in-place", 20_000);
+    expect(source.block.challenge?.rounds).toHaveLength(1);
+    expect(source.block.challenge?.rounds[0]?.waitedMs).toBeLessThan(5000);
   });
 });
 

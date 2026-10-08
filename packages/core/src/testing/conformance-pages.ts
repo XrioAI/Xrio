@@ -860,18 +860,20 @@ const setChallengeHeader = (response: ServerResponse, name: string, step: number
   response.setHeader(header, "challenge");
 };
 
+const LARGE_CHALLENGE_PADDING = "var padding = 0;".repeat(4000);
+
 const challengeScript = (name: string, step: number): string => {
-  let script = "";
+  let script = name === "large" ? LARGE_CHALLENGE_PADDING : "";
 
   if (name === "in-place") {
     script = `setTimeout(() => { document.title = "Article"; document.body.innerHTML = ${JSON.stringify(ARTICLE)}; }, 300);`;
   } else if (name !== "never") {
     const target =
-      name === "navigation" || name === "late-request"
+      name === "navigation" || name === "late-request" || name === "large"
         ? "/challenge/content"
         : `/challenge/${name}?step=${step + 1}`;
 
-    script = `setTimeout(() => { location.href = ${JSON.stringify(target)}; }, 750);`;
+    script += `setTimeout(() => { location.href = ${JSON.stringify(target)}; }, 750);`;
 
     if (name === "late-request") {
       script +=

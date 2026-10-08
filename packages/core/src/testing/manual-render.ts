@@ -17,6 +17,8 @@ export const CONTENT = `<html><body><article>${"A useful article with substantia
 export const CHALLENGE =
   '<html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/test"></script></body></html>';
 
+export const LARGE_CHALLENGE = `<html><head><title>Just a moment...</title></head><body><script>${"var padding = 0;".repeat(4000)}</script></body></html>`;
+
 export const PAGE_URL = "https://example.test/";
 
 const HTML_HEADERS: RawHeaders = [["content-type", "text/html"]];
@@ -50,6 +52,7 @@ const controlledBrowser = (first: DocumentHop) => {
   let html = bodyOf(first);
   let selector: SelectorState = "absent";
   let afterCapture: (() => void) | undefined;
+  let captures = 0;
 
   const emit = (event: DriverEvent) => {
     for (const listener of listeners) {
@@ -79,6 +82,7 @@ const controlledBrowser = (first: DocumentHop) => {
       }
 
       if (!expression.includes("querySelectorAll")) {
+        captures += 1;
         afterCapture?.();
         afterCapture = undefined;
       }
@@ -104,6 +108,7 @@ const controlledBrowser = (first: DocumentHop) => {
 
   return {
     browser,
+    captures: () => captures,
     commit,
     emit,
     listeners: () => listeners.size,
