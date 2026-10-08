@@ -73,6 +73,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
     });
     expect(source.requestUrls).toStrictEqual([]);
@@ -102,6 +103,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: rounds.map((round) => ({ ...round, waitedMs: 250 })),
     });
   });
@@ -135,6 +137,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed_in_place",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
     });
     expect(source.status).toBe(403);
@@ -155,6 +158,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed_in_place",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
     });
     expect(source.html).toBe(LARGE_CHALLENGE);
@@ -195,6 +199,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed_in_place",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -210,6 +215,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -228,6 +234,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "budget_exhausted",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
     });
     expect(source.html).toBe(CHALLENGE);
@@ -288,6 +295,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toMatchObject({
       outcome: "rounds_exhausted",
+      reloads: 0,
       rounds: [{ waitedMs: 250 }, { waitedMs: 250 }, { waitedMs: 250 }],
     });
   });
@@ -306,6 +314,7 @@ describe("challenge waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -330,6 +339,7 @@ describe("late challenges and selector waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -349,6 +359,7 @@ describe("late challenges and selector waits", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "budget_exhausted",
+      reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 20_000 }],
     });
     expect(source.html).toBe(CHALLENGE);
@@ -395,6 +406,7 @@ describe("settling the challenge outcome", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "rounds_exhausted",
+      reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
     });
     expect(source.block.verdict).toBe("blocked");
@@ -419,8 +431,133 @@ describe("settling the challenge outcome", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "rounds_exhausted",
+      reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CHALLENGE);
+  });
+});
+
+const DATADOME_ROUND = { rule: "datadome_response_header", vendor: "datadome" } as const;
+
+const DEVICE_CHECK = "https://geo.captcha-delivery.com/interstitial/?initialCid=check";
+
+const CHECK_SUBMIT = "https://geo.captcha-delivery.com/interstitial/";
+
+const CAPTCHA = "https://geo.captcha-delivery.com/captcha/?initialCid=check";
+
+const deviceChecked = (index: number): DocumentHop => challenged(index, "x-datadome-response");
+
+const frameRequest = (url: string): DriverEvent => ({
+  frameId: "F9",
+  loaderId: "L9",
+  sessionId: "S9",
+  type: "request",
+  url,
+});
+
+describe("device check escalation", () => {
+  it("ends the round as escalated once the check turns into a captcha, without a retry when under 10 s remain", async () => {
+    const run = startedRender(deviceChecked(1), 9000);
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.emit(frameRequest(DEVICE_CHECK));
+    run.emit(frameRequest(CHECK_SUBMIT));
+    run.emit(frameRequest(CAPTCHA));
+    await run.tick();
+    const { source } = await run.result;
+    expect({
+      challenge: source.block.challenge,
+      elapsedMs: run.time.clock.now(),
+      navigations: run.navigations(),
+      verdict: source.block.verdict,
+    }).toStrictEqual({
+      challenge: {
+        outcome: "escalated",
+        reloads: 0,
+        rounds: [{ ...DATADOME_ROUND, waitedMs: 250 }],
+      },
+      elapsedMs: 250,
+      navigations: 1,
+      verdict: "blocked",
+    });
+  });
+
+  it("loads the page again after an escalation and reports the retried check that passed", async () => {
+    const run = startedRender(deviceChecked(1));
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.navigateTo(deviceChecked(2));
+    run.emit(frameRequest(DEVICE_CHECK));
+    run.emit(frameRequest(CAPTCHA));
+    await run.tick();
+    run.commit(served(3));
+    await run.tick();
+    const { source } = await run.result;
+    expect({
+      challenge: source.block.challenge,
+      html: source.html,
+      navigations: run.navigations(),
+    }).toStrictEqual({
+      challenge: {
+        outcome: "passed",
+        reloads: 1,
+        rounds: [
+          { ...DATADOME_ROUND, waitedMs: 250 },
+          { ...DATADOME_ROUND, waitedMs: 250 },
+        ],
+      },
+      html: CONTENT,
+      navigations: 2,
+    });
+  });
+
+  it("reports passed when the page loads outright on the retry", async () => {
+    const run = startedRender(deviceChecked(1));
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.navigateTo(served(2));
+    run.emit(frameRequest(DEVICE_CHECK));
+    run.emit(frameRequest(CAPTCHA));
+    await run.tick();
+    const { source } = await run.result;
+    expect([source.block.challenge, source.html, source.block.verdict]).toStrictEqual([
+      { outcome: "passed", reloads: 1, rounds: [{ ...DATADOME_ROUND, waitedMs: 250 }] },
+      CONTENT,
+      "ok",
+    ]);
+  });
+
+  it("reloads once, so a second escalation ends the render as escalated", async () => {
+    const retried = deviceChecked(2);
+    const run = startedRender(deviceChecked(1));
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.navigateTo(retried);
+    run.emit(frameRequest(DEVICE_CHECK));
+    run.emit(frameRequest(CAPTCHA));
+    await run.tick();
+    run.emit(frameRequest(DEVICE_CHECK));
+    run.emit(frameRequest(CAPTCHA));
+    await run.tick();
+    const { source } = await run.result;
+    expect([
+      source.block.challenge?.outcome,
+      source.block.challenge?.reloads,
+      run.navigations(),
+    ]).toStrictEqual(["escalated", 1, 2]);
+  });
+
+  it("waits out a captcha served without a device check, because a retry would meet it again", async () => {
+    const run = startedRender(deviceChecked(1));
+    using _deadline = run.deadline;
+    await nextTurn();
+    run.emit(frameRequest(CAPTCHA));
+    await run.tick(20_000);
+    const { source } = await run.result;
+    expect([source.block.challenge?.outcome, run.navigations()]).toStrictEqual([
+      "budget_exhausted",
+      1,
+    ]);
   });
 });

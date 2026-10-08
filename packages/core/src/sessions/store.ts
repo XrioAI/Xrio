@@ -115,6 +115,7 @@ const ATTEMPT_OUTCOMES: Readonly<Record<AttemptOutcome, true>> = {
 const CHALLENGE_OUTCOMES: Readonly<Record<ChallengeOutcome, true>> = {
   budget_exhausted: true,
   deadline: true,
+  escalated: true,
   passed: true,
   passed_in_place: true,
   rounds_exhausted: true,

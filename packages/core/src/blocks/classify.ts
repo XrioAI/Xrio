@@ -19,7 +19,8 @@ export type ChallengeOutcome =
   | "passed_in_place"
   | "rounds_exhausted"
   | "budget_exhausted"
-  | "deadline";
+  | "deadline"
+  | "escalated";
 
 export interface ChallengeRound {
   vendor: string | null;
@@ -30,6 +31,7 @@ export interface ChallengeRound {
 export interface ChallengeReport {
   outcome: ChallengeOutcome;
   rounds: ChallengeRound[];
+  reloads: number;
 }
 
 export interface BlockReport {

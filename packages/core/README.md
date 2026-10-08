@@ -273,13 +273,16 @@ HTML responses return normally even for HTTP 403, 404, or 500; callers decide wh
 
 Browser modes wait for recognised challenges after DOMContentLoaded. Each round polls every 250 ms for a loaded replacement document, for at most 20 seconds. Each tick also reads the current page when the page read as a challenge at the round start, and the wait ends early as `passed_in_place` once it has seen the page stop being a challenge, at the next tick after the page clears. A page that did not read as a challenge at the round start keeps waiting for its replacement document. A scrape permits three rounds across vendors and reserves one second for capture. Each captured document uses its own request log.
 
-`block.challenge` is `null` when no challenge wait occurred, including every http scrape. Otherwise it contains `rounds`, with `vendor`, `rule`, and `waitedMs`, and one outcome:
+A round also ends when a vendor turns its passive check into a captcha within the same document. DataDome does this by loading its device check (`geo.captcha-delivery.com/interstitial/`) in a frame and then, when it rejects the check, its captcha (`geo.captcha-delivery.com/captcha/`) in the same frame; the round ends at the next tick, about 250 ms later, instead of after 20 seconds. When at least 10 seconds of the deadline remain, the scrape then loads the URL once more in the same browser, keeping the cookies the rejected check set, and waits for that document's challenge as another round. Measured against DataDome device checks through fresh residential exits, 22 of 23 rejected checks passed when the URL was loaded again, 4 of 4 of them when it was loaded at once. A captcha served without a device check first is not retried, because the next load met the captcha again in every measured case.
+
+`block.challenge` is `null` when no challenge wait occurred, including every http scrape. Otherwise it contains `rounds`, with `vendor`, `rule`, and `waitedMs`, `reloads`, the number of times the scrape loaded the URL again after an escalation (0 or 1), and one outcome:
 
 - `passed`: a replacement document passed the challenge.
 - `passed_in_place`: the page replaced the challenge body within the same document.
 - `rounds_exhausted`: the captured document was still a challenge when no wait remained, such as after three rounds.
 - `budget_exhausted`: a round used its full 20-second budget.
 - `deadline`: the scrape deadline shortened a round.
+- `escalated`: the vendor turned its check into a captcha, and the scrape either had already retried or had less than 10 seconds left.
 
 For content that appears after scripts run, set a selector:
 

@@ -143,4 +143,54 @@ describe("session ownership", () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+
+  it("reads back a visit whose device check escalated", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-store-"));
+    const db = new SessionStore(root);
+    using deadline = startDeadline(10_000);
+    const owner = { epoch: 1, name: "account", token: "owner" };
+
+    try {
+      await db.claimSession(
+        "account",
+        {
+          check: () => {},
+          dead: new Set<string>(),
+          grace: 5000,
+          holder: { host: "host", pid: 1, start: "started", token: "owner" },
+          length: 60_000,
+          major: 154,
+          now: 1000,
+          stickyId: () => "12345678",
+        },
+        deadline,
+      );
+      await db.finishVisit(
+        owner,
+        {
+          attempt: attemptLog({
+            challengeOutcome: "escalated",
+            outcome: "blocked",
+            vendor: "datadome",
+          }),
+          exited: true,
+          major: 154,
+          maxAgeMs: 1_800_000,
+          now: 2000,
+        },
+        deadline,
+      );
+
+      expect(
+        db.visitLog("account", {}).map(({ challengeOutcome, outcome, vendor }) => ({
+          challengeOutcome,
+          outcome,
+          vendor,
+        })),
+      ).toStrictEqual([{ challengeOutcome: "escalated", outcome: "blocked", vendor: "datadome" }]);
+    } finally {
+      db.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 });
