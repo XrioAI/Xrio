@@ -172,6 +172,26 @@ const visitOnce = async (context: VisitContext, terminal: boolean): Promise<Visi
   }
 };
 
+const settleAnswerOnAbort = (answer: Answer, deadline: Deadline): Disposable => {
+  const { signal } = deadline;
+
+  const fail = () => {
+    answer.fail(scrapeError(signal.reason, deadline));
+  };
+
+  if (signal.aborted) {
+    fail();
+  } else {
+    signal.addEventListener("abort", fail, { once: true });
+  }
+
+  return {
+    [Symbol.dispose]: () => {
+      signal.removeEventListener("abort", fail);
+    },
+  };
+};
+
 const coordinate = async (
   intent: ScrapeIntent,
   deadline: Deadline,
@@ -190,6 +210,7 @@ const coordinate = async (
     );
 
     const held = hold.bind(deadline);
+    using _answerLifetime = settleAnswerOnAbort(answer, held);
 
     try {
       const context = { answer, dependencies, held, hold, intent };

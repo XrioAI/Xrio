@@ -579,6 +579,37 @@ describe(createScrapes, () => {
     ]);
   });
 
+  it.each([false, true])(
+    "retains a document when the deadline expires during cleanup with revisit %s",
+    async (revisit) => {
+      const { advance, clock } = manualClock();
+      const closed = Promise.withResolvers<Closed>();
+
+      const { events, plans, scrapes } = harness({
+        revisit,
+        visits: [{ closed: closed.promise, document: Promise.resolve(firstDocument) }],
+      });
+
+      using deadline = startDeadline(1000, undefined, clock);
+      const run = scrapes.start(intent, deadline);
+
+      await expect.poll(() => events.includes("revisit-decision")).toBeTruthy();
+
+      advance(1000);
+
+      try {
+        await expect.poll(async () => await run.answer, { timeout: 100 }).toBe(firstDocument);
+        expect(events).not.toContain("hold-release");
+      } finally {
+        closed.resolve({ exited: true });
+        await run.settled;
+        await scrapes.close();
+      }
+
+      expect(plans).toHaveLength(1);
+    },
+  );
+
   it("stores the revisit decision before finish changes warmth and makes the second visit terminal", async () => {
     const { events, scrapes } = harness({ revisit: true });
     using deadline = startDeadline(1000);
