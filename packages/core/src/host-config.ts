@@ -115,7 +115,7 @@ const GPU_POLICIES: readonly GpuPolicy[] = ["matched", "announce"];
 const GPU_PERSONAS_EXPECTED =
   "host.hardware.gpu must be a GL persona name, or a non-empty weighted table of them.";
 
-const isPlainObject = (value: unknown): value is object =>
+export const isPlainObject = (value: unknown): value is object =>
   typeof value === "object" &&
   value !== null &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);

@@ -22,12 +22,28 @@ const NO_HOST = {
   identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
 };
 
+const failureOf = (run: () => object): Error | undefined => {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error : undefined;
+  }
+
+  return undefined;
+};
+
 const couldNotLoad = (file: string) =>
   `Could not load ${file}; use a synchronous default-exported object and Node-supported TypeScript syntax.`;
 
 const noDefaultObject = (file: string) => `${file} must default-export a configuration object.`;
 
 const notOneProxy = () => "proxy must be one object with a url string.";
+
+const notJson = (file: string) => `Could not read ${file} as JSON.`;
+
+const notOneObject = (file: string) => `${file} must contain one JSON object.`;
+
+const unknownSections = () => "xrio.config supports only these top-level keys: host, proxy.";
 
 const workspace = () => {
   const directory = mkdtempSync(path.join(tmpdir(), "xrio-config-"));
@@ -256,54 +272,9 @@ describe("configuration discovery", () => {
     expect(() => loadXrioConfig("xrio.config.yaml", directory)).toThrow(
       expect.objectContaining({
         code: "INVALID_OPTIONS",
-        message: `configFile must end in .js, .mjs, .mts, .ts: ${path.join(directory, "xrio.config.yaml")}`,
+        message: `configFile must end in .js, .json, .mjs, .mts, .ts: ${path.join(directory, "xrio.config.yaml")}`,
       }),
     );
-  });
-
-  it.each(["ts", "mts", "js", "mjs"])(
-    "loads a synchronous default export from xrio.config.%s",
-    (extension) => {
-      const directory = workspace();
-
-      writeFileSync(path.join(directory, "package.json"), '{"type":"module"}');
-      writeFileSync(
-        path.join(directory, `xrio.config.${extension}`),
-        'export default { proxy: { url: "http://user-{session}:secret@proxy.test" }, };',
-      );
-
-      expect(loadXrioConfig(undefined, directory)).toStrictEqual({
-        host: NO_HOST,
-        proxy: {
-          session: { format: "numeric", length: 8 },
-          url: "http://user-{session}:secret@proxy.test",
-        },
-      });
-    },
-  );
-
-  it.each([
-    "{ browser: { futureSetting: true } }",
-    '{ proxy: { url: "http://proxy.test" }, proxxy: {} }',
-    '{ "http://user:secret@proxy.test": {} }',
-  ])("rejects unknown top-level keys in %s", (config) => {
-    const directory = workspace();
-
-    writeFileSync(path.join(directory, "xrio.config.mjs"), `export default ${config};`);
-
-    let failure: unknown;
-
-    try {
-      loadXrioConfig(undefined, directory);
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toMatchObject({
-      code: "INVALID_OPTIONS",
-      message: "xrio.config supports only these top-level keys: host, proxy.",
-    });
-    expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
   });
 
   it("reads only the working directory and rejects ambiguous filenames", () => {
@@ -328,30 +299,24 @@ describe("configuration discovery", () => {
     );
   });
 
-  it.each([
-    ['throw new Error("secret");', couldNotLoad],
-    ["export default [];", noDefaultObject],
-    ["export default Promise.resolve({});", noDefaultObject],
-    ["export default async () => ({});", noDefaultObject],
-    ["export const proxy = {};", noDefaultObject],
-    ["await Promise.resolve(); export default {};", couldNotLoad],
-    ['export default { proxy: [{ url: "http://secret@proxy.test" }] };', notOneProxy],
-  ])("rejects unusable modules without exposing their source: %s", (source, messageFor) => {
+  it("reads a JSON file a client names beside a module config", async () => {
     const directory = workspace();
-    const file = path.join(directory, "xrio.config.mjs");
 
-    writeFileSync(file, source);
+    writeFileSync(
+      path.join(directory, "staging.json"),
+      JSON.stringify({ host: { locale: "fr-FR" } }),
+    );
+    writeFileSync(
+      path.join(directory, "xrio.config.mjs"),
+      'export default { host: { locale: "ja-JP" } };',
+    );
 
-    let failure: unknown;
+    const outcome = await scrapeLocaleInChild(directory, {
+      configFile: "staging.json",
+      mode: "http",
+    });
 
-    try {
-      loadXrioConfig(undefined, directory);
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toMatchObject({ code: "INVALID_OPTIONS", message: messageFor(file) });
-    expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
+    expect(JSON.parse(outcome)).toStrictEqual({ locale: "fr-FR" });
   });
 
   it("loads configuration explicitly before passing its proxy section to the manager", () => {
@@ -410,5 +375,169 @@ describe("configuration discovery", () => {
     );
 
     expect(stdout).toBe("http://proxy.test:8080");
+  });
+});
+
+describe("configuration file formats", () => {
+  afterEach(() => {
+    for (const directory of directories.splice(0)) {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it.each(["ts", "mts", "js", "mjs"])(
+    "loads a synchronous default export from xrio.config.%s",
+    (extension) => {
+      const directory = workspace();
+
+      writeFileSync(path.join(directory, "package.json"), '{"type":"module"}');
+      writeFileSync(
+        path.join(directory, `xrio.config.${extension}`),
+        'export default { proxy: { url: "http://user-{session}:secret@proxy.test" }, };',
+      );
+
+      expect(loadXrioConfig(undefined, directory)).toStrictEqual({
+        host: NO_HOST,
+        proxy: {
+          session: { format: "numeric", length: 8 },
+          url: "http://user-{session}:secret@proxy.test",
+        },
+      });
+    },
+  );
+
+  it.each([
+    "{ browser: { futureSetting: true } }",
+    '{ proxy: { url: "http://proxy.test" }, proxxy: {} }',
+    '{ "http://user:secret@proxy.test": {} }',
+  ])("rejects unknown top-level keys in %s", (config) => {
+    const directory = workspace();
+
+    writeFileSync(path.join(directory, "xrio.config.mjs"), `export default ${config};`);
+
+    let failure: unknown;
+
+    try {
+      loadXrioConfig(undefined, directory);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "INVALID_OPTIONS",
+      message: "xrio.config supports only these top-level keys: host, proxy.",
+    });
+    expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
+  });
+
+  it("loads xrio.config.json", () => {
+    const directory = workspace();
+
+    writeFileSync(
+      path.join(directory, "xrio.config.json"),
+      JSON.stringify({
+        host: { locale: "de-DE" },
+        proxy: {
+          session: { format: "alphanumeric", length: 12 },
+          url: "http://u-{session}:p@proxy.test",
+        },
+      }),
+    );
+
+    expect(loadXrioConfig(undefined, directory)).toStrictEqual({
+      host: { ...NO_HOST, identity: { ...NO_HOST.identity, locale: "de-DE" } },
+      proxy: {
+        session: { format: "alphanumeric", length: 12 },
+        url: "http://u-{session}:p@proxy.test",
+      },
+    });
+  });
+
+  it("loads an xrio.config.json that starts with a byte order mark", () => {
+    const directory = workspace();
+
+    writeFileSync(
+      path.join(directory, "xrio.config.json"),
+      `\uFEFF${JSON.stringify({ host: { locale: "de-DE" } })}`,
+    );
+
+    expect(loadXrioConfig(undefined, directory)).toStrictEqual({
+      host: { ...NO_HOST, identity: { ...NO_HOST.identity, locale: "de-DE" } },
+      proxy: undefined,
+    });
+  });
+
+  it("reads xrio.config.json from the working directory of the public client", async () => {
+    const directory = workspace();
+
+    writeFileSync(
+      path.join(directory, "xrio.config.json"),
+      JSON.stringify({ host: { locale: "ja-JP" } }),
+    );
+
+    const outcome = await scrapeLocaleInChild(directory, { mode: "http" });
+
+    expect(JSON.parse(outcome)).toStrictEqual({ locale: "ja-JP" });
+  });
+
+  it("rejects a JSON file beside a module config in the working directory", () => {
+    const directory = workspace();
+
+    writeFileSync(path.join(directory, "xrio.config.json"), "{}");
+    writeFileSync(path.join(directory, "xrio.config.mjs"), "export default {};");
+
+    expect(() => loadXrioConfig(undefined, directory)).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "Found multiple xrio.config files; keep exactly one in the working directory.",
+      }),
+    );
+  });
+
+  it.each([
+    ['{ "proxy": { "url": "http://user:secret@proxy.test", } }', notJson],
+    ['{ "proxy": { "url": "http://user:secret@proxy.test" }', notJson],
+    ["", notJson],
+    ['["secret"]', notOneObject],
+    ['"secret"', notOneObject],
+    ["null", notOneObject],
+    ['{ "secret": 1 }', unknownSections],
+    ['{ "proxy": [{ "url": "http://secret@proxy.test" }] }', notOneProxy],
+  ])("rejects unusable JSON without exposing its text: %s", (source, messageFor) => {
+    const directory = workspace();
+    const file = path.join(directory, "xrio.config.json");
+
+    writeFileSync(file, source);
+
+    const failure = failureOf(() => loadXrioConfig(undefined, directory));
+
+    expect(failure).toMatchObject({ code: "INVALID_OPTIONS", message: messageFor(file) });
+    expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
+  });
+
+  it.each([
+    ['throw new Error("secret");', couldNotLoad],
+    ["export default [];", noDefaultObject],
+    ["export default Promise.resolve({});", noDefaultObject],
+    ["export default async () => ({});", noDefaultObject],
+    ["export const proxy = {};", noDefaultObject],
+    ["await Promise.resolve(); export default {};", couldNotLoad],
+    ['export default { proxy: [{ url: "http://secret@proxy.test" }] };', notOneProxy],
+  ])("rejects unusable modules without exposing their source: %s", (source, messageFor) => {
+    const directory = workspace();
+    const file = path.join(directory, "xrio.config.mjs");
+
+    writeFileSync(file, source);
+
+    let failure: unknown;
+
+    try {
+      loadXrioConfig(undefined, directory);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ code: "INVALID_OPTIONS", message: messageFor(file) });
+    expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
   });
 });

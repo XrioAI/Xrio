@@ -1,10 +1,10 @@
 /* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-object-parameters -- This module is the file boundary where untrusted configuration is parsed into named sections. */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
 import { invalidOptions } from "./errors.ts";
-import { resolveHostConfig } from "./host-config.ts";
+import { isPlainObject, resolveHostConfig } from "./host-config.ts";
 import type { HostConfig, HostSettings } from "./host-config.ts";
 import { resolveProxyConfig } from "./proxy/config.ts";
 import type { ProxyConfig } from "./proxy/config.ts";
@@ -49,14 +49,7 @@ const resolveSections = (config: object): ResolvedConfig => {
 const requireConfig = createRequire(import.meta.url);
 
 const isConfigModule = (value: unknown): value is { default: object } =>
-  typeof value === "object" &&
-  value !== null &&
-  "default" in value &&
-  typeof value.default === "object" &&
-  value.default !== null &&
-  !Array.isArray(value.default) &&
-  (Object.getPrototypeOf(value.default) === Object.prototype ||
-    Object.getPrototypeOf(value.default) === null);
+  typeof value === "object" && value !== null && "default" in value && isPlainObject(value.default);
 
 const readModuleConfig = (file: string): object => {
   let loaded: unknown;
@@ -77,8 +70,30 @@ const readModuleConfig = (file: string): object => {
   return loaded.default;
 };
 
+const BYTE_ORDER_MARK = "\uFEFF";
+
+const withoutByteOrderMark = (text: string): string =>
+  text.startsWith(BYTE_ORDER_MARK) ? text.slice(BYTE_ORDER_MARK.length) : text;
+
+const readJsonConfig = (file: string): object => {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(withoutByteOrderMark(readFileSync(file, "utf-8")));
+  } catch {
+    throw invalidOptions(`Could not read ${file} as JSON.`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw invalidOptions(`${file} must contain one JSON object.`);
+  }
+
+  return parsed;
+};
+
 const FORMATS = {
   ".js": readModuleConfig,
+  ".json": readJsonConfig,
   ".mjs": readModuleConfig,
   ".mts": readModuleConfig,
   ".ts": readModuleConfig,
