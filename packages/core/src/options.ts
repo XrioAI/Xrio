@@ -256,6 +256,10 @@ export const resolveScrapeIntent = (
     throw invalidOptions("browserArgs is a client option.");
   }
 
+  if ("configFile" in options && options.configFile !== undefined) {
+    throw invalidOptions("configFile is a client option.");
+  }
+
   const source = sourceIntent(options, defaults, mode);
 
   return {

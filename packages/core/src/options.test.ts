@@ -282,6 +282,21 @@ describe("browserArgs option", () => {
     expect(() => resolveScrapeIntent(absent, defaults)).not.toThrow();
   });
 
+  it("refuses configFile on a scrape, even from an options object the types did not check", () => {
+    const defaults = resolveClientOptions({ mode: "http" });
+    const unchecked = { ...page, configFile: "other.config.ts" };
+    const absent = { ...page, configFile: undefined };
+
+    expect(() => resolveScrapeIntent(unchecked, defaults)).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "configFile is a client option.",
+        name: "TypeError",
+      }),
+    );
+    expect(() => resolveScrapeIntent(absent, defaults)).not.toThrow();
+  });
+
   it("gives a browser override of an http client no switches", () => {
     const defaults = resolveClientOptions({ mode: "http" });
 

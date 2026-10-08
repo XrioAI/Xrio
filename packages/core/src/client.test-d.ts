@@ -238,6 +238,17 @@ describe("XrioClient types", () => {
     void new XrioClient({ mode: "http" }).scrape({ browserArgs, format: "html", url });
   });
 
+  it("takes a config file path as a client option", () => {
+    const url = "https://example.com";
+
+    expectTypeOf<ClientOptions["configFile"]>().toEqualTypeOf<string | undefined>();
+    void new XrioClient({ configFile: "deploy/xrio.config.ts", mode: "http" });
+    // @ts-expect-error true is not a path.
+    void new XrioClient({ configFile: true, mode: "http" });
+    // @ts-expect-error configFile belongs to the client, not to a scrape.
+    void new XrioClient({ mode: "http" }).scrape({ configFile: "a.ts", format: "html", url });
+  });
+
   it("excludes identity settings from the client and scrape APIs", () => {
     const client = new XrioClient({ mode: "http" });
     const url = "https://example.com";

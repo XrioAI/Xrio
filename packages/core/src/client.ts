@@ -86,7 +86,7 @@ export class XrioClient {
   readonly #scrapes: Scrapes;
 
   constructor(options: ClientOptions) {
-    const config = loadXrioConfig();
+    const config = loadXrioConfig(options?.configFile);
 
     this.#defaults = resolveClientOptions(options, config.host);
     this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);

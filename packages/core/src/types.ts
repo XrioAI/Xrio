@@ -34,6 +34,7 @@ export type ClientOptions = (
   proxy?: string;
   maxBrowsers?: number;
   cacheDir?: string;
+  configFile?: string;
 };
 
 export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
