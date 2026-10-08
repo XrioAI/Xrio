@@ -20,6 +20,8 @@ import type { ScrapeOutcome } from "./outcome.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
 import { ProxyManager } from "./proxy/manager.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
+import { createRetries } from "./retries.ts";
+import type { Retries } from "./retries.ts";
 import { reportSkippedCookies } from "./seed-cookies.ts";
 import type { SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
@@ -46,6 +48,8 @@ interface Dependencies {
   readonly sources: Sources;
   readonly fonts: FontEvidenceStore;
   readonly random: (size: number) => Uint8Array;
+  readonly retryRandom: () => number;
+  readonly closing: AbortSignal;
   readonly configuredProxy: ProxyEndpoint | undefined;
   readonly proxyInfo: typeof lookupProxyInfo;
 }
@@ -137,44 +141,176 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   }
 };
 
+type Continuation =
+  | { readonly kind: "complete" }
+  | { readonly kind: "revisit" }
+  | { readonly kind: "retry"; readonly delayMs: number };
+
 interface VisitResult extends FinishedVisit {
-  readonly revisit: boolean;
+  readonly next: Continuation;
+  readonly outcome: ScrapeOutcome;
 }
+
+const planVisits = (context: VisitContext): (() => Promise<VisitPlan>) => {
+  let frozen: VisitPlan | undefined;
+
+  return async () => {
+    if (frozen === undefined) {
+      frozen = await plannedVisit(context);
+
+      return frozen;
+    }
+
+    if (frozen.kind === "http") {
+      return frozen;
+    }
+
+    const fonts = await context.dependencies.fonts.claim(
+      frozen.browserPath,
+      frozen.capabilities,
+      frozen.identity.chosen.surfaces.locale.tag,
+      context.held,
+    );
+
+    return { ...frozen, fonts };
+  };
+};
+
+const continuationFor = (
+  outcome: ScrapeOutcome,
+  context: VisitContext,
+  terminal: boolean,
+  retries: Retries,
+): Continuation => {
+  if (outcome.kind === "failed") {
+    const delayMs = retries.next(outcome.error);
+
+    return delayMs === undefined ? { kind: "complete" } : { delayMs, kind: "retry" };
+  }
+
+  return !terminal && context.hold.revisitWanted(outcome)
+    ? { kind: "revisit" }
+    : { kind: "complete" };
+};
 
 const recordOf = (outcome: ScrapeOutcome): FinishedVisit["record"] =>
   outcome.kind === "document" && outcome.document.identity.mode !== "http"
     ? outcome.document.identity.record
     : null;
 
-const visitOnce = async (context: VisitContext, terminal: boolean): Promise<VisitResult> => {
-  const { answer, dependencies, held, hold, intent } = context;
+class AttemptStartError extends Error {
+  override readonly name = "AttemptStartError";
+  readonly failure: Error;
 
-  await using slot = await timeStage(
-    "queue",
-    async () => await dependencies.admission.slotFor(intent.source, held),
+  constructor(failure: Error) {
+    super(failure.message, { cause: failure });
+    this.failure = failure;
+  }
+}
+
+const startAttempt = async <Result>(
+  start: () => Result | Promise<Result>,
+  held: HeldDeadline,
+): Promise<Result> => {
+  try {
+    return await start();
+  } catch (error) {
+    throw new AttemptStartError(scrapeError(error, held));
+  }
+};
+
+const visitOnce = async (
+  context: VisitContext,
+  terminal: boolean,
+  retries: Retries,
+  planVisit: () => Promise<VisitPlan>,
+): Promise<VisitResult> => {
+  const { answer, dependencies, held, intent } = context;
+
+  await using slot = await startAttempt(
+    async () =>
+      await timeStage(
+        "queue",
+        async () => await dependencies.admission.slotFor(intent.source, held),
+        held,
+      ),
     held,
   );
 
-  const plan = await timeStage("identity", async () => await plannedVisit(context), held);
+  const plan = await startAttempt(async () => await timeStage("identity", planVisit, held), held);
   let transferred = false;
 
   try {
-    const visit = dependencies.sources.start(plan, slot, held);
+    const visit = await startAttempt(() => dependencies.sources.start(plan, slot, held), held);
 
     transferred = true;
 
     const outcome = await outcomeOf(visit.document, held);
-    const revisit = !terminal && outcome.kind === "document" && hold.revisitWanted(outcome);
+    const next = continuationFor(outcome, context, terminal, retries);
 
-    answer.offer(outcome, !revisit);
+    if (next.kind !== "retry") {
+      answer.offer(outcome, next.kind === "complete");
+    }
 
-    return { closed: await visit.closed, record: recordOf(outcome), revisit };
+    return { closed: await visit.closed, next, outcome, record: recordOf(outcome) };
   } finally {
     if (!transferred && plan.kind === "browser") {
       await plan.fonts.settle(null);
     }
   }
 };
+
+// oxlint-disable no-await-in-loop -- Attempts must close and finish the same session before the next attempt starts.
+const visitAfterStartFailures = async (
+  context: VisitContext,
+  terminal: boolean,
+  retries: Retries,
+  planVisit: () => Promise<VisitPlan>,
+): Promise<VisitResult> => {
+  for (;;) {
+    try {
+      return await visitOnce(context, terminal, retries, planVisit);
+    } catch (error) {
+      if (!(error instanceof AttemptStartError)) {
+        throw error;
+      }
+
+      const { failure } = error;
+      const delayMs = retries.next(failure);
+
+      if (delayMs === undefined || !(await retries.wait(delayMs))) {
+        throw failure;
+      }
+    }
+  }
+};
+
+const completeVisits = async (context: VisitContext, retries: Retries): Promise<void> => {
+  let terminal = false;
+  let planVisit = planVisits(context);
+
+  for (;;) {
+    const visit = await visitAfterStartFailures(context, terminal, retries, planVisit);
+
+    await context.hold.finish(visit);
+
+    if (visit.next.kind === "complete") {
+      break;
+    }
+
+    if (visit.next.kind === "retry") {
+      if (!visit.closed.exited || !(await retries.wait(visit.next.delayMs))) {
+        context.answer.offer(visit.outcome, true);
+        break;
+      }
+    } else {
+      terminal = true;
+      planVisit = planVisits(context);
+    }
+  }
+};
+
+// oxlint-enable no-await-in-loop
 
 const settleAnswerOnAbort = (answer: Answer, deadline: Deadline): Disposable => {
   const { signal } = deadline;
@@ -220,13 +356,9 @@ const coordinate = async (
 
     try {
       const context = { answer, dependencies, held, hold, intent };
-      const first = await visitOnce(context, false);
-
-      await hold.finish(first);
-
-      if (first.revisit) {
-        await hold.finish(await visitOnce(context, true));
-      }
+      const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
+      const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
+      await completeVisits(context, retries);
     } catch (error) {
       answer.fail(scrapeError(error, held));
     }
@@ -238,8 +370,12 @@ const coordinate = async (
 };
 
 export const createScrapes = (
-  dependencies: Omit<Dependencies, "random" | "configuredProxy" | "proxyInfo"> & {
+  dependencies: Omit<
+    Dependencies,
+    "random" | "retryRandom" | "closing" | "configuredProxy" | "proxyInfo"
+  > & {
     readonly random?: Dependencies["random"];
+    readonly retryRandom?: Dependencies["retryRandom"];
     readonly config?: Pick<ResolvedConfig, "proxy">;
     readonly proxyInfo?: Dependencies["proxyInfo"];
   },
@@ -247,11 +383,15 @@ export const createScrapes = (
   const config = dependencies.config?.proxy;
   const proxy = config === undefined ? undefined : new ProxyManager(config);
 
+  const closingSignal = new AbortController();
+
   const managers: Dependencies = {
     ...dependencies,
+    closing: closingSignal.signal,
     configuredProxy: proxy === undefined ? undefined : parseProxy(proxy.getProxyConnectionString()),
     proxyInfo: dependencies.proxyInfo ?? lookupProxyInfo,
     random: dependencies.random ?? randomBytes,
+    retryRandom: dependencies.retryRandom ?? Math.random,
   };
 
   const runs = new Set<Promise<void>>();
@@ -292,6 +432,7 @@ export const createScrapes = (
 
   const close = async () => {
     closed = true;
+    closingSignal.abort(clientClosed());
     managers.admission.close();
     closing ??= drain();
 

@@ -18,6 +18,7 @@ interface SessionIntent {
 
 export interface ScrapeIntent {
   readonly url: URL;
+  readonly retries: number;
   readonly cookies: CookieSeeds;
   readonly format: ScrapeFormat;
   readonly timeoutMs: number;
@@ -30,7 +31,7 @@ export interface ScrapeIntent {
 
 type BrowserIntent = Extract<SourceIntent, { mode: "headless" | "headed" }>;
 
-export type ClientDefaults = Pick<ScrapeIntent, "identity" | "session" | "route"> & {
+export type ClientDefaults = Pick<ScrapeIntent, "identity" | "session" | "route" | "retries"> & {
   readonly cacheDir: CacheDir;
   readonly maxBrowsers: number | undefined;
   readonly mode: SourceIntent["mode"];

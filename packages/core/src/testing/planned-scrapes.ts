@@ -107,6 +107,7 @@ export const plannedScrapes = (
         cookies: { seeds: [], skipped: [] },
         format: "html",
         identity: request.pins,
+        retries: 0,
         route: request.proxy,
         session,
         signal: undefined,

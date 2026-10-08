@@ -54,6 +54,7 @@ const secondDocument = documentFor("<p>Second</p>");
 
 interface HarnessOptions {
   readonly config?: Pick<ResolvedConfig, "proxy">;
+  readonly retryRandom?: () => number;
   readonly proxyInfo?: typeof lookupProxyInfo;
   readonly sources?: Sources;
   readonly admission?: Admission;
@@ -122,6 +123,7 @@ const harness = (options: HarnessOptions = {}) => {
     },
     proxyInfo: options.proxyInfo,
     random: fixedRandom,
+    retryRandom: options.retryRandom ?? (() => 0),
     sessions: {
       hold: async (_intent, checks) => {
         stage("hold");
@@ -812,5 +814,286 @@ describe(createAnswer, () => {
 
     answer.settleWithFallback();
     await expect(answer.promise).rejects.toThrow("The scrape ended without a document.");
+  });
+});
+
+const failedVisit = (
+  failure: Error,
+  closed: Promise<Closed> = Promise.resolve({ exited: true }),
+): Visit => {
+  const document = Promise.reject<SourceDocument>(failure);
+  void Promise.allSettled([document]);
+
+  return { closed, document };
+};
+
+describe("transport retries", () => {
+  it("keeps a retryable failure private until closure and finish, then reuses the frozen plan", async () => {
+    const closed = Promise.withResolvers<Closed>();
+    const failure = new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+
+    const { events, plans, scrapes } = harness({
+      visits: [failedVisit(failure, closed.promise)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+    let answered = false;
+    void run.answer.then(() => {
+      answered = true;
+    });
+
+    await expect.poll(() => events.includes("start")).toBeTruthy();
+    expect(answered).toBeFalsy();
+    expect(events).not.toContain("finish");
+    closed.resolve({ exited: true });
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await run.settled;
+    expect(plans[1]).toBe(plans[0]);
+    expect(
+      events.filter((event) => ["start", "closed", "slot-release", "finish"].includes(event)),
+    ).toStrictEqual([
+      "start",
+      "closed",
+      "slot-release",
+      "finish",
+      "start",
+      "closed",
+      "slot-release",
+      "finish",
+    ]);
+  });
+
+  it("preserves browser identity while reacquiring fonts and using the same held deadline", async () => {
+    const deadlines: HeldDeadline[] = [];
+    const failure = new XrioError("BROWSER_CRASHED", "Chrome exited.", { details: undefined });
+    let starts = 0;
+
+    const { fontLocales, plans, scrapes } = harness({
+      sources: {
+        close: async () => {
+          await Promise.resolve();
+        },
+        start: (_plan, _slot, held) => {
+          deadlines.push(held);
+          starts += 1;
+
+          return starts === 1
+            ? failedVisit(failure)
+            : {
+                closed: Promise.resolve({ exited: true }),
+                document: Promise.resolve(secondDocument),
+              };
+        },
+      },
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await run.settled;
+    expect(plans[1].identity).toBe(plans[0].identity);
+    expect(deadlines[1]).toBe(deadlines[0]);
+    expect(fontLocales).toStrictEqual(["en-US", "en-US"]);
+  });
+
+  it("retries a transport failure thrown during source start", async () => {
+    const failure = new XrioError("PROXY_CONNECT_FAILED", "CONNECT failed.", {
+      details: { status: 502 },
+    });
+
+    let starts = 0;
+
+    const { events, scrapes } = harness({
+      sources: {
+        close: async () => {
+          await Promise.resolve();
+        },
+        start: () => {
+          starts += 1;
+
+          if (starts === 1) {
+            throw failure;
+          }
+
+          return {
+            closed: Promise.resolve({ exited: true }),
+            document: Promise.resolve(firstDocument),
+          };
+        },
+      },
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(firstDocument);
+    await run.settled;
+    expect(starts).toBe(2);
+    expect(events.filter((event) => event === "finish")).toHaveLength(1);
+  });
+
+  it.each([
+    { expected: { code: "CLIENT_CLOSED" }, reason: "close" },
+    { expected: { message: "Caller stopped." }, reason: "caller" },
+  ])("stops backoff on %s without launching another attempt", async ({ reason, expected }) => {
+    const { clock, pendingTimers } = manualClock();
+    const caller = new AbortController();
+    const failure = new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+    const { plans, scrapes } = harness({ retryRandom: () => 0.5, visits: [failedVisit(failure)] });
+    using deadline = startDeadline(5000, caller.signal, clock);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+    await expect.poll(pendingTimers).toBe(2);
+
+    const cancelled = new Error("Caller stopped.");
+    const closing = reason === "close" ? scrapes.close() : undefined;
+
+    if (reason === "caller") {
+      caller.abort(cancelled);
+    }
+
+    await expect(run.answer).rejects.toMatchObject(expected);
+    await closing;
+    await scrapes.close();
+
+    expect(plans).toHaveLength(1);
+    expect(pendingTimers()).toBe(1);
+  });
+
+  it.each([
+    { expected: { code: "TIMEOUT" }, reason: "deadline" },
+    { expected: { message: "Caller stopped." }, reason: "caller" },
+    {
+      expected: { code: "SESSION_UNAVAILABLE", details: { reason: "ownership-lost" } },
+      reason: "ownership",
+    },
+  ])(
+    "settles $reason during retry cleanup while retaining the slot and hold",
+    async ({ expected, reason }) => {
+      const { advance, clock } = manualClock();
+      const closed = Promise.withResolvers<Closed>();
+      const caller = new AbortController();
+      const failure = new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+
+      const { events, owner, plans, scrapes } = harness({
+        visits: [failedVisit(failure, closed.promise)],
+      });
+
+      using deadline = startDeadline(2000, caller.signal, clock);
+      const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+      let settled = false;
+      void run.settled.then(() => {
+        settled = true;
+      });
+
+      const answer = outcomeOf(run.answer, deadline);
+      const cancellation = new Error("Caller stopped.");
+      await expect.poll(() => events.includes("start")).toBeTruthy();
+
+      if (reason === "deadline") {
+        advance(2000);
+      } else if (reason === "caller") {
+        caller.abort(cancellation);
+      } else {
+        owner.abort(cancellation);
+      }
+
+      try {
+        await expect
+          .poll(async () => await answer, { timeout: 100 })
+          .toMatchObject({
+            error: expected,
+            kind: "failed",
+          });
+        let drained = false;
+
+        const closing = scrapes.close().then(() => {
+          drained = true;
+        });
+
+        await Promise.resolve();
+
+        expect({
+          attempts: plans.length,
+          drained,
+          holdReleased: events.includes("hold-release"),
+          settled,
+          slotReleased: events.includes("slot-release"),
+          sourcesClosed: events.includes("sources-close"),
+        }).toStrictEqual({
+          attempts: 1,
+          drained: false,
+          holdReleased: false,
+          settled: false,
+          slotReleased: false,
+          sourcesClosed: false,
+        });
+        closed.resolve({ exited: true });
+        await run.settled;
+        await closing;
+        expect(plans).toHaveLength(1);
+        expect(events.slice(-4)).toStrictEqual([
+          "slot-release",
+          "finish",
+          "hold-release",
+          "sources-close",
+        ]);
+      } finally {
+        closed.resolve({ exited: true });
+        await run.settled;
+        await scrapes.close();
+      }
+    },
+  );
+
+  it("does not retry after closure consumes the minimum attempt budget", async () => {
+    const { advance, clock } = manualClock();
+    const closed = Promise.withResolvers<Closed>();
+    const failure = new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+    const { events, plans, scrapes } = harness({ visits: [failedVisit(failure, closed.promise)] });
+    using deadline = startDeadline(5000, undefined, clock);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+    await expect.poll(() => events.includes("start")).toBeTruthy();
+    advance(4500);
+    closed.resolve({ exited: true });
+
+    await expect(run.answer).rejects.toBe(failure);
+    await run.settled;
+    expect(plans).toHaveLength(1);
+    await scrapes.close();
+  });
+
+  it("refuses retry after incomplete teardown", async () => {
+    const failure = new XrioError("BROWSER_CRASHED", "Chrome exited.", { details: undefined });
+
+    const { events, plans, scrapes } = harness({
+      visits: [failedVisit(failure, Promise.resolve({ exited: false, reason: "Still running." }))],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await expect(run.answer).rejects.toBe(failure);
+    await run.settled;
+    expect(plans).toHaveLength(1);
+    expect(events).toContain("finish");
+    await scrapes.close();
+  });
+
+  it("returns an HTTP error response without spending retries", async () => {
+    const response = { ...firstDocument, status: 503 };
+
+    const { plans, scrapes } = harness({
+      visits: [{ closed: Promise.resolve({ exited: true }), document: Promise.resolve(response) }],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 3 }, deadline);
+
+    await expect(run.answer).resolves.toBe(response);
+    await run.settled;
+    expect(plans).toHaveLength(1);
+    await scrapes.close();
   });
 });

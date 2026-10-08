@@ -8,16 +8,20 @@ import { isPlainObject, resolveHostConfig } from "./host-config.ts";
 import type { HostConfig, HostSettings } from "./host-config.ts";
 import { resolveProxyConfig } from "./proxy/config.ts";
 import type { ProxyConfig } from "./proxy/config.ts";
+import { resolveScrapeConfig } from "./scrape-config.ts";
+import type { ScrapeConfig, ScrapeSettings } from "./scrape-config.ts";
 
 export interface XrioConfig {
   $schema?: string;
   proxy?: ProxyConfig;
   host?: HostConfig;
+  scrape?: ScrapeConfig;
 }
 
 export interface ResolvedConfig {
   readonly proxy: ProxyConfig | undefined;
   readonly host: HostSettings;
+  readonly scrape: ScrapeSettings;
 }
 
 const resolveSchemaReference = (value: unknown): string | undefined => {
@@ -32,6 +36,7 @@ const SECTIONS = {
   $schema: resolveSchemaReference,
   host: resolveHostConfig,
   proxy: resolveProxyConfig,
+  scrape: resolveScrapeConfig,
 } as const satisfies Record<keyof XrioConfig, (value: unknown) => unknown>;
 
 const isSection = (key: string): key is keyof typeof SECTIONS => Object.hasOwn(SECTIONS, key);
@@ -44,7 +49,11 @@ const rejectUnknownSections = (config: object): void => {
   }
 };
 
-const EMPTY_CONFIG: ResolvedConfig = { host: resolveHostConfig(), proxy: undefined };
+const EMPTY_CONFIG: ResolvedConfig = {
+  host: resolveHostConfig(),
+  proxy: undefined,
+  scrape: resolveScrapeConfig(),
+};
 
 const resolveSections = (config: object): ResolvedConfig => {
   rejectUnknownSections(config);
@@ -54,6 +63,7 @@ const resolveSections = (config: object): ResolvedConfig => {
     host: SECTIONS.host("host" in config ? config.host : undefined),
     proxy:
       "proxy" in config && config.proxy !== undefined ? SECTIONS.proxy(config.proxy) : undefined,
+    scrape: SECTIONS.scrape("scrape" in config ? config.scrape : undefined),
   };
 };
 
@@ -169,7 +179,7 @@ const warnOfNoConfig = (cwd: string): void => {
 
   warnedDirectories.add(directory);
   process.emitWarning(
-    `No xrio.config in ${directory}, so this client has no configured proxy or host settings. Pass configFile to load one.`,
+    `No xrio.config in ${directory}, so this client has no configured proxy, host or scrape settings. Pass configFile to load one.`,
     { code: "XRIO_NO_CONFIG", type: "XrioWarning" },
   );
 };

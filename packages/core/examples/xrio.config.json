@@ -31,5 +31,6 @@
       "gpuPolicy": "announce"
     },
     "browserArgs": ["--disable-dev-shm-usage"]
-  }
+  },
+  "scrape": { "retries": 2 }
 }

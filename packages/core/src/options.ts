@@ -6,6 +6,8 @@ import type { DeviceRecord } from "./humanizer/contracts.ts";
 import { parseRequestHeaders } from "./humanizer/request-headers.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
+import { resolveScrapeConfig } from "./scrape-config.ts";
+import type { ScrapeSettings } from "./scrape-config.ts";
 import { parseSeedCookies } from "./seed-cookies.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
@@ -177,6 +179,7 @@ const explicitProxy = (value: string): ProxyEndpoint => {
 export const resolveClientOptions = (
   options?: ClientOptions,
   host: HostSettings = resolveHostConfig(),
+  scrape: ScrapeSettings = resolveScrapeConfig(),
 ): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
@@ -198,6 +201,7 @@ export const resolveClientOptions = (
     identity: host.identity,
     maxBrowsers,
     mode: mode.mode,
+    retries: scrape.retries,
     route: proxy,
     session: { kind: "anonymous" },
   };
@@ -273,6 +277,7 @@ export const resolveScrapeIntent = (
     cookies,
     format,
     identity: defaults.identity,
+    retries: defaults.retries,
     route: proxy,
     session: defaults.session,
     signal,

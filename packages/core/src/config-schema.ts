@@ -273,6 +273,16 @@ const PROXY = objectOf(
   },
 );
 
+const SCRAPE = objectOf("Settings that apply to every scrape of the client.", {
+  retries: {
+    description:
+      "How many more attempts a scrape makes after NETWORK_ERROR, PROXY_UNREACHABLE, PROXY_CONNECT_FAILED or BROWSER_CRASHED. Defaults to 0. Every attempt shares the scrape's timeoutMs deadline, and HTTP statuses and blocked pages are never retried.",
+    maximum: Number.MAX_SAFE_INTEGER,
+    minimum: 0,
+    type: "integer",
+  },
+});
+
 export const XRIO_CONFIG_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   ...objectOf(
@@ -284,6 +294,7 @@ export const XRIO_CONFIG_SCHEMA = {
       },
       host: HOST,
       proxy: PROXY,
+      scrape: SCRAPE,
     },
   ),
   title: "xrio.config",

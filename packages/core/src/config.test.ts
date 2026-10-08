@@ -22,6 +22,8 @@ const NO_HOST = {
   identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
 };
 
+const NO_RETRIES = { retries: 0 };
+
 const failureOf = (run: () => object): Error | undefined => {
   try {
     run();
@@ -44,7 +46,7 @@ const notJson = (file: string) => `Could not read ${file} as JSON.`;
 const notOneObject = (file: string) => `${file} must contain one JSON object.`;
 
 const unknownSections = () =>
-  "xrio.config supports only these top-level keys: $schema, host, proxy.";
+  "xrio.config supports only these top-level keys: $schema, host, proxy, scrape.";
 
 const workspace = () => {
   const directory = mkdtempSync(path.join(tmpdir(), "xrio-config-"));
@@ -248,7 +250,7 @@ describe("configuration discovery", () => {
     }).toStrictEqual({
       configured: [],
       empty: [
-        `[XRIO_NO_CONFIG] XrioWarning: No xrio.config in ${realpathSync(empty)}, so this client has no configured proxy or host settings. Pass configFile to load one.`,
+        `[XRIO_NO_CONFIG] XrioWarning: No xrio.config in ${realpathSync(empty)}, so this client has no configured proxy, host or scrape settings. Pass configFile to load one.`,
       ],
       named: [],
     });
@@ -288,7 +290,11 @@ describe("configuration discovery", () => {
       'export default { proxy: { url: "http://proxy.test" } };',
     );
 
-    expect(loadXrioConfig(undefined, child)).toStrictEqual({ host: NO_HOST, proxy: undefined });
+    expect(loadXrioConfig(undefined, child)).toStrictEqual({
+      host: NO_HOST,
+      proxy: undefined,
+      scrape: NO_RETRIES,
+    });
 
     writeFileSync(path.join(directory, "xrio.config.mts"), "export default {};");
 
@@ -403,6 +409,7 @@ describe("configuration file formats", () => {
           session: { format: "numeric", length: 8 },
           url: "http://user-{session}:secret@proxy.test",
         },
+        scrape: NO_RETRIES,
       });
     },
   );
@@ -426,7 +433,7 @@ describe("configuration file formats", () => {
 
     expect(failure).toMatchObject({
       code: "INVALID_OPTIONS",
-      message: "xrio.config supports only these top-level keys: $schema, host, proxy.",
+      message: unknownSections(),
     });
     expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
   });
@@ -442,6 +449,7 @@ describe("configuration file formats", () => {
           session: { format: "alphanumeric", length: 12 },
           url: "http://u-{session}:p@proxy.test",
         },
+        scrape: { retries: 2 },
       }),
     );
 
@@ -451,6 +459,7 @@ describe("configuration file formats", () => {
         session: { format: "alphanumeric", length: 12 },
         url: "http://u-{session}:p@proxy.test",
       },
+      scrape: { retries: 2 },
     });
   });
 
@@ -465,6 +474,7 @@ describe("configuration file formats", () => {
     expect(loadXrioConfig(undefined, directory)).toStrictEqual({
       host: { ...NO_HOST, identity: { ...NO_HOST.identity, locale: "de-DE" } },
       proxy: undefined,
+      scrape: NO_RETRIES,
     });
   });
 

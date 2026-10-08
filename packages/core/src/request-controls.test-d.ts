@@ -1,5 +1,6 @@
 import { describe, expectTypeOf, it } from "vite-plus/test";
 
+import type { XrioConfig } from "./config.ts";
 import type { ScrapeOptions } from "./types.ts";
 
 describe("request controls", () => {
@@ -41,5 +42,14 @@ describe("request controls", () => {
 
     void browserHeaders;
     void inheritedHeaders;
+  });
+
+  it("takes retries from the scrape section of the config, not from a scrape", () => {
+    expectTypeOf({ scrape: { retries: 2 } }).toExtend<XrioConfig>();
+
+    // @ts-expect-error Retries are set in the scrape section of xrio.config.
+    const scrapeRetries: ScrapeOptions = { format: "html", retries: 1, url: "https://example.com" };
+
+    void scrapeRetries;
   });
 });
