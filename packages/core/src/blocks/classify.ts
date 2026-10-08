@@ -60,20 +60,7 @@ const SUPPRESSING_KINDS = new Set<BuiltinKind>([
   "body_is_xml",
 ]);
 
-const HTML_ROOTS = new Set([
-  "!doctype",
-  "html",
-  "head",
-  "body",
-  "meta",
-  "title",
-  "script",
-  "style",
-]);
-
 const WHITESPACE = /\s+/gu;
-
-const FIRST_TAG = /^\s*(?:<!--.*?-->\s*)*<(?<root>[!A-Z_a-z][\w.:-]*)/su;
 
 const shorten = (text: string): string => {
   const collapsed = text.replaceAll(WHITESPACE, " ").trim();
@@ -101,17 +88,8 @@ const looksLikeJson = (body: string): boolean => {
   }
 };
 
-const looksLikeXml = (body: string): boolean => {
-  const trimmed = body.trimStart();
-
-  if (trimmed.slice(0, 5).toLowerCase() === "<?xml") {
-    return true;
-  }
-
-  const root = FIRST_TAG.exec(trimmed)?.groups?.root?.toLowerCase();
-
-  return root !== undefined && !HTML_ROOTS.has(root) && !trimmed.toLowerCase().includes("<html");
-};
+const looksLikeXml = (body: string): boolean =>
+  body.trimStart().slice(0, 5).toLowerCase() === "<?xml";
 
 const isCoveredHost = (host: string, suffix: string): boolean => {
   const bareHost = host.toLowerCase().replace(/\.$/u, "");
