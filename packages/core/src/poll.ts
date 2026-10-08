@@ -1,4 +1,4 @@
-import type { Deadline } from "../../deadline.ts";
+import type { Deadline } from "./deadline.ts";
 
 export const pollAfter = async (delayMs: number, deadline: Deadline): Promise<void> => {
   deadline.throwIfExpired();

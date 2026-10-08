@@ -1,9 +1,9 @@
 import { challengeCandidate } from "../../blocks/classify.ts";
 import type { BlockInput, ChallengeOutcome, ChallengeReport } from "../../blocks/classify.ts";
 import type { Deadline } from "../../deadline.ts";
+import { pollAfter } from "../../poll.ts";
 import type { ResponseDetails } from "../../types.ts";
 import { documentKey } from "./documents.ts";
-import { pollAfter } from "./poll.ts";
 import type { DocumentHop } from "./port.ts";
 
 const POLL_MS = 250;
