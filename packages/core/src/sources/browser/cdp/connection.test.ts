@@ -397,7 +397,7 @@ describe(connectOverPipe, () => {
     expect(sent()).toStrictEqual([]);
   });
 
-  it("enables Network without body buffers and resumes every target it attaches", () => {
+  it("buffers response bodies for previews on the main page only, and resumes every target it attaches", () => {
     const { chrome, events, sent } = startWithMainPage();
 
     chrome(
@@ -422,7 +422,7 @@ describe(connectOverPipe, () => {
       ],
     );
     expect(sent()).toStrictEqual([
-      '{"id":1,"method":"Network.enable","params":{"maxResourceBufferSize":0,"maxTotalBufferSize":0},"sessionId":"S1"}',
+      '{"id":1,"method":"Network.enable","params":{"maxResourceBufferSize":65536,"maxTotalBufferSize":1048576},"sessionId":"S1"}',
       '{"id":2,"method":"Target.setAutoAttach","params":{"autoAttach":true,"flatten":true,"waitForDebuggerOnStart":true},"sessionId":"S1"}',
       '{"id":3,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S1"}',
       '{"id":4,"method":"Network.enable","params":{"maxResourceBufferSize":0,"maxTotalBufferSize":0},"sessionId":"S2"}',

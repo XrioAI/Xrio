@@ -1,18 +1,28 @@
-import { classifyResponse } from "../../blocks/classify.ts";
+import { classifyResponse, challengeCandidate } from "../../blocks/classify.ts";
+import type { BlockInput, ChallengeOutcome, ChallengeReport } from "../../blocks/classify.ts";
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
-import { redactUrl, XrioError } from "../../errors.ts";
+import { XrioError } from "../../errors.ts";
 import type { Relay } from "../../proxy/relay.ts";
-import type { ResponseDetails, SourceDocument } from "../../types.ts";
-import { responseDetailsFrom } from "../response.ts";
+import type { ResponseDetails, SourceDocument, WaitFor } from "../../types.ts";
+import { isHtmlContentType, unsupportedContentType } from "../content-type.ts";
+import { networkFailure } from "../net-error.ts";
+import { waitForChallenge } from "./challenge.ts";
+import type { ChallengeWait } from "./challenge.ts";
+import {
+  currentDocument,
+  documentKey,
+  documentResponse,
+  downloadResponse,
+  emptyDocuments,
+  MAX_REQUEST_URLS,
+  rawHeadersOf,
+  recordDocumentEvent,
+  requestUrlsOf,
+} from "./documents.ts";
 import { DriverError } from "./port.ts";
-import type {
-  DocumentHop,
-  DriverBrowser,
-  DriverErrorReason,
-  DriverEvent,
-  RawHeaders,
-} from "./port.ts";
+import type { DocumentHop, DriverBrowser, DriverErrorReason } from "./port.ts";
+import { waitForSelector } from "./wait-for.ts";
 
 const SLICE_CODE_UNITS = 4 * 1024 * 1024;
 
@@ -84,29 +94,15 @@ const isCaptureReply = (value: unknown): value is string | TooLarge | Parked =>
 
 const isSlice = (value: unknown): value is string | null => value === null || isHtml(value);
 
-const MAX_REQUEST_URLS = 4000;
-
 const COMMITTED_ERROR_PAGE = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
-
-const MAX_REQUEST_URL_CHARS = 2048;
 
 const PROXY_NET_ERROR = /^net::ERR_(?:PROXY|TUNNEL)_/u;
 
 type RelayFailures = Pick<Relay, "failureFor"> | undefined;
 
-interface RawHeaderEvent {
-  status: number;
-  headers: RawHeaders;
-}
-
 const browserCrashed = (cause?: unknown): XrioError =>
   new XrioError("BROWSER_CRASHED", "The browser or its renderer died mid-scrape.", {
     cause,
-    details: undefined,
-  });
-
-const committedWithoutResponse = (): XrioError =>
-  new XrioError("NETWORK_ERROR", "The page committed a document that had no HTTP response.", {
     details: undefined,
   });
 
@@ -115,222 +111,6 @@ const isDriverFailure = <Kind extends DriverErrorReason["kind"]>(
   kind: Kind,
 ): error is DriverError & { reason: Extract<DriverErrorReason, { kind: Kind }> } =>
   error instanceof DriverError && error.reason.kind === kind;
-
-class PageTracker {
-  readonly requestUrls: string[] = [];
-  droppedRequestUrls = 0;
-  #document: DocumentHop | undefined;
-  #committedLoader: string | undefined;
-  readonly #responses = new Map<string, DocumentHop>();
-  #failure: XrioError | undefined;
-  readonly #rawHeaders = new Map<string, RawHeaderEvent[]>();
-  readonly #loaded = new Set<string>();
-  readonly #waiters = new Set<() => void>();
-  readonly #stop: () => void;
-
-  constructor(browser: DriverBrowser) {
-    this.#stop = browser.onEvent((event) => {
-      this.#record(event);
-
-      for (const wake of this.#waiters) {
-        wake();
-      }
-    });
-  }
-
-  stop(): void {
-    this.#stop();
-  }
-
-  async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
-    deadline.throwIfExpired();
-    const { promise, resolve, reject } = Promise.withResolvers<DocumentHop>();
-
-    const check = () => {
-      if (this.#failure !== undefined) {
-        reject(this.#failure);
-      } else if (this.#document !== undefined && this.#loaded.has(this.#document.loaderId)) {
-        resolve(this.#document);
-      } else if (this.#loadedWithoutResponse()) {
-        reject(committedWithoutResponse());
-      }
-    };
-
-    const abort = () => {
-      reject(deadline.signal.reason);
-    };
-
-    this.#waiters.add(check);
-    deadline.signal.addEventListener("abort", abort, { once: true });
-    check();
-
-    try {
-      return await promise;
-    } finally {
-      this.#waiters.delete(check);
-      deadline.signal.removeEventListener("abort", abort);
-    }
-  }
-
-  #loadedWithoutResponse(): boolean {
-    return (
-      this.#document === undefined &&
-      this.#committedLoader !== undefined &&
-      this.#loaded.has(this.#committedLoader)
-    );
-  }
-
-  isCurrent(document: DocumentHop): boolean {
-    return this.#committedLoader === document.loaderId;
-  }
-
-  responseOf(document: DocumentHop): ResponseDetails {
-    const raw = this.#rawHeaders
-      .get(document.requestId)
-      ?.findLast(({ status }) => status === document.status);
-
-    if (raw === undefined) {
-      publishInternalEvent({
-        detail: `No raw headers arrived for request ${document.requestId}; Set-Cookie is unavailable.`,
-        event: "raw-header-fallback",
-      });
-    }
-
-    return responseDetailsFrom(document.url, document.status, raw?.headers ?? document.headers);
-  }
-
-  #record(event: DriverEvent): void {
-    switch (event.type) {
-      case "commit": {
-        this.#committedLoader = event.loaderId;
-        this.#document = this.#responses.get(event.loaderId);
-        break;
-      }
-
-      case "dom-content-loaded": {
-        this.#loaded.add(event.loaderId);
-        break;
-      }
-
-      case "document-response": {
-        if (!event.hop.isRedirect) {
-          this.#responses.set(event.hop.loaderId, event.hop);
-        }
-
-        if (!event.hop.isRedirect && event.hop.loaderId === this.#committedLoader) {
-          this.#document = event.hop;
-        }
-
-        break;
-      }
-
-      case "raw-headers": {
-        const queued = this.#rawHeaders.get(event.requestId) ?? [];
-
-        queued.push({ headers: event.headers, status: event.status });
-        this.#rawHeaders.set(event.requestId, queued);
-        break;
-      }
-
-      case "request": {
-        this.#recordRequest(event.url);
-        break;
-      }
-
-      case "crash":
-      case "disconnect": {
-        this.#failure ??= browserCrashed();
-        break;
-      }
-
-      default: {
-        break;
-      }
-    }
-  }
-
-  #recordRequest(url: string): void {
-    if (this.requestUrls.length < MAX_REQUEST_URLS) {
-      this.requestUrls.push(url.slice(0, MAX_REQUEST_URL_CHARS));
-    } else {
-      this.droppedRequestUrls += 1;
-    }
-  }
-}
-
-const navigationError = (url: URL, failure: DriverError, netError: string): XrioError =>
-  new XrioError("NETWORK_ERROR", `Loading ${redactUrl(url)} failed with ${netError}.`, {
-    cause: failure,
-    details: { netError },
-  });
-
-const relayFailureOfHost = (relay: RelayFailures, url: string): XrioError | undefined => {
-  const hostname = URL.parse(url)?.hostname;
-
-  return hostname === undefined ? undefined : relay?.failureFor(hostname);
-};
-
-const relayFailureBehind = (
-  relay: RelayFailures,
-  failingHop: string | undefined,
-  url: URL,
-  netError: string,
-): XrioError | undefined => {
-  if (!PROXY_NET_ERROR.test(netError)) {
-    return undefined;
-  }
-
-  return relayFailureOfHost(relay, failingHop ?? url.href) ?? relayFailureOfHost(relay, url.href);
-};
-
-const relayFailureFor = (relay: RelayFailures, { url }: DocumentHop): XrioError | undefined => {
-  const documentUrl = URL.parse(url);
-
-  return documentUrl?.protocol === "http:" ? relay?.failureFor(documentUrl.hostname) : undefined;
-};
-
-const navigateTo = async (
-  browser: DriverBrowser,
-  tracker: PageTracker,
-  url: URL,
-  relay: RelayFailures,
-  deadline: Deadline,
-): Promise<void> => {
-  try {
-    await browser.navigate(url.href, deadline);
-  } catch (error) {
-    if (isDriverFailure(error, "navigation-failed")) {
-      const { netError } = error.reason;
-
-      if (netError === COMMITTED_ERROR_PAGE) {
-        return;
-      }
-
-      const failingHop = tracker.requestUrls.at(-1);
-
-      throw (
-        relayFailureBehind(relay, failingHop, url, netError) ??
-        navigationError(url, error, netError)
-      );
-    }
-
-    throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
-  }
-};
-
-const reportDropped = (tracker: PageTracker): void => {
-  if (tracker.droppedRequestUrls > 0) {
-    publishInternalEvent({
-      detail: `The request log kept ${MAX_REQUEST_URLS} URLs and dropped ${tracker.droppedRequestUrls}.`,
-      event: "request-log-dropped",
-    });
-  }
-};
-
-interface CapturedDocument {
-  html: string;
-  document: DocumentHop;
-}
 
 const readSlices = async (
   browser: DriverBrowser,
@@ -380,6 +160,250 @@ const captureHtml = async (
   return await readSlices(browser, reply, deadline);
 };
 
+class PageTracker {
+  #state = emptyDocuments();
+  readonly #waiters = new Set<() => void>();
+  readonly #fallbacks = new Set<string>();
+  readonly #browser: DriverBrowser;
+  readonly #stop: () => void;
+  readonly #failureOf: (document: DocumentHop) => XrioError | undefined;
+
+  constructor(browser: DriverBrowser, failureOf: (document: DocumentHop) => XrioError | undefined) {
+    this.#browser = browser;
+    this.#failureOf = failureOf;
+    this.#stop = browser.onEvent((event) => {
+      this.#state = recordDocumentEvent(this.#state, event);
+
+      for (const wake of this.#waiters) {
+        wake();
+      }
+    });
+  }
+
+  stop(): void {
+    this.#stop();
+  }
+  get lastRequestUrl(): string | undefined {
+    return this.#state.lastRequestUrl;
+  }
+  get downloaded(): boolean {
+    return this.#state.downloadUrl !== undefined;
+  }
+
+  loadedDocument(): DocumentHop | undefined {
+    if (this.#state.failed) {
+      throw browserCrashed();
+    }
+
+    const record = currentDocument(this.#state);
+
+    if (record?.loaded !== true) {
+      return undefined;
+    }
+
+    if (record.response === undefined) {
+      throw new XrioError(
+        "NETWORK_ERROR",
+        "The page committed a document that had no HTTP response.",
+        { details: undefined },
+      );
+    }
+
+    const failure = this.#failureOf(record.response);
+
+    if (failure !== undefined) {
+      throw failure;
+    }
+
+    return record.response;
+  }
+
+  async documentLoaded(deadline: Deadline): Promise<DocumentHop> {
+    deadline.throwIfExpired();
+    const { promise, resolve, reject } = Promise.withResolvers<DocumentHop>();
+
+    const check = () => {
+      try {
+        const document = this.loadedDocument();
+
+        if (document !== undefined) {
+          resolve(document);
+
+          return;
+        }
+
+        if (this.downloaded) {
+          reject(this.downloadError());
+        }
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    const abort = () => {
+      reject(deadline.signal.reason);
+    };
+
+    this.#waiters.add(check);
+    deadline.signal.addEventListener("abort", abort, { once: true });
+    check();
+
+    try {
+      return await promise;
+    } finally {
+      this.#waiters.delete(check);
+      deadline.signal.removeEventListener("abort", abort);
+    }
+  }
+
+  downloadError(): XrioError<"UNSUPPORTED_CONTENT_TYPE"> {
+    return unsupportedContentType(downloadResponse(this.#state), [], "");
+  }
+
+  isCurrent(document: DocumentHop): boolean {
+    return this.#state.current === documentKey(document);
+  }
+
+  async currentHtml(document: DocumentHop, deadline: Deadline): Promise<string | undefined> {
+    if (!this.isCurrent(document)) {
+      return undefined;
+    }
+
+    try {
+      const html = await captureHtml(this.#browser, deadline);
+
+      return this.isCurrent(document) ? html : undefined;
+    } catch (error) {
+      if (isDriverFailure(error, "document-replaced")) {
+        return undefined;
+      }
+
+      throw error;
+    }
+  }
+
+  requestUrls(document: DocumentHop): readonly string[] {
+    return requestUrlsOf(this.#state, document);
+  }
+
+  responseOf(document: DocumentHop): ResponseDetails {
+    const hop = JSON.stringify([document.requestId, document.hopIndex]);
+
+    if (rawHeadersOf(this.#state, document) === undefined && !this.#fallbacks.has(hop)) {
+      this.#fallbacks.add(hop);
+      publishInternalEvent({
+        detail: `Using renderer headers for request ${document.requestId}, hop ${document.hopIndex}; raw headers are unavailable and Set-Cookie may be missing.`,
+        event: "raw-header-fallback",
+      });
+    }
+
+    return documentResponse(this.#state, document);
+  }
+
+  reportDropped(): void {
+    if (this.#state.droppedUrls > 0) {
+      publishInternalEvent({
+        detail: `Each document kept at most ${MAX_REQUEST_URLS} URLs; dropped ${this.#state.droppedUrls}.`,
+        event: "request-log-dropped",
+      });
+    }
+
+    if (this.#state.droppedState > 0) {
+      publishInternalEvent({
+        detail: `Dropped ${this.#state.droppedState} entries of document or response state.`,
+        event: "document-state-dropped",
+      });
+    }
+  }
+}
+
+const relayFailureOfHost = (relay: RelayFailures, url: string): XrioError | undefined => {
+  const hostname = URL.parse(url)?.hostname;
+
+  return hostname === undefined ? undefined : relay?.failureFor(hostname);
+};
+
+const relayFailureBehind = (
+  relay: RelayFailures,
+  failingHop: string | undefined,
+  url: URL,
+  netError: string,
+): XrioError | undefined => {
+  if (!PROXY_NET_ERROR.test(netError)) {
+    return undefined;
+  }
+
+  return relayFailureOfHost(relay, failingHop ?? url.href) ?? relayFailureOfHost(relay, url.href);
+};
+
+const relayFailureFor = (relay: RelayFailures, { url }: DocumentHop): XrioError | undefined => {
+  const documentUrl = URL.parse(url);
+
+  return documentUrl?.protocol === "http:" ? relay?.failureFor(documentUrl.hostname) : undefined;
+};
+
+const navigateTo = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  url: URL,
+  relay: RelayFailures,
+  deadline: Deadline,
+): Promise<void> => {
+  try {
+    await browser.navigate(url.href, deadline);
+  } catch (error) {
+    if (isDriverFailure(error, "navigation-failed")) {
+      const { netError } = error.reason;
+
+      if (netError === COMMITTED_ERROR_PAGE) {
+        return;
+      }
+
+      if (tracker.downloaded) {
+        throw tracker.downloadError();
+      }
+
+      const failingHop = tracker.lastRequestUrl;
+
+      throw (
+        relayFailureBehind(relay, failingHop, url, netError) ?? networkFailure(url, netError, error)
+      );
+    }
+
+    throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
+  }
+};
+
+interface CapturedDocument {
+  html: string;
+  document: DocumentHop;
+}
+
+const requireHtmlDocument = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  document: DocumentHop,
+  deadline: Deadline,
+): Promise<void> => {
+  const details = tracker.responseOf(document);
+
+  if (!isHtmlContentType(details.headers["content-type"])) {
+    let preview = "";
+
+    try {
+      preview = await browser.responseBody(document.requestId, deadline);
+    } catch (error) {
+      deadline.throwIfExpired();
+
+      if (isDriverFailure(error, "browser-gone")) {
+        throw browserCrashed(error);
+      }
+    }
+
+    throw unsupportedContentType(details, tracker.requestUrls(document), preview);
+  }
+};
+
 const captureIfCurrent = async (
   browser: DriverBrowser,
   tracker: PageTracker,
@@ -388,6 +412,8 @@ const captureIfCurrent = async (
   const document = await tracker.documentLoaded(deadline);
 
   try {
+    await requireHtmlDocument(browser, tracker, document, deadline);
+
     const html = await captureHtml(browser, deadline);
 
     return html !== undefined && tracker.isCurrent(document) ? { document, html } : undefined;
@@ -427,62 +453,212 @@ const captureCurrentDocument = async (
   return rebound;
 };
 
+const captureHeldDocument = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  waitFor: WaitFor,
+  deadline: Deadline,
+): Promise<CapturedDocument> => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- the selector hold must belong to the document captured in this attempt.
+    const ready = await waitForSelector(browser, tracker, waitFor, deadline, async () => {
+      const captured = await captureCurrentDocument(browser, tracker, deadline);
+
+      return { ...tracker.responseOf(captured.document), html: captured.html };
+    });
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- capture follows the completed selector hold.
+    const captured = await captureIfCurrent(browser, tracker, deadline);
+
+    if (captured !== undefined && documentKey(captured.document) === documentKey(ready)) {
+      return captured;
+    }
+
+    publishInternalEvent({
+      detail: "The document changed after its selector hold; waiting on its replacement.",
+      event: "document-rebind",
+    });
+  }
+
+  throw new XrioError(
+    "NETWORK_ERROR",
+    "The page kept replacing its document after the selector hold.",
+    { details: undefined },
+  );
+};
+
+const GAVE_UP: ReadonlySet<ChallengeOutcome> = new Set([
+  "budget_exhausted",
+  "deadline",
+  "rounds_exhausted",
+]);
+
+const challengeGaveUp = (report: ChallengeReport | null): boolean =>
+  report !== null && GAVE_UP.has(report.outcome);
+
+const blockInputOf = (tracker: PageTracker, { document, html }: CapturedDocument): BlockInput => ({
+  html,
+  requestUrls: tracker.requestUrls(document),
+  response: tracker.responseOf(document),
+});
+
+const settledChallenge = (
+  tracker: PageTracker,
+  { lastDocument, report }: ChallengeWait,
+  captured: CapturedDocument,
+): ChallengeReport | null => {
+  if (report === null) {
+    return null;
+  }
+
+  if (challengeCandidate(blockInputOf(tracker, captured)) !== undefined) {
+    return report.outcome === "passed" || report.outcome === "passed_in_place"
+      ? { ...report, outcome: "rounds_exhausted" }
+      : report;
+  }
+
+  const passedInPlace =
+    report.outcome !== "passed" && documentKey(captured.document) === documentKey(lastDocument);
+
+  return { ...report, outcome: passedInPlace ? "passed_in_place" : "passed" };
+};
+
+interface Render<Reading> {
+  readonly browser: DriverBrowser;
+  readonly tracker: PageTracker;
+  readonly deadline: Deadline;
+  readonly waitFor: WaitFor | undefined;
+  readonly readAfterCapture: () => Promise<Reading>;
+}
+
+interface Rendered<Reading> {
+  readonly afterCapture: Reading;
+  readonly captured: CapturedDocument;
+  readonly challenge: ChallengeReport | null;
+}
+
+type FirstCapture<Reading> =
+  | { readonly kind: "rendered"; readonly rendered: Rendered<Reading> }
+  | { readonly kind: "late-challenge"; readonly evidence: BlockInput };
+
+const finishCapture = async <Reading>(
+  { browser, deadline, readAfterCapture, tracker, waitFor }: Render<Reading>,
+  challenge: ChallengeWait,
+  captured: CapturedDocument,
+): Promise<Rendered<Reading>> => {
+  const final =
+    waitFor === undefined || challengeGaveUp(settledChallenge(tracker, challenge, captured))
+      ? captured
+      : await captureHeldDocument(browser, tracker, waitFor, deadline);
+
+  const settled = settledChallenge(tracker, challenge, final);
+
+  tracker.stop();
+
+  return { afterCapture: await readAfterCapture(), captured: final, challenge: settled };
+};
+
+const captureUnlessLateChallenge = async <Reading>(
+  render: Render<Reading>,
+  challenge: ChallengeWait,
+): Promise<FirstCapture<Reading>> => {
+  const captured = await captureCurrentDocument(render.browser, render.tracker, render.deadline);
+  const evidence = blockInputOf(render.tracker, captured);
+
+  if (!challengeGaveUp(challenge.report) && challengeCandidate(evidence) !== undefined) {
+    return { evidence, kind: "late-challenge" };
+  }
+
+  return { kind: "rendered", rendered: await finishCapture(render, challenge, captured) };
+};
+
+const recaptureAfterLateChallenge = async <Reading>(
+  render: Render<Reading>,
+  challenge: ChallengeWait,
+  evidence: BlockInput,
+): Promise<Rendered<Reading>> => {
+  const { browser, deadline, tracker } = render;
+
+  const late = await timeStage(
+    "challenge",
+    async () => await waitForChallenge(tracker, deadline, evidence, challenge.report),
+    deadline,
+  );
+
+  return await timeStage(
+    "capture",
+    async () =>
+      await finishCapture(render, late, await captureCurrentDocument(browser, tracker, deadline)),
+    deadline,
+  );
+};
+
+const sourceOf = (
+  relay: RelayFailures,
+  tracker: PageTracker,
+  { captured, challenge }: Rendered<unknown>,
+): Omit<SourceDocument, "identity"> => {
+  const relayFailure = relayFailureFor(relay, captured.document);
+
+  if (relayFailure !== undefined) {
+    throw relayFailure;
+  }
+
+  const input = blockInputOf(tracker, captured);
+
+  return {
+    ...input.response,
+    block: classifyResponse({ ...input, challenge }),
+    html: captured.html,
+    requestUrls: input.requestUrls,
+    scriptsRan: true,
+  };
+};
+
 export const renderDocument = async <Reading>(
   browser: DriverBrowser,
   url: URL,
   relay: RelayFailures,
   deadline: Deadline,
   readAfterCapture: () => Promise<Reading>,
+  waitFor?: WaitFor,
 ): Promise<{ source: Omit<SourceDocument, "identity">; afterCapture: Reading }> => {
-  const tracker = new PageTracker(browser);
+  const tracker = new PageTracker(browser, (document) => relayFailureFor(relay, document));
+  const render: Render<Reading> = { browser, deadline, readAfterCapture, tracker, waitFor };
 
   try {
     await timeStage(
       "navigation",
       async () => {
         await navigateTo(browser, tracker, url, relay, deadline);
-        await tracker.documentLoaded(deadline);
+        const document = await tracker.documentLoaded(deadline);
+        await requireHtmlDocument(browser, tracker, document, deadline);
       },
       deadline,
     );
 
-    const { afterCapture, captured } = await timeStage(
+    const challenge = await timeStage(
+      "challenge",
+      async () => await waitForChallenge(tracker, deadline),
+      deadline,
+    );
+
+    const first = await timeStage(
       "capture",
-      async () => {
-        const current = await captureCurrentDocument(browser, tracker, deadline);
-
-        tracker.stop();
-
-        return { afterCapture: await readAfterCapture(), captured: current };
-      },
+      async () => await captureUnlessLateChallenge(render, challenge),
       deadline,
     );
 
-    const { document, html } = captured;
-    const relayFailure = relayFailureFor(relay, document);
+    const rendered =
+      first.kind === "rendered"
+        ? first.rendered
+        : await recaptureAfterLateChallenge(render, challenge, first.evidence);
 
-    if (relayFailure !== undefined) {
-      throw relayFailure;
-    }
-
-    const details = tracker.responseOf(document);
-
-    reportDropped(tracker);
-
-    return {
-      afterCapture,
-      source: {
-        ...details,
-        block: classifyResponse({
-          html,
-          requestUrls: tracker.requestUrls,
-          response: details,
-        }),
-        html,
-        requestUrls: tracker.requestUrls,
-      },
-    };
+    return { afterCapture: rendered.afterCapture, source: sourceOf(relay, tracker, rendered) };
+  } catch (error) {
+    throw isDriverFailure(error, "browser-gone") ? browserCrashed(error) : error;
   } finally {
+    tracker.reportDropped();
     tracker.stop();
   }
 };

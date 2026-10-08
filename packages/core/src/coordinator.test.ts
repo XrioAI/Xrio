@@ -39,6 +39,7 @@ const documentFor = (html: string): SourceDocument => {
   const response = { cookies: [], headers: {}, status: 200, url: "https://example.com" };
 
   return {
+    scriptsRan: false,
     ...response,
     block: classifyResponse({ html, requestUrls: [response.url], response }),
     html,

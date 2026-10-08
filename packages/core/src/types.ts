@@ -6,6 +6,7 @@ export type ScrapeFormat = "html" | "markdown" | "json";
 interface HttpMode {
   mode: "http";
   browserPath?: never;
+  waitFor?: never;
 }
 
 interface BrowserMode {
@@ -13,9 +14,16 @@ interface BrowserMode {
   browserPath: string;
 }
 
+export interface WaitFor {
+  selector: string;
+}
+
 export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
 
-type ModeOverride = HttpMode | BrowserMode | { mode?: never; browserPath?: never };
+type ModeOverride =
+  | HttpMode
+  | (BrowserMode & { waitFor?: WaitFor })
+  | { mode?: never; browserPath?: never; waitFor?: WaitFor };
 
 export type ClientOptions = (
   | { mode: "http"; browserPath?: string }
@@ -68,13 +76,15 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
 }[Format];
 
 export interface SourceDocument extends ResponseDetails {
+  scriptsRan: boolean;
   html: string;
   block: BlockReport;
   requestUrls: readonly string[];
   identity: IdentityReport;
 }
 
-export type RenderedDocument = Pick<SourceDocument, "html" | "url">;
+export type RenderedDocument = Pick<SourceDocument, "html" | "url"> &
+  Partial<Pick<SourceDocument, "scriptsRan">>;
 
 export type ResolvedMode = HttpMode | BrowserMode;
 

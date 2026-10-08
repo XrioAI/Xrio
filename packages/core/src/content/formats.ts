@@ -3,10 +3,11 @@ import { extractionPlugin } from "@mdream/js/plugins";
 
 import type { RenderedDocument, StructuredContent } from "../types.ts";
 import {
-  bodyContent,
+  bodyContentFor,
   htmlPlugins,
   isBodyElement,
   isDocumentTitle,
+  isScriptFallback,
   readBaseUrl,
   resolveUrl,
 } from "./document.ts";
@@ -19,7 +20,7 @@ export const renderMarkdown = (
 ): string =>
   htmlToMarkdown(document.html, {
     hooks: [
-      bodyContent,
+      bodyContentFor(document),
       {
         processAttributes(node) {
           const { attributes } = node;
@@ -53,23 +54,30 @@ export const extractContent = (document: RenderedDocument): StructuredContent =>
 
   const extraction = extractionPlugin({
     "a[href]": (node) => {
-      if (isBodyElement(node)) {
+      if (isBodyElement(node, document.scriptsRan)) {
         links.push({ href: node.attributes.href, text: node.textContent });
       }
     },
-    "base[href]": ({ attributes }) => {
-      baseHref ??= attributes.href;
+    "base[href]": (node) => {
+      if (!isScriptFallback(node, document.scriptsRan)) {
+        baseHref ??= node.attributes.href;
+      }
     },
     "html[lang]": ({ attributes }) => {
       metadata.language ??= attributes.lang;
     },
     "img[src]": (node) => {
-      if (isBodyElement(node)) {
+      if (isBodyElement(node, document.scriptsRan)) {
         images.push({ alt: node.attributes.alt ?? "", src: node.attributes.src });
       }
     },
-    "meta[name][content]": ({ attributes }) => {
-      if (attributes.name.toLowerCase() === "description") {
+    "meta[name][content]": (node) => {
+      const { attributes } = node;
+
+      if (
+        attributes.name.toLowerCase() === "description" &&
+        !isScriptFallback(node, document.scriptsRan)
+      ) {
         metadata.description ??= attributes.content;
       }
     },
@@ -82,7 +90,7 @@ export const extractContent = (document: RenderedDocument): StructuredContent =>
 
   const text = htmlToMarkdown(html, {
     format: "text",
-    hooks: [bodyContent, extraction],
+    hooks: [bodyContentFor(document), extraction],
     plugins: htmlPlugins,
   });
 

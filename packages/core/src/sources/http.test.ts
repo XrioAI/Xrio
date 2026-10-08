@@ -133,6 +133,12 @@ const routes = (request: IncomingMessage, response: ServerResponse) => {
 
   if (charsetPage !== undefined) {
     response.writeHead(200, { "content-type": charsetPage.contentType }).end(charsetPage.bytes);
+  } else if (url.pathname === "/no-content-html") {
+    response.writeHead(204, { "content-type": "text/html" }).end();
+  } else if (url.pathname === "/xhtml") {
+    response
+      .writeHead(200, { "content-type": "application/xhtml+xml; charset=utf-8" })
+      .end('<html xmlns="http://www.w3.org/1999/xhtml"><body><p>XHTML</p></body></html>');
   } else if (remaining !== undefined && remaining !== "0") {
     response
       .writeHead(302, {
@@ -469,6 +475,16 @@ describe("http mode edge responses", () => {
     }
   });
 
+  it("keeps wreq's text out of a failure that names no request URI", async () => {
+    await expect(
+      client.scrape({ format: "html", url: "http://a{b}.test/page" }),
+    ).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      details: undefined,
+      message: "The request to http://a{b}.test/page failed.",
+    });
+  });
+
   it("sends HTTP/1.1 headers in Chrome's order and case, keeping the connection alive", async () => {
     const requestHeads: string[] = [];
 
@@ -526,4 +542,36 @@ describe("http mode edge responses", () => {
       expect(requestHeads[0]).toContain(`\r\nAccept-Language: ${header}\r\n`);
     },
   );
+});
+
+describe("HTTP content type", () => {
+  it("accepts XHTML through the shared HTML gate", async () => {
+    await using fixture = await startFixtureServer(routes);
+    const client = new XrioClient({ mode: "http" });
+
+    try {
+      const result = await client.scrape({ format: "json", url: `${fixture.origin}/xhtml` });
+      expect(result.data.content.text).toBe("XHTML");
+      expect(result.block.challenge).toBeNull();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("rejects a 204 sent as text/html for having no response body", async () => {
+    await using fixture = await startFixtureServer(routes);
+    const client = new XrioClient({ mode: "http" });
+
+    try {
+      await expect(
+        client.scrape({ format: "html", url: `${fixture.origin}/no-content-html` }),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_CONTENT_TYPE",
+        details: { body: "", status: 204 },
+        message: `Expected HTML from ${fixture.origin}/no-content-html; received no response body.`,
+      });
+    } finally {
+      await client.close();
+    }
+  });
 });

@@ -37,7 +37,7 @@ For `json`, `data` retains the existing `StructuredContent` fields:
 - `metadata`: final response `url`, `title`, `description`, and `language`. Missing descriptive metadata is `null`.
 - `content`: `markdown`, plain `text`, `links: { text, href }[]`, and `images: { alt, src }[]`.
 
-HTML preserves the decoded response body. Bodies are decoded with WHATWG rules: a byte-order mark first, then the `Content-Type` charset, then a `<meta>` charset in the first 1,024 bytes, then UTF-8. Unknown labels fall back to UTF-8, and `iso-8859-1` decodes as windows-1252, as browsers do. Markdown and text cover the whole body, including navigation, sidebars, footers, and `noscript` content. JSON uses the same Markdown conversion as `format: "markdown"`. Links and images retain duplicates and source order, including elements inside templates. Their URLs resolve against the final response URL and the first `<base href>` when present. Conversion uses `@mdream/js`.
+In http mode, HTML preserves the decoded response body. Bodies are decoded with WHATWG rules: a byte-order mark first, then the `Content-Type` charset, then a `<meta>` charset in the first 1,024 bytes, then UTF-8. Unknown labels fall back to UTF-8, and `iso-8859-1` decodes as windows-1252, as browsers do. In browser modes, HTML is the DOM serialized after scripts run. Browser conversions omit `<noscript>` content from Markdown, text, links, and images, while the HTML format keeps it. Markdown and text cover the whole body, including navigation, sidebars, and footers. JSON uses the same Markdown conversion as `format: "markdown"`. Links and images retain duplicates and source order, including elements inside templates. Their URLs resolve against the final response URL and the first `<base href>` when present. Conversion uses `@mdream/js`.
 
 The default mode is `headed`, so a client needs `browserPath` unless it picks another mode (see [Browser modes](#browser-modes)). `mode: "http"` fetches without a browser. Over HTTPS it sends the request a Chrome navigation would send: the TLS ClientHello, HTTP/2 SETTINGS, WINDOW_UPDATE and priority frames, and the header set and order come from a pinned Chrome profile in [`wreq-js`](https://github.com/sqdshguy/wreq-js), on Linux. The profile is Chrome 149, the newest the binding offers; Chrome 150 and later add ML-DSA signature algorithms, signature-algorithm GREASE and a trust-anchors extension that it cannot send yet, so the profile claims Chrome 149 throughout rather than mixing versions. A scheduled check (`scripts/check-http-identity.ts`) compares the HTTP/2 wire identity with a recorded Chrome 154 capture and flags the profile when it falls behind Chrome stable. HTTP/1.1 requests use Chrome's header order and name case and keep the connection alive, but they are not compared with a Chrome capture, and plain `http://` requests still carry the `sec-ch-ua`, `sec-fetch-*` and `br, zstd` values Chrome sends only to secure origins. Redirects are followed for up to 20 hops, cookies set on one hop are sent on the next, and `url` is the final URL. A body over 32 MiB after decompression (counted before charset decoding) rejects with `RESPONSE_TOO_LARGE`.
 
@@ -83,10 +83,7 @@ In browser modes `locale` sets `navigator.languages`, the `Accept-Language` head
 
 `headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through Xrio's own client over Chrome's DevTools pipe, which sends only a fixed list of DevTools commands, navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once. A captured document over 32 Mi UTF-16 code units rejects with `RESPONSE_TOO_LARGE`.
 
-Current limits, lifted in later releases:
-
-- JSON, XML, and PDF responses return the HTML of Chrome's viewer instead of `UNSUPPORTED_CONTENT_TYPE`. A download or an HTTP 204 rejects with `NETWORK_ERROR` and `details.netError` `net::ERR_ABORTED`.
-- There is no challenge wait, and `waitFor` is not available yet.
+Both modes accept HTML and XHTML. Browser modes reject JSON, XML, PDF, and denied downloads with `UNSUPPORTED_CONTENT_TYPE` before capturing Chrome's viewer. An HTTP 204 that aborts navigation still produces `NETWORK_ERROR` with `details.netError` `net::ERR_ABORTED`.
 
 A browser scrape with `proxy` sends Chrome through a local relay on 127.0.0.1 that lives for that one visit. The relay holds the proxy credentials and dials the proxy itself, so Chrome's argv and profile never carry them. Chrome cannot send the relay a token, so the relay admits any client on 127.0.0.1 while the visit lasts. Chrome resolves no names itself (`--host-resolver-rules=MAP * ^NOTFOUND,EXCLUDE 127.0.0.1`), so target names reach only the proxy. It sends loopback addresses through the relay too (`--proxy-bypass-list=<-loopback>`), and the relay refuses them. WebRTC is limited to proxied traffic, because the profile sets `webrtc.ip_handling_policy` to `disable_non_proxied_udp`. A browser scrape without a proxy starts no relay. The relay records why a tunnel or request failed, so a browser scrape reports a 407, an unreachable proxy and a refused tunnel with the same codes as http mode. That holds when Chrome's navigation fails with a proxy or tunnel net error, and when the relay recorded a failure for the host of a plain `http://` document, whose error response Chrome would otherwise return as the page. A `net::ERR_PROXY_*` or `net::ERR_TUNNEL_*` the relay cannot attribute stays `NETWORK_ERROR` with `details.netError`.
 
@@ -139,7 +136,31 @@ result.data;
 
 When the caller aborts, the scrape rejects with `signal.reason`, as native APIs do.
 
-HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded with the same charset rules as HTML, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
+HTML responses return normally even for HTTP 403, 404, or 500; callers decide which statuses are acceptable. A returned result has no `error` property. Responses without a `text/html` or `application/xhtml+xml` content type, or with no response body (such as HTTP 204), reject with `code: "UNSUPPORTED_CONTENT_TYPE"`. The error's `details` hold the response's `url`, `status`, `headers`, and `cookies`, plus `body`: at most the first 65,536 bytes of the response body, decoded with the same charset rules as HTML, so plain-text and JSON block pages stay inspectable. `body` is empty when there is no body. In browser modes, `body` holds the response body when it is at most 64 KiB, and is empty otherwise. Reading those bytes counts toward `timeoutMs`; reading stops at the limit and the rest of the body is cancelled.
+
+### Browser waits
+
+Browser modes wait for recognised challenges after DOMContentLoaded. Each round polls every 250 ms for a loaded replacement document, for at most 20 seconds. Each tick also reads the current page when the page read as a challenge at the round start, and the wait ends early as `passed_in_place` once it has seen the page stop being a challenge, at the next tick after the page clears. A page that did not read as a challenge at the round start keeps waiting for its replacement document. A scrape permits three rounds across vendors and reserves one second for capture. Each captured document uses its own request log.
+
+`block.challenge` is `null` when no challenge wait occurred, including every http scrape. Otherwise it contains `rounds`, with `vendor`, `rule`, and `waitedMs`, and one outcome:
+
+- `passed`: a replacement document passed the challenge.
+- `passed_in_place`: the page replaced the challenge body within the same document.
+- `rounds_exhausted`: the captured document was still a challenge when no wait remained, such as after three rounds.
+- `budget_exhausted`: a round used its full 20-second budget.
+- `deadline`: the scrape deadline shortened a round.
+
+For content that appears after scripts run, set a selector:
+
+```ts
+const result = await xrio.scrape({
+  url: "https://example.com/products",
+  format: "markdown",
+  waitFor: { selector: "#prices li" },
+});
+```
+
+The selector must match for 500 ms within one document. A scrape whose challenge wait ended in `rounds_exhausted`, `budget_exhausted` or `deadline` skips the selector wait and returns the captured challenge with its block report. Invalid selectors and `waitFor` in http mode produce `INVALID_OPTIONS`. If the selector does not hold before the capture reserve, `WAIT_FOR_TIMEOUT` includes the response details, `selector`, and captured `html`. If the overall deadline expires first, the error is `TIMEOUT`.
 
 ### Identity report
 
@@ -168,13 +189,13 @@ In browser modes it is `{ mode, seed, record, digests, binary, exit, surfaces, o
 - `vendor`: the vendor whose evidence decided the verdict, or `null`.
 - `evidence`: every rule that fired, ordered by tier, each `{ rule, tier, family, vendor, detail }`. `detail` is at most 160 characters. It never includes cookie values, query-string values (only the names of parameters that have one), or the value of a header that matters only by its presence.
 - `passedChallenges`: rules that prove a challenge was issued but did not decide, because the captured document is not shaped like an interstitial. The challenge was passed, or the page was served around it.
-- `challenge`: `null` in http mode. Browser modes will report their challenge wait here, with its `outcome` and one entry per round; until that wait exists, it is `null` there too.
+- `challenge`: `null` in http mode and when no challenge wait occurred. Otherwise it contains the wait's `outcome` and one entry per round. See [Browser waits](#browser-waits).
 
 Evidence has tiers. E0 decides alone. E1 decides alone. Its markup rules fire only on a document small enough to be an interstitial (at most 50,000 characters of HTML and 5,000 of text, counted as code points with entities decoded), and the vendor sensors that also load on working pages need fewer than 100 text characters as well; an E1 challenge cookie needs only an HTML response. Every pass over the markup, the request URLs and the cookies runs in time linear in its input, and markup rules that apply at any size read only the first 1 MiB of the document, so a hostile page cannot stall classification. E2 is weak, and decides `blocked` only when two signals come from different families; one family is `suspect`. Status codes are E2 at most, so a 403 alone is never `blocked`. E3 suppressors cancel E1 and E2 for non-HTML, JSON and XML bodies; a body counts as XML only when it opens with an XML declaration and holds no `<html>` element. These page-shape thresholds come from [crawl4ai](https://github.com/unclecode/crawl4ai) (Apache-2.0).
 
 Responses that are not HTML are classified without a body, and the report rides on the `UNSUPPORTED_CONTENT_TYPE` error's `details.block`. Only E0 evidence that needs no body, such as a challenge header or a waiting-room URL, can decide them; status and request-log evidence is listed but does not decide, and the challenge cookie, which needs an HTML response, is not checked.
 
-In browser modes the classifier sees every request URL from the page's frames and workers. In http mode the request URLs are only the redirect chain, so two limits apply:
+In browser modes the classifier sees the captured document's request URLs from the page's frames and workers, capped at 2,000 entries per document. In http mode the request URLs are only the redirect chain, so two limits apply:
 
 - a single-page-app shell (a small document with little text and a lot of script) can read as `suspect`;
 - a challenge issued by a page's scripts, or seen only in its subresource requests, is invisible without a browser.
@@ -198,6 +219,7 @@ try {
 | --------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `INVALID_OPTIONS`                 | `TypeError` | An option is invalid: format, mode, browser path, timeout, proxy, `maxBrowsers`, `browserArgs`, or a URL that is relative, not HTTP(S), or has credentials.                       |
 | `UNSUPPORTED_CONTENT_TYPE`        | `XrioError` | The response is not HTML. `details` holds the response details, a body preview, and the block report.                                                                             |
+| `WAIT_FOR_TIMEOUT`                | `XrioError` | A browser selector did not hold for 500 ms. `details` includes the response details, `selector`, and captured `html`.                                                             |
 | `TIMEOUT`                         | `XrioError` | The scrape deadline (`timeoutMs`) passed.                                                                                                                                         |
 | `NETWORK_ERROR`                   | `XrioError` | DNS failure, refused or reset connection, protocol error, or a proxy that could not reach the target (502–504). Browser modes add `details.netError`, Chrome's `net::ERR_*` name. |
 | `TLS_CERTIFICATE_INVALID`         | `XrioError` | The certificate was rejected.                                                                                                                                                     |

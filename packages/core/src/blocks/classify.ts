@@ -41,6 +41,7 @@ export interface BlockReport {
 }
 
 export interface BlockInput {
+  challenge?: ChallengeReport | null;
   response: ResponseDetails;
   html: string | undefined;
   requestUrls: readonly string[];
@@ -349,7 +350,7 @@ const decide = (e0: BlockEvidence[], e1: BlockEvidence[], e2: BlockEvidence[]): 
   return e2.length > 0 ? { decidedBy: e2, verdict: "suspect" } : { decidedBy: [], verdict: "ok" };
 };
 
-const classify = ({ html, requestUrls, response }: BlockInput): BlockReport => {
+const classify = ({ html, requestUrls, response, challenge = null }: BlockInput): BlockReport => {
   const captured = html !== undefined;
   const isHtml = captured && isHtmlType(response.headers["content-type"]);
   const document = documentEvidence(response, html ?? "", isHtml);
@@ -375,7 +376,7 @@ const classify = ({ html, requestUrls, response }: BlockInput): BlockReport => {
   const { decidedBy, verdict } = decide(deciding, weak("E1"), weak("E2"));
 
   return {
-    challenge: null,
+    challenge,
     evidence,
     passedChallenges: passed.map((entry) => entry.rule),
     vendor: decidedBy.find((entry) => entry.vendor !== null)?.vendor ?? null,
@@ -391,7 +392,7 @@ export const classifyResponse = (input: BlockInput): BlockReport => {
       error instanceof Error ? `${error.name}: ${error.message}` : "classification failed";
 
     return {
-      challenge: null,
+      challenge: input.challenge ?? null,
       evidence: [
         {
           detail: shorten(reason),
@@ -406,4 +407,12 @@ export const classifyResponse = (input: BlockInput): BlockReport => {
       verdict: "unknown",
     };
   }
+};
+
+export const challengeCandidate = (input: BlockInput): BlockEvidence | undefined => {
+  const report = classifyResponse(input);
+
+  return report.evidence.find(
+    (entry) => isChallengeIssued(entry) && !report.passedChallenges.includes(entry.rule),
+  );
 };

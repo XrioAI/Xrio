@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
+import { extractContent } from "../../content/formats.ts";
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import { knobOf } from "../../humanizer/contracts.ts";
@@ -182,6 +183,7 @@ const ALLOWED_PAIRS = new Set([
   "shared_worker Runtime.runIfWaitingForDebugger",
   "other Network.enable",
   "other Runtime.runIfWaitingForDebugger",
+  "main Network.getResponseBody",
 ]);
 
 const FAVICON = "/favicon.ico";
@@ -302,6 +304,7 @@ const load = async (
   browserArgs: readonly string[] = [],
   pins: IdentityIntent = noPins,
   random: () => Uint8Array = fixedRandom,
+  waitFor?: { selector: string },
 ): Promise<SourceDocument> => {
   const browsers = plannedScrapes(cdpDriver, 1, { random });
   using deadline = startDeadline(timeoutMs, signal);
@@ -315,6 +318,7 @@ const load = async (
       pins,
       proxy: undefined,
       url: new URL(route, server.origin),
+      waitFor,
     }).document;
   } finally {
     await browsers.close();
@@ -611,13 +615,14 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     },
   );
 
-  it("returns a 403 with an empty body as data", async () => {
-    const document = await load(mode, "/empty-403");
-
-    expect(document).toMatchObject({
-      cookies: ["empty-403=1; Path=/"],
-      headers: { "x-page": "empty-403" },
-      status: 403,
+  it("rejects an untyped empty 403 and keeps its response details", async () => {
+    await expect(load(mode, "/empty-403")).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: {
+        cookies: ["empty-403=1; Path=/"],
+        headers: { "x-page": "empty-403" },
+        status: 403,
+      },
     });
   });
 
@@ -632,17 +637,70 @@ describe.each(MODES)("documents captured, %s", (mode) => {
     expect(markerOf(xhtml.html.replace("/>", ">"))).toBe("xhtml");
   });
 
-  it("captures Chrome's viewers for JSON, XML and PDF until Phase 4 gates them", async () => {
-    const [json, xml, pdf] = [
-      await load(mode, "/json"),
-      await load(mode, "/xml"),
-      await load(mode, "/pdf"),
-    ];
+  it.each([
+    { contentType: "application/json", route: "/json" },
+    { contentType: "application/xml", route: "/xml" },
+    { contentType: "application/pdf", route: "/pdf" },
+  ])("rejects $route before capturing Chrome's viewer", async ({ route, contentType }) => {
+    await expect(load(mode, route)).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: {
+        block: { challenge: null },
+        headers: { "content-type": contentType },
+        status: 200,
+      },
+    });
+  });
+});
 
-    expect(json.html).toContain('<pre>{"page":"json"}</pre>');
-    expect(xml.html).toContain("xml-viewer-style");
-    expect(pdf.html).toContain("pdf_embedder.css");
-    expect([json.status, xml.status, pdf.status]).toStrictEqual([200, 200, 200]);
+describe.each(MODES)("documents captured whatever their URL or readiness, %s", (mode) => {
+  serveFixturePages();
+
+  it("captures a URL with a fragment, which the response URL never carries", async () => {
+    const source = await load(mode, "/static#section");
+    expect(markerOf(source.html)).toBe("static");
+  });
+
+  it("returns an empty text/html 403, which commits Chrome's error page, with its response details", async () => {
+    const source = await load(mode, "/empty-html-403");
+    expect(source).toMatchObject({
+      cookies: ["empty-html-403=1; Path=/"],
+      headers: { "content-type": "text/html", "x-page": "empty-html-403" },
+      status: 403,
+    });
+  });
+
+  it("captures a document left loading by document.open() without close()", async () => {
+    const source = await load(mode, "/document-open", 20_000, undefined, [], noPins, fixedRandom, {
+      selector: "#written",
+    });
+
+    expect(markerOf(source.html)).toBe("document-written");
+  });
+});
+
+describe.each(MODES)("converted formats, %s", (mode) => {
+  serveFixturePages();
+
+  it("omits noscript from every converted format and retains the captured HTML", async () => {
+    const source = await load(mode, "/noscript");
+    const { content } = extractContent(source);
+    expect(source.html).toContain("<noscript>");
+    expect(content.markdown).not.toContain("Fallback");
+    expect(content.text).not.toContain("Fallback");
+    expect(content.links).toStrictEqual([]);
+    expect(content.images).toStrictEqual([]);
+  });
+});
+
+describe.each(MODES)("body previews, %s", (mode) => {
+  serveFixturePages();
+
+  it("previews a JSON body in details.body", async () => {
+    await expect(load(mode, "/json")).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { body: '{"page":"json"}' },
+    });
   });
 });
 
@@ -946,7 +1004,7 @@ describe.each(MODES)("the drawn device, %s", (mode) => {
 describe.each(MODES)("browser lifecycle, %s", (mode) => {
   serveFixturePages();
 
-  it.each(["/download", "/no-content"])("reports %s as an aborted navigation", async (route) => {
+  it.each(["/no-content"])("reports %s as an aborted navigation", async (route) => {
     await expect(load(mode, route)).rejects.toMatchObject({
       code: "NETWORK_ERROR",
       details: { netError: "net::ERR_ABORTED" },
@@ -1075,11 +1133,23 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
 describe.each(MODES)("downloads on our CDP client, %s", (mode) => {
   serveFixturePages();
 
+  it("keeps the final response details of a redirected download", async () => {
+    await expect(load(mode, "/redirect-to-download")).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: {
+        headers: { "content-type": "application/octet-stream" },
+        status: 200,
+        url: `${server.origin}/download`,
+      },
+    });
+  });
+
   it("lets a denied download settle, so teardown finishes well within its budget", async () => {
     using stages = recordStages();
 
     await expect(load(mode, "/download")).rejects.toMatchObject({
-      details: { netError: "net::ERR_ABORTED" },
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      details: { headers: { "content-type": "application/octet-stream" }, status: 200 },
     });
     expect(stages.timings.get("teardown")).toBeLessThan(DOWNLOAD_TEARDOWN_BOUND_MS);
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -1126,7 +1196,7 @@ const visitFailures: VisitFailure[] = [
     route: "/static",
   },
   {
-    error: { code: "NETWORK_ERROR", details: { netError: "net::ERR_ABORTED" } },
+    error: { code: "UNSUPPORTED_CONTENT_TYPE" },
     name: "a download",
     route: "/download",
   },
@@ -1222,4 +1292,58 @@ describe.each(MODES)("browser visits, %s", (mode) => {
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
     },
   );
+});
+
+describe.each(MODES)("challenge waits, %s", (mode) => {
+  serveFixturePages();
+
+  it.each([
+    { outcome: "passed", rounds: 1, route: "navigation", timeoutMs: 20_000 },
+    { outcome: "passed_in_place", rounds: 1, route: "in-place", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 1, route: "late-request", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 1, route: "large", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 2, route: "same-vendor", timeoutMs: 20_000 },
+    { outcome: "passed", rounds: 2, route: "two-vendors", timeoutMs: 20_000 },
+    { outcome: "budget_exhausted", rounds: 1, route: "never", timeoutMs: 35_000 },
+    { outcome: "deadline", rounds: 1, route: "never", timeoutMs: 10_000 },
+    { outcome: "rounds_exhausted", rounds: 3, route: "four-challenges", timeoutMs: 20_000 },
+  ])("grades $route as $outcome", async ({ route, rounds, outcome, timeoutMs }) => {
+    const source = await load(mode, `/challenge/${route}`, timeoutMs);
+    expect(source.block.challenge?.outcome).toBe(outcome);
+    expect(source.block.challenge?.rounds).toHaveLength(rounds);
+    expect(source.scriptsRan).toBeTruthy();
+  });
+
+  it("ends an in-place pass at the first poll after the page clears", async () => {
+    const source = await load(mode, "/challenge/in-place", 20_000);
+    expect(source.block.challenge?.rounds).toHaveLength(1);
+    expect(source.block.challenge?.rounds[0]?.waitedMs).toBeLessThan(5000);
+  });
+});
+
+describe.each(MODES)("selector waits, %s", (mode) => {
+  serveFixturePages();
+
+  it("waits for a late selector for 500 ms", async () => {
+    const source = await load(mode, "/late-selector", 20_000, undefined, [], noPins, fixedRandom, {
+      selector: "#ready",
+    });
+
+    expect(source.html).toContain('id="ready"');
+  });
+
+  it("rejects an invalid selector", async () => {
+    await expect(
+      load(mode, "/static", 20_000, undefined, [], noPins, fixedRandom, { selector: "[" }),
+    ).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+  });
+
+  it("captures HTML when the selector never matches", async () => {
+    await expect(
+      load(mode, "/static", 10_000, undefined, [], noPins, fixedRandom, { selector: "#missing" }),
+    ).rejects.toMatchObject({
+      code: "WAIT_FOR_TIMEOUT",
+      details: { selector: "#missing", status: 200 },
+    });
+  });
 });

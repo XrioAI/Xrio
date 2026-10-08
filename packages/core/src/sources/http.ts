@@ -9,7 +9,9 @@ import type { HttpIdentityReport } from "../humanizer/report.ts";
 import { startRelay } from "../proxy/relay.ts";
 import type { Relay } from "../proxy/relay.ts";
 import type { SourceDocument } from "../types.ts";
+import { isHtmlContentType, unsupportedContentType } from "./content-type.ts";
 import { decodeBody } from "./decode.ts";
+import { networkFailure } from "./net-error.ts";
 import { responseDetailsFrom } from "./response.ts";
 import type { VisitPlan } from "./visit.ts";
 
@@ -46,8 +48,6 @@ const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 const LEADING_EMPTY_VALUES = /^(?:\s*,)+/u;
 
 const FAILURE_AFTER_REQUEST_URI = /for uri \(\S*\): (?<failure>.*)$/su;
-
-const CERTIFICATE_FAILURE = /CERTIFICATE_VERIFY_FAILED/u;
 
 const TUNNEL_FAILURE = /ProxyConnect/u;
 
@@ -118,19 +118,16 @@ const readDocument = async (
 ): Promise<SourceDocument> => {
   const details = responseDetailsFrom(response.url, response.status, response.headers);
   const contentType = details.headers["content-type"] ?? "";
-  const [mediaType] = contentType.split(";");
   const body = NULL_BODY_STATUSES.has(response.status) ? null : response.body;
 
-  if (mediaType.trim().toLowerCase() !== "text/html" || body === null) {
-    const received = body === null ? "no response body" : contentType || "no content type";
-    const block = classifyResponse({ html: undefined, requestUrls, response: details });
+  if (body === null) {
+    throw unsupportedContentType(details, requestUrls, null);
+  }
+
+  if (!isHtmlContentType(contentType)) {
     const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline, response.url);
 
-    throw new XrioError(
-      "UNSUPPORTED_CONTENT_TYPE",
-      `Expected HTML from ${redactUrl(response.url)}; received ${received}.`,
-      { details: { ...details, block, body: decodeBody(preview.bytes, contentType) } },
-    );
+    throw unsupportedContentType(details, requestUrls, decodeBody(preview.bytes, contentType));
   }
 
   const { bytes, truncated } = await readBody(body, MAX_BODY_BYTES, deadline, response.url);
@@ -151,11 +148,19 @@ const readDocument = async (
     html,
     identity: identityNow(),
     requestUrls,
+    scriptsRan: false,
   };
 };
 
 const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {
   const failure = FAILURE_AFTER_REQUEST_URI.exec(error.message)?.groups?.failure ?? "";
+
+  if (failure === "") {
+    return new XrioError("NETWORK_ERROR", `The request to ${redactUrl(url)} failed.`, {
+      cause: error,
+      details: undefined,
+    });
+  }
 
   if (TUNNEL_FAILURE.test(failure)) {
     return (
@@ -167,21 +172,7 @@ const translateRequestError = (error: RequestError, url: URL, relay: Relay): Xri
     );
   }
 
-  if (CERTIFICATE_FAILURE.test(failure)) {
-    return new XrioError(
-      "TLS_CERTIFICATE_INVALID",
-      `The certificate for ${url.host} was rejected.`,
-      {
-        cause: error,
-        details: undefined,
-      },
-    );
-  }
-
-  return new XrioError("NETWORK_ERROR", `The request to ${redactUrl(url)} failed.`, {
-    cause: error,
-    details: undefined,
-  });
+  return networkFailure(url, failure, error);
 };
 
 const fetchOnce = async (

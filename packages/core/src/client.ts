@@ -58,6 +58,7 @@ export type {
   ScrapeOptions,
   ScrapeResult,
   StructuredContent,
+  WaitFor,
 } from "./types.ts";
 
 const formats = {

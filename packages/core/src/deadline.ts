@@ -23,6 +23,7 @@ interface Stage extends Disposable {
 export type AbortReason = "expired" | "caller" | "ownership" | "client-closed";
 
 export interface Deadline {
+  readonly clock: Clock;
   readonly abortReason: () => AbortReason | undefined;
   readonly signal: AbortSignal;
   readonly remainingMs: () => number;
@@ -118,6 +119,7 @@ const observeExpiry = (expiry: Expiry, aborted: AbortSource): Deadline => {
     abortReason: aborted.reason,
     boundTo: (other, reason = "caller") =>
       observeExpiry(expiry, joinedAbort([aborted, { reason: () => reason, signal: other }])),
+    clock,
     remainingMs,
     signal,
     stageTimeout,

@@ -148,55 +148,108 @@ describe(MainFrameEvents, () => {
         [MAIN, lifecycle("T1", "DOMContentLoaded")],
       ]),
     ).toStrictEqual([
-      { type: "request", url: `${ORIGIN}/redirect/1` },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        requestId: "L1",
+        sessionId: "S1",
+        type: "document-request",
+        url: `${ORIGIN}/redirect/1`,
+      },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        sessionId: "S1",
+        type: "request",
+        url: `${ORIGIN}/redirect/1`,
+      },
       {
         headers: [
           ["Location", "/redirect/2"],
           ["Set-Cookie", "hop1=1; Path=/"],
         ],
         requestId: "L1",
+        sessionId: "S1",
         status: 302,
         type: "raw-headers",
       },
       {
         hop: {
+          frameId: "T1",
+          fromCache: false,
+          hasExtraInfo: true,
           headers: [["location", "/redirect/2"]],
+          hopIndex: 0,
           isRedirect: true,
           loaderId: "L1",
           requestId: "L1",
+          sessionId: "S1",
           status: 302,
           url: `${ORIGIN}/redirect/1`,
         },
         type: "document-response",
       },
-      { type: "request", url: `${ORIGIN}/redirect/2` },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        requestId: "L1",
+        sessionId: "S1",
+        type: "document-request",
+        url: `${ORIGIN}/redirect/2`,
+      },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        sessionId: "S1",
+        type: "request",
+        url: `${ORIGIN}/redirect/2`,
+      },
       {
         headers: [
           ["Location", "/landing"],
           ["Set-Cookie", "hop2=1; Path=/"],
         ],
         requestId: "L1",
+        sessionId: "S1",
         status: 302,
         type: "raw-headers",
       },
       {
         hop: {
+          frameId: "T1",
+          fromCache: false,
+          hasExtraInfo: true,
           headers: [["location", "/landing"]],
+          hopIndex: 1,
           isRedirect: true,
           loaderId: "L1",
           requestId: "L1",
+          sessionId: "S1",
           status: 302,
           url: `${ORIGIN}/redirect/2`,
         },
         type: "document-response",
       },
-      { type: "request", url: `${ORIGIN}/landing` },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        requestId: "L1",
+        sessionId: "S1",
+        type: "document-request",
+        url: `${ORIGIN}/landing`,
+      },
+      { frameId: "T1", loaderId: "L1", sessionId: "S1", type: "request", url: `${ORIGIN}/landing` },
       {
         hop: {
+          frameId: "T1",
+          fromCache: false,
+          hasExtraInfo: true,
           headers: [["content-type", "text/html"]],
+          hopIndex: 2,
           isRedirect: false,
           loaderId: "L1",
           requestId: "L1",
+          sessionId: "S1",
           status: 200,
           url: `${ORIGIN}/landing`,
         },
@@ -205,11 +258,12 @@ describe(MainFrameEvents, () => {
       {
         headers: [["Set-Cookie", "landing=1; Path=/"]],
         requestId: "L1",
+        sessionId: "S1",
         status: 200,
         type: "raw-headers",
       },
-      { frameId: "T1", loaderId: "L1", type: "commit" },
-      { frameId: "T1", loaderId: "L1", type: "dom-content-loaded" },
+      { frameId: "T1", loaderId: "L1", sessionId: "S1", type: "commit" },
+      { frameId: "T1", loaderId: "L1", sessionId: "S1", type: "dom-content-loaded" },
     ]);
   });
 
@@ -230,10 +284,11 @@ describe(MainFrameEvents, () => {
       ...sequence.map((event) => [MAIN, event] as const),
     ]);
 
-    expect(events.map(({ type }) => type)).toStrictEqual(["request", ...types]);
+    expect(events.map(({ type }) => type)).toStrictEqual(["document-request", "request", ...types]);
     expect(events.find(({ type }) => type === "raw-headers")).toStrictEqual({
       headers: [["Set-Cookie", "a=1"]],
       requestId: "L1",
+      sessionId: "S1",
       status: 200,
       type: "raw-headers",
     });
@@ -274,9 +329,27 @@ describe(MainFrameEvents, () => {
         ],
       ]),
     ).toStrictEqual([
-      { type: "request", url: "https://cross.test/framed" },
-      { type: "request", url: "https://cross.test/pixel" },
-      { type: "request", url: `${ORIGIN}/from-worker` },
+      {
+        frameId: "F2",
+        loaderId: "L1",
+        sessionId: "S1",
+        type: "request",
+        url: "https://cross.test/framed",
+      },
+      {
+        frameId: "F2",
+        loaderId: "L1",
+        sessionId: "S2",
+        type: "request",
+        url: "https://cross.test/pixel",
+      },
+      {
+        frameId: "W3",
+        loaderId: "L1",
+        sessionId: "S3",
+        type: "request",
+        url: `${ORIGIN}/from-worker`,
+      },
     ]);
   });
 
@@ -289,7 +362,9 @@ describe(MainFrameEvents, () => {
         [MAIN, lifecycle("T1", "load")],
         [MAIN, lifecycle("T1", "DOMContentLoaded")],
       ]),
-    ).toStrictEqual([{ frameId: "T1", loaderId: "L1", type: "dom-content-loaded" }]);
+    ).toStrictEqual([
+      { frameId: "T1", loaderId: "L1", sessionId: "S1", type: "dom-content-loaded" },
+    ]);
   });
 
   it("keeps only http and https requests in the request log", () => {
@@ -304,8 +379,20 @@ describe(MainFrameEvents, () => {
         ].map((url) => [MAIN, requestSent({ requestId: url, type: "Image", url })] as const),
       ),
     ).toStrictEqual([
-      { type: "request", url: "http://example.test/plain" },
-      { type: "request", url: "https://example.test/secure" },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        sessionId: "S1",
+        type: "request",
+        url: "http://example.test/plain",
+      },
+      {
+        frameId: "T1",
+        loaderId: "L1",
+        sessionId: "S1",
+        type: "request",
+        url: "https://example.test/secure",
+      },
     ]);
   });
 });

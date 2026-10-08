@@ -18,6 +18,7 @@ interface XrioErrorDetails {
   TLS_CERTIFICATE_INVALID: undefined;
   TOO_MANY_REDIRECTS: undefined;
   UNSUPPORTED_CONTENT_TYPE: ResponseDetails & { body: string; block: BlockReport };
+  WAIT_FOR_TIMEOUT: ResponseDetails & { html: string; selector: string };
 }
 
 export type XrioErrorCode = keyof XrioErrorDetails;
@@ -68,6 +69,7 @@ const errorClasses = {
   TLS_CERTIFICATE_INVALID: XrioError,
   TOO_MANY_REDIRECTS: XrioError,
   UNSUPPORTED_CONTENT_TYPE: XrioError,
+  WAIT_FOR_TIMEOUT: XrioError,
 } satisfies Record<ErrorCode, TypeErrorConstructor | typeof XrioError>;
 
 const isErrorCode = (code: unknown): code is ErrorCode =>

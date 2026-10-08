@@ -54,6 +54,14 @@ describe("the CDP commands our driver may send", () => {
     expectTypeOf(
       send(worker, "Network.enable", { maxResourceBufferSize: 0, maxTotalBufferSize: 0 }, signal),
     ).resolves.toBeVoid();
+    expectTypeOf(
+      send(
+        main,
+        "Network.enable",
+        { maxResourceBufferSize: 65_536, maxTotalBufferSize: 1_048_576 },
+        signal,
+      ),
+    ).resolves.toBeVoid();
 
     // @ts-expect-error Runtime.enable is never sent.
     void send(main, "Runtime.enable", {}, signal);
@@ -95,7 +103,16 @@ describe("the CDP commands our driver may send", () => {
     void send(main, "Target.setAutoAttach", PAGES_ONLY, signal);
     // @ts-expect-error Service workers do not auto-attach.
     void send(serviceWorker, "Target.setAutoAttach", EVERY_CHILD, signal);
-    // @ts-expect-error Network bodies are not buffered.
+    // @ts-expect-error Only the main page buffers bodies, so workers never do.
     void send(worker, "Network.enable", {}, signal);
+    void send(
+      worker,
+      "Network.enable",
+      // @ts-expect-error Only the main page buffers bodies, so workers never do.
+      { maxResourceBufferSize: 65_536, maxTotalBufferSize: 1_048_576 },
+      signal,
+    );
+    // @ts-expect-error The main page buffers bodies for the content-type preview.
+    void send(main, "Network.enable", { maxResourceBufferSize: 0, maxTotalBufferSize: 0 }, signal);
   });
 });

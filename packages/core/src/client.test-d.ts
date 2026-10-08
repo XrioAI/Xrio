@@ -20,6 +20,7 @@ import type {
   IdentityTell,
   InvalidOptionsError,
   ScrapeFormat,
+  ScrapeOptions,
   ScrapeResult,
   StructuredContent,
   XrioErrorCode,
@@ -36,6 +37,28 @@ declare const error: unknown;
 declare const deadline: Deadline;
 
 describe("XrioClient types", () => {
+  it("allows selectors only in browser scrape options", () => {
+    const browser: ScrapeOptions = {
+      browserPath: "/chrome",
+      format: "html",
+      mode: "headless",
+      url: "https://example.test/",
+      waitFor: { selector: "#ready" },
+    };
+
+    expectTypeOf(browser.waitFor).toEqualTypeOf<{ selector: string } | undefined>();
+
+    // @ts-expect-error HTTP mode cannot wait on browser selectors.
+    const http: ScrapeOptions = {
+      format: "html",
+      mode: "http",
+      url: "https://example.test/",
+      waitFor: { selector: "#ready" },
+    };
+
+    expectTypeOf(http).toEqualTypeOf<ScrapeOptions>();
+  });
+
   it("keeps the proxy manager internal while exposing typed configuration", () => {
     const config = {
       proxy: {

@@ -20,6 +20,32 @@ const missingBrowserPath = {
 const refusalFor = (message: string) => ({ code: "INVALID_OPTIONS", message, name: "TypeError" });
 
 describe("scrape options", () => {
+  it("accepts browser selectors and refuses them when the effective mode is HTTP", () => {
+    const browser = resolveClientOptions({ browserPath: "/chrome", mode: "headless" });
+    const http = resolveClientOptions({ mode: "http" });
+    expect(
+      resolveScrapeIntent({ ...page, waitFor: { selector: "#ready" } }, browser).source,
+    ).toMatchObject({ waitFor: { selector: "#ready" } });
+    expect(() => resolveScrapeIntent({ ...page, waitFor: { selector: "#ready" } }, http)).toThrow(
+      expect.objectContaining(refusalFor("waitFor is only supported in browser modes.")),
+    );
+    expect(() =>
+      // @ts-expect-error Explicit HTTP mode rejects browser selectors at compile time too.
+      resolveScrapeIntent({ ...page, mode: "http", waitFor: { selector: "#ready" } }, browser),
+    ).toThrow(expect.objectContaining(refusalFor("waitFor is only supported in browser modes.")));
+  });
+
+  it("rejects an empty selector at the options boundary", () => {
+    const defaults = resolveClientOptions({ browserPath: "/chrome" });
+    expect(() => resolveScrapeIntent({ ...page, waitFor: { selector: " " } }, defaults)).toThrow(
+      expect.objectContaining(refusalFor("waitFor must contain a non-empty selector string.")),
+    );
+    // @ts-expect-error JavaScript callers can supply malformed selector options.
+    expect(() => resolveScrapeIntent({ ...page, waitFor: null }, defaults)).toThrow(
+      expect.objectContaining(refusalFor("waitFor must contain a non-empty selector string.")),
+    );
+  });
+
   it("inherits the complete client mode unless the call supplies its own", () => {
     const defaults = resolveClientOptions({ browserPath: "/client-browser", mode: "headed" });
     const inherited = resolveScrapeIntent(page, defaults);
