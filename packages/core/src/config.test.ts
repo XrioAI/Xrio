@@ -87,11 +87,10 @@ describe("configuration discovery", () => {
       writeFileSync(path.join(directory, "package.json"), '{"type":"module"}');
       writeFileSync(
         path.join(directory, `xrio.config.${extension}`),
-        'export default { proxy: { url: "http://user-{session}:secret@proxy.test" }, browser: { futureSetting: true } };',
+        'export default { proxy: { url: "http://user-{session}:secret@proxy.test" }, };',
       );
 
       expect(loadXrioConfig(directory)).toStrictEqual({
-        browser: { futureSetting: true },
         proxy: {
           session: { format: "numeric", length: 8 },
           url: "http://user-{session}:secret@proxy.test",
@@ -99,6 +98,30 @@ describe("configuration discovery", () => {
       });
     },
   );
+
+  it.each([
+    "{ browser: { futureSetting: true } }",
+    '{ proxy: { url: "http://proxy.test" }, proxxy: {} }',
+    '{ "http://user:secret@proxy.test": {} }',
+  ])("rejects unknown top-level keys in %s", (config) => {
+    const directory = workspace();
+
+    writeFileSync(path.join(directory, "xrio.config.mjs"), `export default ${config};`);
+
+    let failure: unknown;
+
+    try {
+      loadXrioConfig(directory);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "INVALID_OPTIONS",
+      message: "xrio.config supports only these top-level keys: proxy.",
+    });
+    expect(inspect(failure, { depth: Infinity })).not.toContain("secret");
+  });
 
   it("does not search parents and rejects ambiguous filenames", () => {
     const directory = workspace();

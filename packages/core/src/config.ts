@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-object-parameters -- This module is the file boundary where untrusted configuration is parsed into named sections. */
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -8,10 +9,29 @@ import type { ProxyConfig } from "./proxy/config.ts";
 
 export interface XrioConfig {
   proxy?: ProxyConfig;
-  /** Other managers validate their own configuration sections. */
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Preserve other managers' sections at the file boundary; their owners validate them.
-  [section: string]: unknown;
 }
+
+const SECTIONS = {
+  proxy: resolveProxyConfig,
+} as const satisfies Record<keyof XrioConfig, (value: unknown) => unknown>;
+
+const isSection = (key: string): key is keyof typeof SECTIONS => Object.hasOwn(SECTIONS, key);
+
+const rejectUnknownSections = (config: object): void => {
+  if (!Object.keys(config).every(isSection)) {
+    throw invalidOptions(
+      `xrio.config supports only these top-level keys: ${Object.keys(SECTIONS).join(", ")}.`,
+    );
+  }
+};
+
+const resolveSections = (config: object): XrioConfig => {
+  rejectUnknownSections(config);
+
+  return "proxy" in config && config.proxy !== undefined
+    ? { proxy: SECTIONS.proxy(config.proxy) }
+    : {};
+};
 
 const CONFIG_FILES = ["xrio.config.ts", "xrio.config.mts", "xrio.config.js", "xrio.config.mjs"];
 
@@ -59,9 +79,5 @@ export const loadXrioConfig = (directory = process.cwd()): XrioConfig => {
     throw invalidOptions("xrio.config must default-export a configuration object.");
   }
 
-  const config = loaded.default;
-
-  return "proxy" in config && config.proxy !== undefined
-    ? { ...config, proxy: resolveProxyConfig(config.proxy) }
-    : { ...config };
+  return resolveSections(loaded.default);
 };
