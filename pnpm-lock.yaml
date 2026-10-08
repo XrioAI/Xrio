@@ -290,6 +290,9 @@ importers:
       '@xrio/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       devtools-protocol:
         specifier: 0.0.1707781
         version: 0.0.1707781

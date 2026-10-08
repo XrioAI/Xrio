@@ -4,8 +4,12 @@ import { parseProxy } from "../options.ts";
 
 type SessionTemplate = `${string}{session}${string}`;
 
+export const SESSION_FORMATS = ["numeric", "alphanumeric"] as const;
+
+type SessionFormat = (typeof SESSION_FORMATS)[number];
+
 interface SessionOptions {
-  format?: "numeric" | "alphanumeric";
+  format?: SessionFormat;
   length?: number;
 }
 
@@ -15,7 +19,7 @@ export type ProxyConfig =
 
 export const SESSION_PLACEHOLDER = "{session}";
 
-const MAX_SESSION_LENGTH = 256;
+export const MAX_SESSION_LENGTH = 256;
 
 const isSessionTemplate = (value: string): value is SessionTemplate =>
   value.includes(SESSION_PLACEHOLDER);
@@ -32,7 +36,9 @@ const sessionOptions = (value: unknown): Required<SessionOptions> => {
   const format = "format" in value && value.format !== undefined ? value.format : "numeric";
   const length = "length" in value && value.length !== undefined ? value.length : 8;
 
-  if (format !== "numeric" && format !== "alphanumeric") {
+  const resolvedFormat = SESSION_FORMATS.find((candidate) => candidate === format);
+
+  if (resolvedFormat === undefined) {
     throw invalidOptions("proxy.session.format must be numeric or alphanumeric.");
   }
 
@@ -53,7 +59,7 @@ const sessionOptions = (value: unknown): Required<SessionOptions> => {
     );
   }
 
-  return { format, length };
+  return { format: resolvedFormat, length };
 };
 
 export const resolveProxyConfig = (value: unknown): ProxyConfig => {

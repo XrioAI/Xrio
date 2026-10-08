@@ -13,7 +13,10 @@ import type {
   Coverage,
   CoverageReason,
   CoveredSurface,
+  DisplayOptions,
   ErrorCode,
+  HardwareOptions,
+  HostConfig,
   HttpIdentityReport,
   IdentityMismatch,
   IdentityReport,
@@ -97,6 +100,76 @@ describe("XrioClient types", () => {
     void suppliedId;
   });
 
+  it("types the host section and rejects unknown top-level keys", () => {
+    const config = {
+      $schema: "./node_modules/@xrio/core/xrio.schema.json",
+      host: {
+        browserArgs: ["--no-sandbox"],
+        display: {
+          screen: [{ height: 1080, weight: 2, width: 1920 }],
+          taskbar: { bottom: 48 },
+          window: "maximized",
+        },
+        hardware: { cores: 8, gpuPolicy: "matched", memoryGb: 16 },
+        locale: "de-DE",
+        timezone: "Europe/Berlin",
+      },
+      proxy: { url: "http://proxy.test" },
+    } satisfies XrioConfig;
+
+    expectTypeOf(config.host.hardware.memoryGb).toEqualTypeOf<16>();
+    expectTypeOf<NonNullable<HostConfig["display"]>>().toEqualTypeOf<DisplayOptions>();
+    expectTypeOf<NonNullable<HostConfig["hardware"]>>().toEqualTypeOf<HardwareOptions>();
+    expectTypeOf<HardwareOptions["memoryGb"]>().toEqualTypeOf<
+      | 2
+      | 4
+      | 8
+      | 16
+      | 32
+      | readonly ({ value: 2 | 4 | 8 | 16 | 32 } & { weight: number })[]
+      | undefined
+    >();
+    expectTypeOf<HardwareOptions["gpuPolicy"]>().toEqualTypeOf<
+      "matched" | "announce" | undefined
+    >();
+
+    const unknownSection = {
+      // @ts-expect-error Only proxy and host are config sections.
+      browser: { futureSetting: true },
+    } satisfies XrioConfig;
+
+    const unknownHostField = {
+      // @ts-expect-error Host takes locale, timezone, display, hardware and browserArgs.
+      host: { dpr: 2 },
+    } satisfies XrioConfig;
+
+    const unmeasuredMemory = {
+      // @ts-expect-error Reportable memory is 2, 4, 8, 16 or 32 GB.
+      host: { hardware: { memoryGb: 12 } },
+    } satisfies XrioConfig;
+
+    const positionedWindow = {
+      host: { display: { window: { height: 800, width: 1200, x: 10, y: 20 } } },
+    } satisfies XrioConfig;
+
+    const halfPositionedWindow = {
+      // @ts-expect-error A window takes x and y together or neither.
+      host: { display: { window: { height: 800, width: 1200, x: 10 } } },
+    } satisfies XrioConfig;
+
+    const sizedMaximizedRow = {
+      // @ts-expect-error A maximized row takes no size or position.
+      host: { display: { window: [{ maximized: true, weight: 1, width: 1200 }] } },
+    } satisfies XrioConfig;
+
+    void unknownSection;
+    void unknownHostField;
+    void unmeasuredMemory;
+    void positionedWindow;
+    void halfPositionedWindow;
+    void sizedMaximizedRow;
+  });
+
   it("the public API requires explicit formats and complete browser-mode overrides", () => {
     const client = new XrioClient({ mode: "http" });
     const browser = new XrioClient({ browserPath: "/browser" });
@@ -166,19 +239,30 @@ describe("XrioClient types", () => {
     void new XrioClient({ mode: "http" }).scrape({ browserArgs, format: "html", url });
   });
 
+  it("takes a config file path as a client option", () => {
+    const url = "https://example.com";
+
+    expectTypeOf<ClientOptions["configFile"]>().toEqualTypeOf<string | undefined>();
+    void new XrioClient({ configFile: "deploy/xrio.config.ts", mode: "http" });
+    // @ts-expect-error true is not a path.
+    void new XrioClient({ configFile: true, mode: "http" });
+    // @ts-expect-error configFile belongs to the client, not to a scrape.
+    void new XrioClient({ mode: "http" }).scrape({ configFile: "a.ts", format: "html", url });
+  });
+
   it("excludes identity settings from the client and scrape APIs", () => {
     const client = new XrioClient({ mode: "http" });
     const url = "https://example.com";
     expectTypeOf<
       Extract<keyof ClientOptions, "locale" | "timezone" | "display" | "hardware">
     >().toBeNever();
-    // @ts-expect-error Locale is selected from the route.
+    // @ts-expect-error Locale belongs to xrio.config's host section.
     void new XrioClient({ locale: "de-DE", mode: "http" });
-    // @ts-expect-error Timezone is selected from the route.
+    // @ts-expect-error Timezone belongs to xrio.config's host section.
     void new XrioClient({ browserPath: "/browser", timezone: "Europe/Berlin" });
-    // @ts-expect-error Display is not a client option.
+    // @ts-expect-error Display belongs to xrio.config's host section.
     void new XrioClient({ browserPath: "/browser", display: {} });
-    // @ts-expect-error Hardware is not a client option.
+    // @ts-expect-error Hardware belongs to xrio.config's host section.
     void new XrioClient({ browserPath: "/browser", hardware: {} });
     // @ts-expect-error Locale is not a scrape override.
     void client.scrape({ format: "html", locale: "de-DE", url });

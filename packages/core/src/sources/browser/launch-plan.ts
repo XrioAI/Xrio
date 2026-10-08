@@ -126,9 +126,12 @@ export const directoriesIn = (scratchDir: string): LaunchDirectories => ({
 const isSwitch = (entry: unknown): entry is string =>
   typeof entry === "string" && !entry.includes("\0") && SWITCH.test(entry);
 
-export const parseBrowserArgs = (browserArgs: readonly string[]): readonly string[] => {
+export const parseBrowserArgs = (
+  browserArgs: readonly string[],
+  field = "browserArgs",
+): readonly string[] => {
   if (!Array.isArray(browserArgs)) {
-    throw invalidOptions("browserArgs must be an array of strings.");
+    throw invalidOptions(`${field} must be an array of strings.`);
   }
 
   const args: string[] = [];
@@ -136,7 +139,7 @@ export const parseBrowserArgs = (browserArgs: readonly string[]): readonly strin
   for (const [index, entry] of browserArgs.entries()) {
     if (!isSwitch(entry)) {
       throw invalidOptions(
-        `browserArgs entry ${index} must be a switch such as --name or --name=value.`,
+        `${field} entry ${index} must be a switch such as --name or --name=value.`,
       );
     }
 
@@ -147,7 +150,7 @@ export const parseBrowserArgs = (browserArgs: readonly string[]): readonly strin
     const name = switchNameOf(entry);
 
     if (isOwnedSwitch(name) || isManagedSwitch(name)) {
-      throw invalidOptions(`browserArgs cannot include ${name}, which Xrio manages.`);
+      throw invalidOptions(`${field} cannot include ${name}, which Xrio manages.`);
     }
 
     args.push(entry);

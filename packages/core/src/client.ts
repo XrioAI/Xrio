@@ -35,6 +35,15 @@ export { isXrioError, XrioError } from "./errors.ts";
 export type { XrioConfig } from "./config.ts";
 
 export type {
+  DisplayOptions,
+  HardwareOptions,
+  HostConfig,
+  ScreenSize,
+  Taskbar,
+  WindowSize,
+} from "./host-config.ts";
+
+export type {
   BrowserIdentityReport,
   Coverage,
   CoverageReason,
@@ -77,13 +86,15 @@ export class XrioClient {
   readonly #scrapes: Scrapes;
 
   constructor(options: ClientOptions) {
-    this.#defaults = resolveClientOptions(options);
+    const config = loadXrioConfig(options?.configFile);
+
+    this.#defaults = resolveClientOptions(options, config.host);
     this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
 
     this.#scrapes = createScrapes({
       admission: createAdmission(this.#defaults.maxBrowsers),
       comparisonBinary: this.#defaults.browser.browserPath,
-      config: loadXrioConfig(),
+      config,
       fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
       host: this.#hostFacts,
       sessions: anonymousSessions(),

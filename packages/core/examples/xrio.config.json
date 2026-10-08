@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/@xrio/core/xrio.schema.json",
+  "proxy": {
+    "url": "http://customer-{session}:password@proxy.example:8080",
+    "session": { "format": "alphanumeric", "length": 12 }
+  },
+  "host": {
+    "locale": "de-DE",
+    "timezone": "Europe/Berlin",
+    "display": {
+      "screen": [
+        { "width": 1920, "height": 1080, "weight": 3 },
+        { "width": 2560, "height": 1440, "weight": 1 }
+      ],
+      "taskbar": [
+        { "top": 32, "left": 64, "weight": 3 },
+        { "top": 32, "right": 64, "weight": 1 },
+        { "bottom": 48, "weight": 2 }
+      ],
+      "window": [
+        { "maximized": true, "weight": 4 },
+        { "width": 1440, "height": 900, "x": 100, "y": 100, "weight": 1 }
+      ]
+    },
+    "hardware": {
+      "cores": [
+        { "value": 8, "weight": 3 },
+        { "value": 12, "weight": 1 }
+      ],
+      "memoryGb": 16,
+      "gpuPolicy": "announce"
+    },
+    "browserArgs": ["--disable-dev-shm-usage"]
+  }
+}

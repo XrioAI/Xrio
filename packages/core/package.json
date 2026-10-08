@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "files": [
-    "dist"
+    "dist",
+    "xrio.schema.json"
   ],
   "type": "module",
   "sideEffects": false,
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@xrio/typescript-config": "workspace:*",
+    "ajv": "8.20.0",
     "devtools-protocol": "0.0.1707781"
   },
   "engines": {

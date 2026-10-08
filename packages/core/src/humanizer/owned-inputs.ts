@@ -108,6 +108,14 @@ export const CHROME_ACCEPT_LANGUAGES = {
 const isShippedLocale = (tag: string): tag is keyof typeof CHROME_ACCEPT_LANGUAGES =>
   Object.hasOwn(CHROME_ACCEPT_LANGUAGES, tag);
 
+export const measuredLocalesFor = (tag: string): readonly string[] => {
+  const [language] = tag.split("-");
+
+  return Object.keys(CHROME_ACCEPT_LANGUAGES).filter(
+    (measured) => measured.split("-")[0] === language,
+  );
+};
+
 export const chromeAcceptLanguages = (tag: string): readonly string[] | undefined =>
   isShippedLocale(tag) ? CHROME_ACCEPT_LANGUAGES[tag] : undefined;
 
@@ -253,7 +261,9 @@ export const FORK_DUMP_SWITCH = "--xrio-dump-config";
 
 export const GL_PERSONA_MAX_NAME = 128;
 
-const GL_PERSONA_NAME = /^(?!\.)[\w.-]+$/u;
+export const GL_PERSONA_NAME_PATTERN = "^(?!\\.)[\\w.-]+$";
+
+const GL_PERSONA_NAME = new RegExp(GL_PERSONA_NAME_PATTERN, "u");
 
 export const isGlPersonaName = (
   name: unknown,

@@ -261,3 +261,51 @@ export const drawDisplay = (seed: Seed, tables: DisplayTables = {}): DrawnDispla
 
   return { layout: name, screen, window };
 };
+
+const describeArea = (area: Bounds, screen: PresentedDevice["screen"]): string =>
+  `the ${area.width}x${area.height} work area at ${area.x},${area.y} of a ${screen.width}x${screen.height} screen`;
+
+const contains = (area: Bounds, window: Bounds): boolean =>
+  window.x >= area.x &&
+  window.y >= area.y &&
+  window.x + window.width <= area.x + area.width &&
+  window.y + window.height <= area.y + area.height;
+
+const boundsOf = (area: Bounds, pin: WindowPin): Bounds =>
+  pin.kind === "maximized"
+    ? area
+    : { height: pin.height, width: pin.width, ...(pin.position ?? { x: area.x, y: area.y }) };
+
+const misfitOf = (screen: PresentedDevice["screen"], pin: WindowPin): string | undefined => {
+  const area = workAreaOf(screen);
+  const window = boundsOf(area, pin);
+  const size = `${window.width}x${window.height}`;
+
+  if (window.width < CHROME_MIN_WINDOW.width || window.height < CHROME_MIN_WINDOW.height) {
+    return `display leaves a ${size} window in ${describeArea(area, screen)}, under Chrome's ${CHROME_MIN_WINDOW.width}x${CHROME_MIN_WINDOW.height} px minimum window.`;
+  }
+
+  return contains(area, window)
+    ? undefined
+    : `display window ${size} at ${window.x},${window.y} does not fit ${describeArea(area, screen)}.`;
+};
+
+const MAXIMIZED: readonly WindowPin[] = [{ kind: "maximized" }];
+
+export const displayMisfit = (tables: DisplayTables): string | undefined => {
+  for (const { height, width } of tables.screens ?? DESKTOP_SCREENS) {
+    for (const { insets } of layoutsFor(width, tables)) {
+      const screen = { height, width, workArea: insetsOf(insets) };
+
+      for (const pin of tables.windows ?? MAXIMIZED) {
+        const misfit = misfitOf(screen, pin);
+
+        if (misfit !== undefined) {
+          return misfit;
+        }
+      }
+    }
+  }
+
+  return undefined;
+};
