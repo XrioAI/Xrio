@@ -89,7 +89,7 @@ const looksLikeJson = (body: string): boolean => {
 };
 
 const looksLikeXml = (body: string): boolean =>
-  body.trimStart().slice(0, 5).toLowerCase() === "<?xml";
+  body.trimStart().slice(0, 5).toLowerCase() === "<?xml" && !body.toLowerCase().includes("<html");
 
 const isCoveredHost = (host: string, suffix: string): boolean => {
   const bareHost = host.toLowerCase().replace(/\.$/u, "");
