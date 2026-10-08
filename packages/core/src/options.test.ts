@@ -312,7 +312,7 @@ describe("browserArgs option", () => {
       mode: "http",
     });
 
-    expect(resolveScrapeIntent(page, defaults).source).toStrictEqual({ mode: "http" });
+    expect(resolveScrapeIntent(page, defaults).source).toStrictEqual({ headers: {}, mode: "http" });
     expect(defaults.browser).toStrictEqual({
       browserArgs: ["--no-sandbox"],
       browserPath: "/browser",

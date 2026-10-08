@@ -1,10 +1,10 @@
 import type { Deadline } from "../../deadline.ts";
 import { invalidOptions, XrioError } from "../../errors.ts";
+import { pollAfter } from "../../poll.ts";
 import type { ResponseDetails, WaitFor } from "../../types.ts";
 import { CAPTURE_RESERVE_MS } from "./challenge.ts";
 import type { ChallengeDocuments } from "./challenge.ts";
 import { documentKey } from "./documents.ts";
-import { pollAfter } from "./poll.ts";
 import { DriverError } from "./port.ts";
 import type { DocumentHop, DriverBrowser } from "./port.ts";
 

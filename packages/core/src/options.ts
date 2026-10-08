@@ -3,8 +3,12 @@ import { invalidOptions, redactUrl } from "./errors.ts";
 import { resolveHostConfig } from "./host-config.ts";
 import type { HostSettings } from "./host-config.ts";
 import type { DeviceRecord } from "./humanizer/contracts.ts";
+import { parseRequestHeaders } from "./humanizer/request-headers.ts";
 import { recordOverrides } from "./humanizer/surfaces.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
+import { resolveScrapeConfig } from "./scrape-config.ts";
+import type { ScrapeSettings } from "./scrape-config.ts";
+import { parseSeedCookies } from "./seed-cookies.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientOptions,
@@ -175,6 +179,7 @@ const explicitProxy = (value: string): ProxyEndpoint => {
 export const resolveClientOptions = (
   options?: ClientOptions,
   host: HostSettings = resolveHostConfig(),
+  scrape: ScrapeSettings = resolveScrapeConfig(),
 ): ClientDefaults => {
   if (options === undefined) {
     throw invalidOptions("browserPath is required for headed mode.");
@@ -196,6 +201,7 @@ export const resolveClientOptions = (
     identity: host.identity,
     maxBrowsers,
     mode: mode.mode,
+    retries: scrape.retries,
     route: proxy,
     session: { kind: "anonymous" },
   };
@@ -211,7 +217,11 @@ const sourceIntent = (
       throw invalidOptions("waitFor is only supported in browser modes.");
     }
 
-    return mode;
+    return { ...mode, headers: parseRequestHeaders(options.headers) };
+  }
+
+  if (options.headers !== undefined) {
+    throw invalidOptions("headers is only supported in http mode.");
   }
 
   const source = { ...mode, browserArgs: defaults.browser.browserArgs };
@@ -261,10 +271,13 @@ export const resolveScrapeIntent = (
   }
 
   const source = sourceIntent(options, defaults, mode);
+  const cookies = parseSeedCookies(options.cookies, url);
 
   return {
+    cookies,
     format,
     identity: defaults.identity,
+    retries: defaults.retries,
     route: proxy,
     session: defaults.session,
     signal,

@@ -45,11 +45,39 @@ The default mode is `headed`, so a client needs `browserPath` unless it picks an
 
 Configure a client default with `new XrioClient({ mode: "http" })` or override it on an individual scrape. Overrides never change the client.
 
+### Request controls
+
+`headers` accepts a record of header names and string values in HTTP mode. Existing profile headers retain their positions; new headers follow them. After a redirect crosses an origin boundary, Xrio drops every caller header for the rest of that attempt, including `authorization`. The identity profile owns `user-agent`, `accept-language`, and the client hints Chrome sends, such as `sec-ch-ua` and `sec-ch-ua-platform`. The `cookies` option owns `cookie`. Supplying any of them rejects with `INVALID_OPTIONS`. Browser modes reject `headers` at runtime and in TypeScript. On a client whose default mode is `http`, TypeScript accepts `headers` only when the scrape also sets `mode: "http"`, because a scrape without `mode` is typed for the default `headed` mode.
+
+`cookies` accepts an array of `Set-Cookie` strings in every mode. Each seed is scoped to the scrape's target URL. A cookie without `Domain` is host-only and belongs only to the target host. A `Domain` must name the target host or one of its parents, and must not be a public suffix. Private suffixes such as `github.io` count as public suffixes. A public-suffix `Domain` equal to the target host, such as `Domain=localhost` on `http://localhost/`, makes a host-only cookie. `Path`, `Secure`, `HttpOnly`, `SameSite`, and expiration attributes determine the rest of the scope. HTTP mode uses its cookie jar. Browser modes set the cookies before navigation and let Chrome enforce their scope. HTTP mode never sends a `Secure` cookie over plain `http://`, `localhost` included, while Chrome treats `localhost` as secure and sends it there. Cookies without `HttpOnly` are visible to page scripts.
+
+`result.cookies` holds the `Set-Cookie` values of the final document only. They belong to the host of `result.url`, so they can seed a scrape of a URL on that host. After a redirect to another host, a scrape of the original URL would bind the host-only ones to the original host and skip the ones whose `Domain` is the final host.
+
+A malformed `Set-Cookie` string rejects with `INVALID_OPTIONS`. A well-formed seed that breaks one of the rules below is skipped in every mode, and the scrape continues without it. A browser scrape also skips a seed that Chrome itself refuses. Each skip publishes a `cookie-skipped` event on `xrio:event`. Its `detail` is JSON with the cookie's `name` and the `reason`, never its value. Each reason names one rule:
+
+- `domain-mismatch`. The `Domain` is not the target host or one of its parents.
+- `public-suffix-domain`. The `Domain` is a public suffix other than the target host.
+- `prefix-rules`. The name starts with `__Secure-`, `__Host-`, `__Http-`, or `__Host-Http-` in any letter case, and the cookie breaks that prefix's rules. Every prefix needs `Secure`. `__Http-` and `__Host-Http-` also need `HttpOnly`. `__Host-` and `__Host-Http-` also need a host-only cookie with a path of exactly `/`. Without `Path`, the path is the directory of the target URL.
+- `too-large`. The name and value together are longer than 4096 characters.
+- `path-too-long`. The path is longer than 1024 characters, including a path taken from the target URL.
+- `same-site-none-insecure`. The cookie sets `SameSite=None` without `Secure`.
+- `refused-by-chrome`. Chrome refused the seed for a rule the reasons above do not cover, such as a `Path` with non-ASCII characters. Only browser modes check for it.
+
+```ts
+const result = await xrio.scrape({
+  url: "https://example.com/account",
+  format: "html",
+  mode: "http",
+  headers: { authorization: "Bearer your-token" },
+  cookies: ["session=your-session; Path=/; Secure; HttpOnly; SameSite=Lax"],
+});
+```
+
 ### Proxy configuration and identity
 
 Proxy selection is **scrape argument → client argument → `config.proxy.url`**. Overrides select a complete concrete URL without changing the file or inheriting provider session settings. A `{session}` template is supported only in the config; passing one to the client or scrape method rejects with `INVALID_OPTIONS`.
 
-`XrioClient` loads config once when constructed. It loads the file named by the `configFile` client option, or else the default, which is one `xrio.config.ts`, `.mts`, `.js`, `.mjs`, or `.json` in the process's working directory. `configFile` is a path resolved against the working directory, and its extension must be one of those five. The default never looks at the calling script's directory, so a script started from a subdirectory, a service or a worker passes `configFile`. A named file that does not exist or has another extension rejects with `INVALID_OPTIONS`, and the error names its absolute path. Without `configFile`, no file means no configured proxy and no host settings, and the client says so in one `XrioWarning` with the code `XRIO_NO_CONFIG`, printed once per process and working directory. Node's `--disable-warning=XRIO_NO_CONFIG` flag, on the command line or in `NODE_OPTIONS`, silences only this warning. More than one candidate in the working directory rejects with `INVALID_OPTIONS`. Invalid configuration also fails with `INVALID_OPTIONS`. A `.json` file holds the object itself, as one JSON document; a file that is not valid JSON, or whose top level is not an object, rejects with `INVALID_OPTIONS`, and the error never quotes the file, because a parser's message would repeat proxy credentials. The module formats default-export a synchronous object. The top-level keys are `proxy`, `host` and `$schema`, and any other key rejects with `INVALID_OPTIONS`. `$schema` must be a string when present, and Xrio ignores it. TypeScript uses Node's native type stripping: use erasable types, explicit relative import extensions, and no top-level `await` or tsconfig path aliases. Use `.mts` or `.mjs` for an ESM config inside a CommonJS project. Config modules follow Node's module cache; there is no hot reload. The package exports `XrioConfig` for typing this file.
+`XrioClient` loads config once when constructed. It loads the file named by the `configFile` client option, or else the default, which is one `xrio.config.ts`, `.mts`, `.js`, `.mjs`, or `.json` in the process's working directory. `configFile` is a path resolved against the working directory, and its extension must be one of those five. The default never looks at the calling script's directory, so a script started from a subdirectory, a service or a worker passes `configFile`. A named file that does not exist or has another extension rejects with `INVALID_OPTIONS`, and the error names its absolute path. Without `configFile`, no file means no configured proxy, no host settings and no retries, and the client says so in one `XrioWarning` with the code `XRIO_NO_CONFIG`, printed once per process and working directory. Node's `--disable-warning=XRIO_NO_CONFIG` flag, on the command line or in `NODE_OPTIONS`, silences only this warning. More than one candidate in the working directory rejects with `INVALID_OPTIONS`. Invalid configuration also fails with `INVALID_OPTIONS`. A `.json` file holds the object itself, as one JSON document; a file that is not valid JSON, or whose top level is not an object, rejects with `INVALID_OPTIONS`, and the error never quotes the file, because a parser's message would repeat proxy credentials. The module formats default-export a synchronous object. The top-level keys are `proxy`, `host`, `scrape` and `$schema`, and any other key rejects with `INVALID_OPTIONS`. `$schema` must be a string when present, and Xrio ignores it. TypeScript uses Node's native type stripping: use erasable types, explicit relative import extensions, and no top-level `await` or tsconfig path aliases. Use `.mts` or `.mjs` for an ESM config inside a CommonJS project. Config modules follow Node's module cache; there is no hot reload. The package exports `XrioConfig` for typing this file.
 
 ```ts
 const xrio = new XrioClient({ mode: "headless", browserPath, configFile: "deploy/xrio.config.ts" });
@@ -69,7 +97,7 @@ export default {
 
 Exactly one literal `{session}` in the username or password signals a managed route. The coordinator creates one internal `ProxyManager`, expands the initial session once, and keeps that connection for the client. `session` options default to eight numeric characters; `alphanumeric` and integer lengths from 1 to 256 are supported. The generated ID is never written back to the config. A URL without the placeholder is preserved unchanged.
 
-Automatic rotation and scrape retries are deferred. `shouldRotateSession()` and `changeSession()` remain unchanged on the internal class for later integration; scrape outcomes do not call them. Explicit client/scrape proxies are always unmanaged. The manager, metadata types, and loader are not public package exports.
+Automatic proxy rotation is deferred. Retries use the same selected route. `shouldRotateSession()` and `changeSession()` remain unchanged on the internal class for later integration; scrape outcomes do not call them. Explicit client/scrape proxies are always unmanaged. The manager, metadata types, and loader are not public package exports.
 
 `info.ts` owns the metadata HTTP requests, using the existing HTTP client and relay to route through the exact proxy, including DNS. These requests reject redirects and never fall back to a direct connection. The manager does not perform scrape requests.
 
@@ -147,6 +175,21 @@ export default {
 
 `browserArgs` is a list of Chrome switches for every browser scrape of the client, described under Browser modes. A `browserArgs` passed to the client replaces the config's list whole, an empty list included, and with neither the client adds none.
 
+### Scrape settings
+
+The `scrape` section of `xrio.config` sets policy for every scrape of a client. Like `host`, a client reads it once when it is constructed, a mistake rejects the constructor with `INVALID_OPTIONS`, and a scrape cannot override it.
+
+```ts
+// xrio.config.ts
+import type { XrioConfig } from "@xrio/core";
+
+export default {
+  scrape: { retries: 2 },
+} satisfies XrioConfig;
+```
+
+`retries` is the number of additional attempts a scrape makes, defaulting to `0`. Only `NETWORK_ERROR`, `PROXY_UNREACHABLE`, `PROXY_CONNECT_FAILED`, and `BROWSER_CRASHED` are retried. HTTP statuses and block reports do not trigger retries. All attempts share the original `timeoutMs` deadline. Before retry number `n`, Xrio waits a random duration below `min(30_000, 1_000 * 2 ** (n - 1))` milliseconds. It skips the delay when the remaining deadline cannot fit it and a one-second minimum attempt. It stops retrying when less than one second remains. Caller cancellation also stops the wait. If the deadline expires during retry teardown, the scrape rejects while `close()` continues to wait for cleanup. `retries` must be a nonnegative integer.
+
 ### Browser modes
 
 `headed`, the default, and `headless` require `browserPath`, the path to a Chrome or Chromium executable, version 150 or newer. Headed mode needs a display; on a Linux server, run under `xvfb-run`. An explicit browser-mode override must supply its own path. Each scrape launches a fresh Chrome with a fresh profile through Xrio's own client over Chrome's DevTools pipe, which sends only a fixed list of DevTools commands, navigates, waits for DOMContentLoaded, and captures the doctype and `documentElement.outerHTML`. The capture runs in an isolated world; Xrio's own code never runs in the page's main world and adds no init scripts. `url`, `status`, `headers`, and `cookies` describe the document that was captured, and statuses are data here too, so a 401 or 403 page is returned. If the page replaces its document during the capture, Xrio captures the replacement once. A captured document over 32 Mi UTF-16 code units rejects with `RESPONSE_TOO_LARGE`.
@@ -185,7 +228,7 @@ await using xrio = new XrioClient({ mode: "headless", browserPath, maxBrowsers: 
 
 `await xrio.close()`, or leaving an `await using` block, rejects queued browser scrapes with `CLIENT_CLOSED` without launching Chrome. Running scrapes, and http scrapes, which never queue, finish under their own deadlines, and close resolves once every scrape has settled and every browser has been torn down. A revisit wanted after close launches no browser and returns the first document. If a Chrome outlives its teardown budget, a `teardown-incomplete` event says so and its profile is left for the startup sweep. A scrape started after `close()` rejects with `CLIENT_CLOSED`. Teardown always runs, even after a timeout: Chrome gets 2 seconds to close, then its process group is killed and its profile is deleted. Xrio installs no process signal handlers. If Node dies without closing, Chrome exits when its end of the debugging pipe closes, and the next process to launch a browser deletes profiles left behind for more than an hour, and the scratch directory of a fork probe as soon as the process that started it is gone, stopping the probe if it still runs.
 
-Stage timings (`scratch-sweep`, `queue`, `identity`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (the identity chosen for each browser, published as JSON before it launches so a failed scrape can still be attributed, fork probes, host renderer reads in `host-renderer-probed`, font stack checks, the Chrome argv of each browser a scrape launches as a JSON array in `browser-argv`, published before `browser-launched` and also when the launch then fails, which the fork probe's and the host renderer read's own launches do not publish, browser launches, document rebinds, raw-header fallbacks, dropped request URLs, and an incomplete teardown or startup sweep) on `xrio:event`. Each stage timing names its `outcome`, `ok`, `failed` or `aborted`, and the `scrapeId` of the scrape it belongs to, teardown included, and an event published during a scrape carries that `scrapeId` too. Nothing is printed by default.
+Stage timings (`scratch-sweep`, `queue`, `identity`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (the identity chosen for each browser, published as JSON before it launches so a failed scrape can still be attributed, fork probes, host renderer reads in `host-renderer-probed`, font stack checks, the Chrome argv of each browser a scrape launches as a JSON array in `browser-argv`, published before `browser-launched` and also when the launch then fails, which the fork probe's and the host renderer read's own launches do not publish, browser launches, document rebinds, raw-header fallbacks, dropped request URLs, skipped seed cookies in `cookie-skipped`, and an incomplete teardown or startup sweep) on `xrio:event`. Each stage timing names its `outcome`, `ok`, `failed` or `aborted`, and the `scrapeId` of the scrape it belongs to, teardown included, and an event published during a scrape carries that `scrapeId` too. Nothing is printed by default.
 
 `timeoutMs` is one deadline for the whole scrape, covering queueing and launching a browser, connecting, redirects, reading the body or capturing the page, and building the result. It defaults to 60,000 and must be a positive integer no greater than 2,147,483,647. When it passes, the scrape rejects with an `XrioError` whose `code` is `TIMEOUT`. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
 
@@ -303,7 +346,7 @@ try {
 | `CLIENT_CLOSED`                   | `XrioError` | `scrape()` was called after `close()`, or `close()` rejected a queued browser scrape.                                                                                             |
 | `SESSION_UNAVAILABLE`             | `XrioError` | The scrape lost its session's ownership before it finished. `details.reason` is `ownership-lost`.                                                                                 |
 
-The client's own error is kept as `cause`. There are no retries. Messages never include URL or proxy credentials.
+The client's own error is kept as `cause`. Retries default to zero, and `scrape.retries` in `xrio.config` raises them. Messages never include URL or proxy credentials.
 
 Migration:
 

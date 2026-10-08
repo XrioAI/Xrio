@@ -127,6 +127,10 @@ const BOTH_ACCEPT: readonly Conformance[] = [
   },
   { config: { host: { timezone: "UTC" } }, name: "a zone" },
   { config: { host: { browserArgs: [] } }, name: "an empty browserArgs list" },
+  { config: { scrape: {} }, name: "an empty scrape section" },
+  { config: { scrape: { retries: 0 } }, name: "no retries" },
+  { config: { scrape: { retries: 3 } }, name: "three retries" },
+  { config: { scrape: { retries: Number.MAX_SAFE_INTEGER } }, name: "the most retries" },
 ].map((entry) => ({ ...entry, loader: "accepts", schema: "accepts" }));
 
 const BOTH_REJECT: readonly Conformance[] = [
@@ -203,6 +207,16 @@ const BOTH_REJECT: readonly Conformance[] = [
   {
     config: { host: { display: { window: { maximized: true } } } },
     name: "a single maximized window written as a row",
+  },
+  { config: { scrape: 2 }, name: "a scrape section that is not an object" },
+  { config: { scrape: { timeoutMs: 1000 } }, name: "an unknown scrape key" },
+  { config: { scrape: { retries: -1 } }, name: "negative retries" },
+  { config: { scrape: { retries: 1.5 } }, name: "fractional retries" },
+  { config: { scrape: { retries: "2" } }, name: "retries written as text" },
+  { config: { scrape: { retries: null } }, name: "null retries" },
+  {
+    config: { scrape: { retries: Number.MAX_SAFE_INTEGER + 1 } },
+    name: "retries past a safe integer",
   },
 ].map((entry) => ({ ...entry, loader: "rejects", schema: "rejects" }));
 

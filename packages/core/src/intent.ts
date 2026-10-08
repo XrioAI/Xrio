@@ -1,9 +1,10 @@
 import type { CacheDir } from "./cache-dir.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
+import type { CookieSeeds } from "./seed-cookies.ts";
 import type { ProxyEndpoint, ScrapeFormat, WaitFor } from "./types.ts";
 
 type SourceIntent =
-  | { readonly mode: "http" }
+  | { readonly mode: "http"; readonly headers: Readonly<Record<string, string>> }
   | {
       readonly mode: "headless" | "headed";
       readonly browserPath: string;
@@ -17,6 +18,8 @@ interface SessionIntent {
 
 export interface ScrapeIntent {
   readonly url: URL;
+  readonly retries: number;
+  readonly cookies: CookieSeeds;
   readonly format: ScrapeFormat;
   readonly timeoutMs: number;
   readonly signal: AbortSignal | undefined;
@@ -28,7 +31,7 @@ export interface ScrapeIntent {
 
 type BrowserIntent = Extract<SourceIntent, { mode: "headless" | "headed" }>;
 
-export type ClientDefaults = Pick<ScrapeIntent, "identity" | "session" | "route"> & {
+export type ClientDefaults = Pick<ScrapeIntent, "identity" | "session" | "route" | "retries"> & {
   readonly cacheDir: CacheDir;
   readonly maxBrowsers: number | undefined;
   readonly mode: SourceIntent["mode"];

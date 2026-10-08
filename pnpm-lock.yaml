@@ -283,6 +283,9 @@ importers:
       socks:
         specifier: 2.8.10
         version: 2.8.10
+      tldts:
+        specifier: 7.4.16
+        version: 7.4.16
       wreq-js:
         specifier: 3.2.0
         version: 3.2.0
@@ -3236,6 +3239,10 @@ packages:
   tldts-icann@7.4.16:
     resolution: {integrity: sha512-an/Hu/iTuWk9/nSmLLd90sf4IynZ/qL4uojFPZSU7a04IM+RnQ62VL9yezC2gaugUXdmDy7lPoUxcTwsvQUiDQ==}
 
+  tldts@7.4.16:
+    resolution: {integrity: sha512-QwBER5KMR86IIjpIiO7H/Z3IMJPsZ1A6RKPAqzTTgOyUQUSt9FdnKcqhTaJmkY6HVrgouZHZR0ncK5QxvmnQeg==}
+    hasBin: true
+
   to-regex-range@5.0.1:
     resolution: {integrity: sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==}
     engines: {node: '>=8.0'}
@@ -5839,6 +5846,10 @@ snapshots:
   tldts-core@7.4.16: {}
 
   tldts-icann@7.4.16:
+    dependencies:
+      tldts-core: 7.4.16
+
+  tldts@7.4.16:
     dependencies:
       tldts-core: 7.4.16
 

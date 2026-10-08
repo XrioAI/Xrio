@@ -28,6 +28,7 @@ export interface InternalEvent {
     | "font-settlement-failed"
     | "browser-argv"
     | "browser-launched"
+    | "cookie-skipped"
     | "cdp-message-dropped"
     | "document-rebind"
     | "document-state-dropped"

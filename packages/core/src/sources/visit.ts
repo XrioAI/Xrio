@@ -2,6 +2,7 @@ import type { DeviceRecord, HostCapabilities } from "../humanizer/contracts.ts";
 import type { HttpPlan, IdentityPlan } from "../humanizer/humanizer.ts";
 import type { ScrapeIntent } from "../intent.ts";
 import type { HeldDeadline } from "../lifetime.ts";
+import type { SeedCookie } from "../seed-cookies.ts";
 import type { Slot } from "../slot.ts";
 import type { ProxyEndpoint, SourceDocument } from "../types.ts";
 import type { Closed } from "./browser/chrome-scope.ts";
@@ -18,6 +19,7 @@ export type VisitPlan =
   | ({
       readonly kind: "browser";
       readonly url: URL;
+      readonly cookies: readonly SeedCookie[];
       readonly capabilities: HostCapabilities;
       readonly identity: IdentityPlan;
       readonly fonts: FontClaim;
@@ -25,7 +27,9 @@ export type VisitPlan =
     } & BrowserIntent)
   | {
       readonly kind: "http";
+      readonly headers: Readonly<Record<string, string>>;
       readonly url: URL;
+      readonly cookies: readonly SeedCookie[];
       readonly capabilities: HostCapabilities | null;
       readonly identity: HttpPlan;
       readonly proxy: ProxyEndpoint | undefined;

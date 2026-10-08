@@ -1221,6 +1221,11 @@ describe("process ownership reported by the driver", () => {
           onEvent: () => () => {},
           product: { headless: true, major: 154, version: "154.0.8037.57" },
           responseBody: async () => await Promise.resolve(""),
+          seedCookies: async () => {
+            await nextTurn();
+
+            return [];
+          },
         };
       },
     };
