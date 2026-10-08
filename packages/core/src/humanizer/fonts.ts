@@ -7,7 +7,7 @@ export const FONT_CONFIG_NAME = "fonts.conf";
 
 export type FontRead = "full" | "sentinel";
 
-export const FONT_SENTINEL_FAMILIES = ["Ubuntu", "KACSTOffice"] as const;
+export const FONT_SENTINEL_FAMILIES = ["Ubuntu", "Quicksand"] as const;
 
 export const FONT_PROBE_FAMILIES = [
   "DejaVu Sans",
