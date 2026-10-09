@@ -298,6 +298,7 @@ A session keeps:
 - its history for each site it scraped, described under [Session results and warmth](#session-results-and-warmth).
 - its exit region and its proxy sticky id, described under [Exit binding](#exit-binding).
 - the URL of the proxy its last visit used, password included, also described under [Exit binding](#exit-binding).
+- its visit log, one row for each attempt of its scrapes, described under [Session visit log](#session-visit-log).
 
 One scrape holds a session at a time, across every process that shares the session database. A scrape of a held session waits until the holder releases it. The wait counts against `timeoutMs` and shows in the `session` stage. Within one process, scrapes of one session claim it in the order they started. A hold lasts 60 seconds, and the scrape that holds it renews it every 20 seconds. The scrape stops and rejects with `SESSION_UNAVAILABLE` and the reason `ownership-lost` when a renewal fails, or when its hold has 10 seconds left without one. A waiting scrape takes the session over once the holder's process has exited on the same host, or 5 seconds after the hold expired.
 
@@ -341,19 +342,35 @@ A member retires where a named session would be quarantined because Chrome holds
 
 #### Session administration
 
-`client.sessions` lists, deletes and prunes the sessions in `stateDir`:
+`client.sessions` lists, deletes and prunes the sessions in `stateDir`, and reads their visit logs:
 
 ```ts
 const sessions = await xrio.sessions.list();
 await xrio.sessions.delete("account");
 const pruned = await xrio.sessions.prune({ idleFor: 7 * 24 * 60 * 60 * 1000 });
+const blocked = await xrio.sessions.visits("account", { site: "example.com", limit: 20 });
 ```
 
-- `list()` resolves to every session in name order, pool members included, each `{ name, pool, state, visits, lastVisitAt, profileDir, cacheDir, proxy }`. `pool` is present only for a pool member, and `proxy` only when the session's last visit used a proxy. `proxy` is that proxy's stored URL without its password. `state` is `ready`, `quarantined` or `retired`. `visits` counts the session's scrapes that captured a browser document. `lastVisitAt` is the time, in milliseconds since the epoch, of the session's last scrape that captured a browser document, or of its creation. `profileDir` and `cacheDir` are the paths described under [Session results and warmth](#session-results-and-warmth), with the cache placed by the session's stored `browserArgs`.
+- `list()` resolves to every session in name order, pool members included, each `{ name, pool, state, visits, lastVisitAt, profileDir, cacheDir, proxy, outcomes }`. `pool` is present only for a pool member, and `proxy` only when the session's last visit used a proxy. `proxy` is that proxy's stored URL without its password. `state` is `ready`, `quarantined` or `retired`. `visits` counts the session's scrapes that captured a browser document. `lastVisitAt` is the time, in milliseconds since the epoch, of the session's last scrape that captured a browser document, or of its creation. `profileDir` and `cacheDir` are the paths described under [Session results and warmth](#session-results-and-warmth), with the cache placed by the session's stored `browserArgs`. `outcomes` counts the rows of the session's [visit log](#session-visit-log) by outcome, `{ ok, suspect, blocked, queued, unknown, failed }`.
 - `delete(name)` waits until no scrape holds the session, then deletes it with its profile and its history. It takes over a holder that has exited or whose hold expired, as a scrape does. It rejects with `SESSION_UNAVAILABLE` and the reason `quarantined` when Chrome still holds the profile open after 5 seconds, `process-table-unreadable` when the process table cannot be read, and `ownership-lost` when it loses its hold. A name without a session resolves, and a name that is not a non-empty string rejects with `INVALID_OPTIONS`.
 - `prune({ idleFor })` deletes every session whose `lastVisitAt` is more than `idleFor` milliseconds ago, and resolves to the names it deleted. It skips a session that a live scrape holds, and one it cannot delete, such as one whose profile Chrome still holds open. `idleFor` must be a non-negative integer, or the call rejects with `INVALID_OPTIONS`.
+- `visits(name, { site, limit })` resolves to the session's visit log, newest first. `site` keeps the rows of one host name, and `limit` keeps the newest rows. A name without a session resolves to an empty list. A name that is not a non-empty string, a `site` that is not a non-empty string and a `limit` that is not a positive integer reject with `INVALID_OPTIONS`.
 
 Each call has its own 60-second budget and rejects with `TIMEOUT` when the budget runs out. A call made after `close()` starts rejects with `CLIENT_CLOSED`, and `close()` waits for the calls made before it. When a client first opens the session database, Xrio removes the profile directories that an interrupted delete or an interrupted emptying of a profile left behind, and publishes `sweep-incomplete` when it cannot.
+
+#### Session visit log
+
+Xrio logs one row in `xrio.db` for every attempt a scrape makes while it holds a session: an attempt that captured a document, one whose visit failed, one that is retried, and one that failed before Chrome launched, while it waited in the queue, planned its identity or launched. A visit that ends writes its row in the same transaction as its other writes to the session. Deleting a session deletes its log. `client.sessions.visits(name)` returns rows of the form `{ at, site, url, outcome, errorCode, status, vendor, challengeOutcome, challengeRules, exitAddress, proxy, deviceDigest, argv, plan, planDigest }`. A field without a value is `null`, and `challengeRules` is then empty.
+
+- `at` is the time the row was written, in milliseconds since the epoch. `site` is the host name of the scrape's URL, and `url` is that URL, which never holds credentials.
+- `outcome` is the block verdict of a captured document, `ok`, `suspect`, `blocked`, `queued` or `unknown`, or `failed` with the error code in `errorCode`. `status`, `vendor`, `challengeOutcome` and `challengeRules` describe the captured document.
+- `exitAddress` is the address the exit lookup observed, and `proxy` is the proxy URL without its password.
+- `deviceDigest` is the digest of the presented device. It is known for a captured document and for a failed attempt of a session that replays a record.
+- `argv` is the list of arguments Chrome launched with. Two attempts of one session differ only in per-launch paths, such as Chrome's scratch directory, and in the port of the local proxy relay.
+- `plan` is the identity plan the attempt launched Chrome with, as JSON with its keys in sorted order. It holds the plan's data parts `chosen`, `claims`, `expected`, `fontEvidence`, `inputs` and `tells`, without the age of the font evidence. `planDigest` is the hexadecimal SHA-256 of that JSON, so two attempts that launched with different plans show different digests. A session's replays on one host show one digest. Its first attempt shows another, because its plan records that its device was drawn, and because a host that has not yet gathered font evidence plans without it.
+- An attempt that failed before its identity was planned has no `exitAddress`, `proxy`, `plan` or `planDigest`, and an attempt that never launched Chrome has no `argv`.
+
+`argv` and `plan` are evidence only. Xrio never replays them.
 
 #### Exit binding
 

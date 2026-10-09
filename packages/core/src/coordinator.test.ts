@@ -18,7 +18,7 @@ import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
 import { loadHttpDocument } from "./sources/http.ts";
-import type { FinishedVisit, Sources, Visit, VisitPlan } from "./sources/visit.ts";
+import type { AttemptLog, FinishedVisit, Sources, Visit, VisitPlan } from "./sources/visit.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { fixedRandom } from "./testing/fixed-seed.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
@@ -54,14 +54,21 @@ const firstDocument = documentFor("<p>First</p>");
 
 const secondDocument = documentFor("<p>Second</p>");
 
+type StubVisit = Pick<Visit, "closed" | "document">;
+
+interface StubSources {
+  readonly close: Sources["close"];
+  readonly start: (...visit: Parameters<Sources["start"]>) => StubVisit;
+}
+
 interface HarnessOptions {
   readonly bindings?: readonly SessionBinding[];
   readonly config?: Pick<ResolvedConfig, "proxy">;
   readonly retryRandom?: () => number;
   readonly proxyInfo?: Parameters<typeof createScrapes>[0]["proxyInfo"];
-  readonly sources?: Sources;
+  readonly sources?: StubSources;
   readonly admission?: Admission;
-  readonly visits?: readonly Visit[];
+  readonly visits?: readonly StubVisit[];
   readonly failureAt?: string;
   readonly revisit?: boolean;
   readonly cleanupFailure?: string;
@@ -74,6 +81,7 @@ const harness = (options: HarnessOptions = {}) => {
   const events: string[] = [];
   const plans: VisitPlan[] = [];
   const finished: FinishedVisit[] = [];
+  const attempts: AttemptLog[] = [];
   const fontLocales: string[] = [];
   const failure = new XrioError("NETWORK_ERROR", "The fake stage failed.", { details: undefined });
   const owner = new AbortController();
@@ -159,6 +167,10 @@ const harness = (options: HarnessOptions = {}) => {
             warmth = false;
             await Promise.resolve();
           },
+          logAttempt: async (attempt) => {
+            attempts.push(attempt);
+            await Promise.resolve();
+          },
           profile: { kind: "scratch" },
           retire: async () => {
             stage("retire");
@@ -185,7 +197,7 @@ const harness = (options: HarnessOptions = {}) => {
         plans.push(plan);
 
         if (options.sources !== undefined) {
-          return options.sources.start(plan, slot, held);
+          return { argv: Promise.resolve(null), ...options.sources.start(plan, slot, held) };
         }
 
         if (options.throwOnStart === true) {
@@ -204,12 +216,16 @@ const harness = (options: HarnessOptions = {}) => {
           return result;
         };
 
-        return { closed: closed(), document: visit?.document ?? Promise.resolve(selected) };
+        return {
+          argv: Promise.resolve(["--fake-argv", plan.url.href]),
+          closed: closed(),
+          document: visit?.document ?? Promise.resolve(selected),
+        };
       },
     },
   });
 
-  return { events, failure, finished, fontLocales, owner, plans, scrapes };
+  return { attempts, events, failure, finished, fontLocales, owner, plans, scrapes };
 };
 
 const relevantEvents = (events: readonly string[]) =>
@@ -869,7 +885,7 @@ describe(createAnswer, () => {
 const failedVisit = (
   failure: Error,
   closed: Promise<Closed> = Promise.resolve({ exited: true }),
-): Visit => {
+): StubVisit => {
   const document = Promise.reject<SourceDocument>(failure);
   void Promise.allSettled([document]);
 
@@ -1143,6 +1159,94 @@ describe("transport retries", () => {
     await expect(run.answer).resolves.toBe(response);
     await run.settled;
     expect(plans).toHaveLength(1);
+    await scrapes.close();
+  });
+});
+
+describe("attempt log", () => {
+  it.each([
+    { failureAt: "queue", planned: false },
+    { failureAt: "plan", planned: false },
+    { failureAt: "start", planned: true },
+  ])(
+    "logs a start failure at $failureAt with its plan only once one exists",
+    async ({ failureAt, planned }) => {
+      const { attempts, finished, scrapes } = harness({ failureAt });
+      using deadline = startDeadline(1000);
+      const run = scrapes.start(browserIntent, deadline);
+
+      await expect(run.answer).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+      await run.settled;
+      expect({
+        attempts: attempts.map((attempt) => ({
+          argv: attempt.argv,
+          errorCode: attempt.errorCode,
+          outcome: attempt.outcome,
+          planned: /^[0-9a-f]{64}$/u.test(attempt.plan?.digest ?? ""),
+          url: attempt.url,
+        })),
+        finished: finished.length,
+      }).toStrictEqual({
+        attempts: [
+          {
+            argv: null,
+            errorCode: "NETWORK_ERROR",
+            outcome: "failed",
+            planned,
+            url: "https://example.com/",
+          },
+        ],
+        finished: 0,
+      });
+      await scrapes.close();
+    },
+  );
+
+  it("logs a retried attempt and the attempt after it", async () => {
+    const failure = new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+    const { finished, scrapes } = harness({ visits: [failedVisit(failure)] });
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await run.answer;
+    await run.settled;
+    expect(
+      finished.map(({ errorCode, outcome, status }) => ({ errorCode, outcome, status })),
+    ).toStrictEqual([
+      { errorCode: "NETWORK_ERROR", outcome: "failed", status: null },
+      { errorCode: null, outcome: "ok", status: 200 },
+    ]);
+    await scrapes.close();
+  });
+
+  it("finishes a launched visit with the argv its source reported and its plan", async () => {
+    const { attempts, finished, scrapes } = harness();
+    using deadline = startDeadline(1000);
+    const run = scrapes.start(browserIntent, deadline);
+
+    await run.answer;
+    await run.settled;
+    expect({
+      attempts: attempts.length,
+      finished: finished.map(({ argv, outcome, plan, site, status }) => ({
+        argv,
+        outcome,
+        planned: /^[0-9a-f]{64}$/u.test(plan?.digest ?? ""),
+        site,
+        status,
+      })),
+    }).toStrictEqual({
+      attempts: 0,
+      finished: [
+        {
+          argv: ["--fake-argv", "https://example.com/"],
+          outcome: "ok",
+          planned: true,
+          site: "example.com",
+          status: 200,
+        },
+      ],
+    });
     await scrapes.close();
   });
 });

@@ -9,6 +9,7 @@ import { startDeadline } from "../deadline.ts";
 import type { HostCapabilities } from "../humanizer/contracts.ts";
 import type { ProfileUse } from "../sources/browser/browser-process.ts";
 import type { SiteVisit } from "../sources/visit.ts";
+import { attemptLog } from "../testing/attempt-log.ts";
 import { choosePoolMember } from "./pools.ts";
 import { createSessions } from "./session.ts";
 import { SessionStore } from "./store.ts";
@@ -130,7 +131,15 @@ describe("pools", () => {
       const store = new SessionStore(root);
       using deadline = startDeadline(10_000);
       const owner = { epoch: 1, name, token: "owner" };
-      const finish = { exited: true, major: 154, maxAgeMs: 1000, now: 101 };
+
+      const finish = {
+        attempt: attemptLog(),
+        exited: true,
+        major: 154,
+        maxAgeMs: 1000,
+        now: 101,
+      };
+
       const blocked = { ...finish, siteVisit: { ...served, verdict: "blocked" as const } };
 
       try {
@@ -171,7 +180,14 @@ describe("pools", () => {
     try {
       await store.claimPool({ name: "catalog", size: 1 }, claimRequest, chooseCold, deadline);
 
-      const finish = { exited: true, major: 154, maxAgeMs: 1000, now: 110 };
+      const finish = {
+        attempt: attemptLog(),
+        exited: true,
+        major: 154,
+        maxAgeMs: 1000,
+        now: 110,
+      };
+
       const blocked = { ...finish, siteVisit: { ...served, verdict: "blocked" as const } };
       await store.finishVisit(owner, { ...finish, siteVisit: served }, deadline);
       await store.finishVisit(owner, blocked, deadline);
@@ -255,8 +271,8 @@ describe("pools", () => {
       await using newer = await sessions.hold(pool, { capabilities: host(155), seed }, deadline);
       await newer.finish({
         browserArgs: [],
+        ...attemptLog(),
         closed: { exited: true },
-        proxyUrl: null,
         record: null,
         siteVisit: served,
       });
@@ -277,6 +293,7 @@ describe("pools", () => {
         ...memberPaths(root, "c92e5a3717c6ad81"),
         lastVisitAt: 1_000_000,
         name: "catalog/1",
+        outcomes: { blocked: 0, failed: 0, ok: 1, queued: 0, suspect: 0, unknown: 0 },
         pool: "catalog",
         state: "ready",
         visits: 1,
@@ -285,6 +302,7 @@ describe("pools", () => {
         ...memberPaths(root, "9868bc4147116d6f"),
         lastVisitAt: 1_000_000,
         name: "catalog/2",
+        outcomes: { blocked: 0, failed: 0, ok: 0, queued: 0, suspect: 0, unknown: 0 },
         pool: "catalog",
         state: "ready",
         visits: 0,
@@ -302,8 +320,8 @@ describe("pools", () => {
       await using newer = await sessions.hold(single, { capabilities: host(155), seed }, deadline);
       await newer.finish({
         browserArgs: [],
+        ...attemptLog(),
         closed: { exited: true },
-        proxyUrl: null,
         record: null,
         siteVisit: served,
       });
@@ -344,6 +362,7 @@ describe("pools", () => {
         ...memberPaths(root, "c92e5a3717c6ad81"),
         lastVisitAt: 1_000_000,
         name: "catalog/1",
+        outcomes: { blocked: 0, failed: 0, ok: 0, queued: 0, suspect: 0, unknown: 0 },
         pool: "catalog",
         state: "ready",
         visits: 0,

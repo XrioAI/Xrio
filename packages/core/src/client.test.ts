@@ -485,6 +485,7 @@ describe("captured session admin", () => {
       await expect(admin.list()).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
       await expect(admin.delete("account")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
       await expect(admin.prune({ idleFor: 0 })).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+      await expect(admin.visits("account")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
     } finally {
       controller.abort();
       await settled;

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../deadline.ts";
 import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "../options.ts";
 import { anonymousSessions } from "../testing/anonymous-sessions.ts";
+import { attemptLog } from "../testing/attempt-log.ts";
 import type { ProxyEndpoint } from "../types.ts";
 import { createSessions } from "./session.ts";
 
@@ -153,9 +154,9 @@ describe(createSessions, () => {
       const summary = hold.summary(served, { browserArgs: [], proxy: used ?? undefined });
 
       await hold.finish({
+        ...attemptLog({ proxyUrl: used?.url ?? null }),
         browserArgs: [],
         closed: { exited: true },
-        proxyUrl: used?.url ?? null,
         record: null,
         siteVisit: served,
       });

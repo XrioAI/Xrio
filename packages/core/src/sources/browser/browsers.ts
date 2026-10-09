@@ -223,6 +223,7 @@ const renderInScope = async (
   scope: ChromeScope,
   document: PromiseWithResolvers<SourceDocument>,
   relay: Relay | undefined,
+  launched: (argv: readonly string[]) => void,
 ): Promise<Closed> => {
   const { capabilities, fonts, identity } = plan;
 
@@ -241,6 +242,7 @@ const renderInScope = async (
       xauthority: process.env.XAUTHORITY,
     });
 
+    launched(launch.args);
     const browser = await startBrowser(driver, scope, launch, slot, deadline);
     assertSupported(browser.product);
     assertProbedVersion(browser.product, capabilities);
@@ -289,6 +291,7 @@ export const createBrowsers = (
     slot: Slot,
     deadline: HeldDeadline,
     document: PromiseWithResolvers<SourceDocument>,
+    launched: (argv: readonly string[]) => void,
   ): Promise<Closed> => {
     try {
       slot.assertHeld();
@@ -301,7 +304,7 @@ export const createBrowsers = (
       await using relay = await proxyRelayFor(plan, deadline);
       const scope = new ChromeScope(await createOwnedScratch(registry, deadline), steps);
 
-      return await renderInScope(driver, plan, slot, deadline, scope, document, relay);
+      return await renderInScope(driver, plan, slot, deadline, scope, document, relay, launched);
     } catch (error) {
       document.reject(error);
       await settleFonts(plan);
@@ -318,12 +321,22 @@ export const createBrowsers = (
 
   const start: Browsers["start"] = (plan, slot, deadline) => {
     const document = Promise.withResolvers<SourceDocument>();
-    const closing = visit(plan, slot, deadline, document);
+    let argv: readonly string[] | null = null;
+
+    const closing = visit(plan, slot, deadline, document, (launched) => {
+      argv = launched;
+    });
+
+    const launchedArgv = async (): Promise<readonly string[] | null> => {
+      await closing;
+
+      return argv;
+    };
 
     void trackUntilClosed(closing);
     void Promise.allSettled([document.promise]);
 
-    return { closed: closing, document: document.promise };
+    return { argv: launchedArgv(), closed: closing, document: document.promise };
   };
 
   const close = async () => {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../deadline.ts";
+import { attemptLog } from "../testing/attempt-log.ts";
 import { SessionStore } from "./store.ts";
 
 describe("session ownership", () => {
@@ -58,7 +59,15 @@ describe("session ownership", () => {
         state: "quarantined",
         waiting: undefined,
       });
-      const finish = { exited: true, major: 155, maxAgeMs: 1_800_000, now: 68_000 };
+
+      const finish = {
+        attempt: attemptLog(),
+        exited: true,
+        major: 155,
+        maxAgeMs: 1_800_000,
+        now: 68_000,
+      };
+
       const renewal = await db.renewOwnership(stale, 90_000, deadline);
       const written = await db.finishVisit(stale, finish, deadline);
       const released = await db.releaseSession(stale, deadline);
@@ -113,6 +122,7 @@ describe("session ownership", () => {
       await db.finishVisit(
         { epoch: 1, name: "account", token: "owner" },
         {
+          attempt: attemptLog(),
           binding,
           exited: true,
           major: 154,

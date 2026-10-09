@@ -8,7 +8,7 @@ import type { Deadline } from "./deadline.ts";
 import { inScrapeContext, timeStage } from "./diagnostics.ts";
 import { clientClosed, isXrioError, sessionUnavailable } from "./errors.ts";
 import type { XrioError } from "./errors.ts";
-import { deviceDigest } from "./humanizer/contracts.ts";
+import { deviceDigest, identityPlanRecord } from "./humanizer/contracts.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
@@ -31,7 +31,7 @@ import { reportSkippedCookies } from "./seed-cookies.ts";
 import type { ClaimChecks, SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
-import type { FinishedVisit, SiteVisit, Sources, VisitPlan } from "./sources/visit.ts";
+import type { AttemptLog, FinishedVisit, SiteVisit, Sources, VisitPlan } from "./sources/visit.ts";
 import type { ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
@@ -177,7 +177,7 @@ type Continuation =
 
 interface VisitResult extends FinishedVisit {
   readonly next: Continuation;
-  readonly outcome: ScrapeOutcome;
+  readonly answered: ScrapeOutcome;
 }
 
 const planVisits = (context: VisitContext): (() => Promise<VisitPlan>) => {
@@ -222,27 +222,64 @@ const continuationFor = (
     : { kind: "complete" };
 };
 
-const siteVisitOf = (
+const replayedDigest = ({ device }: SessionHold): string | null =>
+  device.kind === "record" ? deviceDigest(device.record) : null;
+
+const attemptOf = (
+  { hold, intent }: VisitContext,
+  plan: VisitPlan | undefined,
   outcome: ScrapeOutcome,
-  site: string,
-  exitAddress: string | null,
-): SiteVisit | undefined => {
-  if (outcome.kind !== "document" || outcome.document.identity.mode === "http") {
-    return undefined;
+): AttemptLog => {
+  const browser = plan?.kind === "browser" ? plan : undefined;
+
+  const launched = {
+    argv: null,
+    exitAddress: browser?.exitAddress ?? null,
+    plan: browser === undefined ? null : identityPlanRecord(browser.identity),
+    proxyUrl: plan?.proxy?.url ?? null,
+    site: intent.url.hostname,
+    url: intent.url.href,
+  };
+
+  if (outcome.kind === "failed") {
+    return {
+      ...launched,
+      challengeOutcome: null,
+      challengeRules: [],
+      deviceDigest: replayedDigest(hold),
+      errorCode: isXrioError(outcome.error) ? outcome.error.code : null,
+      outcome: "failed",
+      status: null,
+      vendor: null,
+    };
   }
 
-  const { block, identity } = outcome.document;
+  const { block, identity, status } = outcome.document;
 
   return {
+    ...launched,
     challengeOutcome: block.challenge?.outcome ?? null,
     challengeRules: block.challenge?.rounds.map((round) => round.rule) ?? [],
-    deviceDigest: deviceDigest(identity.record),
-    exitAddress,
-    site,
+    deviceDigest: identity.mode === "http" ? null : deviceDigest(identity.record),
+    errorCode: null,
+    outcome: block.verdict,
+    status,
     vendor: block.vendor,
-    verdict: block.verdict,
   };
 };
+
+const siteVisitOf = (attempt: AttemptLog): SiteVisit | undefined =>
+  attempt.outcome === "failed" || attempt.deviceDigest === null
+    ? undefined
+    : {
+        challengeOutcome: attempt.challengeOutcome,
+        challengeRules: attempt.challengeRules,
+        deviceDigest: attempt.deviceDigest,
+        exitAddress: attempt.exitAddress,
+        site: attempt.site,
+        vendor: attempt.vendor,
+        verdict: attempt.outcome,
+      };
 
 const withSession = (outcome: ScrapeOutcome, session: SessionSummary | undefined): ScrapeOutcome =>
   outcome.kind === "document" && session !== undefined
@@ -257,21 +294,24 @@ const recordOf = (outcome: ScrapeOutcome): FinishedVisit["record"] =>
 class AttemptStartError extends Error {
   override readonly name = "AttemptStartError";
   readonly failure: Error;
+  readonly plan: VisitPlan | undefined;
 
-  constructor(failure: Error) {
+  constructor(failure: Error, plan: VisitPlan | undefined) {
     super(failure.message, { cause: failure });
     this.failure = failure;
+    this.plan = plan;
   }
 }
 
 const startAttempt = async <Result>(
   start: () => Result | Promise<Result>,
   held: HeldDeadline,
+  plan?: VisitPlan,
 ): Promise<Result> => {
   try {
     return await start();
   } catch (error) {
-    throw new AttemptStartError(scrapeError(error, held));
+    throw new AttemptStartError(scrapeError(error, held), plan);
   }
 };
 
@@ -297,18 +337,18 @@ const visitOnce = async (
   let transferred = false;
 
   try {
-    const visit = await startAttempt(() => dependencies.sources.start(plan, slot, held), held);
+    const visit = await startAttempt(
+      () => dependencies.sources.start(plan, slot, held),
+      held,
+      plan,
+    );
 
     transferred = true;
 
     const outcome = await outcomeOf(visit.document, held);
     const next = continuationFor(outcome, context, terminal, retries);
-
-    const siteVisit = siteVisitOf(
-      outcome,
-      intent.url.hostname,
-      plan.kind === "browser" ? (plan.exitAddress ?? null) : null,
-    );
+    const attempt = attemptOf(context, plan, outcome);
+    const siteVisit = siteVisitOf(attempt);
 
     const answered = withSession(
       outcome,
@@ -322,14 +362,16 @@ const visitOnce = async (
     }
 
     const record = recordOf(outcome);
+    const closed = await visit.closed;
 
     return {
+      ...attempt,
+      answered,
+      argv: await visit.argv,
       binding: record === null || plan.kind !== "browser" ? undefined : plan.sessionBinding,
       browserArgs: plan.kind === "browser" ? plan.browserArgs : [],
-      closed: await visit.closed,
+      closed,
       next,
-      outcome: answered,
-      proxyUrl: plan.proxy?.url ?? null,
       record,
       siteVisit,
     };
@@ -355,7 +397,10 @@ const visitAfterStartFailures = async (
         throw error;
       }
 
-      const { failure } = error;
+      const { failure, plan } = error;
+
+      await context.hold.logAttempt(attemptOf(context, plan, { error: failure, kind: "failed" }));
+
       const delayMs = retries.next(failure);
 
       if (delayMs === undefined || !(await retries.wait(delayMs))) {
@@ -380,7 +425,7 @@ const completeVisits = async (context: VisitContext, retries: Retries): Promise<
 
     if (visit.next.kind === "retry") {
       if (!visit.closed.exited || !(await retries.wait(visit.next.delayMs))) {
-        context.answer.offer(visit.outcome, true);
+        context.answer.offer(visit.answered, true);
         break;
       }
     } else {

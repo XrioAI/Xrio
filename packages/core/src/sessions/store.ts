@@ -5,10 +5,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { SQLOutputValue } from "node:sqlite";
 
+import type { ChallengeOutcome } from "../blocks/classify.ts";
 import { untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
-import { XrioError } from "../errors.ts";
-import type { SessionBinding, SiteVisit } from "../sources/visit.ts";
+import { isErrorCode, redactUrl, XrioError } from "../errors.ts";
+import type { AttemptLog, AttemptOutcome, SessionBinding, SiteVisit } from "../sources/visit.ts";
+import type { SessionOutcomes, SessionVisit, SessionVisitFilter } from "../types.ts";
 import { isStoredProfile, LOCAL_TENANT, storedProfile } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
 import { COOLING_RETIREMENT_STREAK, warmthAfter, warmthAt } from "./warmth.ts";
@@ -78,7 +80,7 @@ export interface FinishRequest {
   };
   readonly siteVisit?: SiteVisit;
   readonly binding?: SessionBinding;
-  readonly proxyUrl?: string;
+  readonly attempt: AttemptLog;
   readonly now: number;
   readonly maxAgeMs: number;
 }
@@ -98,6 +100,25 @@ const DATABASE_FILE = "xrio.db";
 const DATABASE_COMPANIONS = ["-wal", "-shm"] as const;
 
 const PRIVATE_FILE_MODE = 0o600;
+
+const NO_LIMIT = -1;
+
+const ATTEMPT_OUTCOMES: Readonly<Record<AttemptOutcome, true>> = {
+  blocked: true,
+  failed: true,
+  ok: true,
+  queued: true,
+  suspect: true,
+  unknown: true,
+};
+
+const CHALLENGE_OUTCOMES: Readonly<Record<ChallengeOutcome, true>> = {
+  budget_exhausted: true,
+  deadline: true,
+  passed: true,
+  passed_in_place: true,
+  rounds_exhausted: true,
+};
 
 export const waitForTurn = async (
   deadline: Deadline,
@@ -171,21 +192,91 @@ const holderOf = (row: SqlRow): Holder | undefined =>
 
 const isText = (value: unknown): value is string => typeof value === "string";
 
-const browserArgsOf = (row: SqlRow): readonly string[] | undefined => {
-  const stored = optionalTextAt(row, "browser_args");
+const optionalNumberAt = (row: SqlRow, key: string): number | undefined =>
+  row[key] === null ? undefined : numberAt(row, key);
+
+const optionalTextListAt = (row: SqlRow, key: string): readonly string[] | undefined => {
+  const stored = optionalTextAt(row, key);
 
   if (stored === undefined) {
     return undefined;
   }
 
-  const browserArgs: unknown = JSON.parse(stored);
+  const list: unknown = JSON.parse(stored);
 
-  if (!Array.isArray(browserArgs) || !browserArgs.every(isText)) {
-    throw new TypeError("Unreadable session column browser_args.");
+  if (!Array.isArray(list) || !list.every(isText)) {
+    throw new TypeError(`Unreadable session column ${key}.`);
   }
 
-  return browserArgs;
+  return list;
 };
+
+const textListAt = (row: SqlRow, key: string): readonly string[] => {
+  const list = optionalTextListAt(row, key);
+
+  if (list === undefined) {
+    throw new TypeError(`Unreadable session column ${key}.`);
+  }
+
+  return list;
+};
+
+const isKeyOf = <Value extends string>(
+  table: Readonly<Record<Value, true>>,
+  value: string,
+): value is Value => Object.hasOwn(table, value);
+
+const oneOf = <Value extends string>(
+  table: Readonly<Record<Value, true>>,
+  row: SqlRow,
+  key: string,
+): Value => {
+  const value = textAt(row, key);
+
+  if (!isKeyOf(table, value)) {
+    throw new TypeError(`Unreadable session column ${key}.`);
+  }
+
+  return value;
+};
+
+const errorCodeOf = (row: SqlRow): SessionVisit["errorCode"] => {
+  const code = optionalTextAt(row, "error_code");
+
+  if (code !== undefined && !isErrorCode(code)) {
+    throw new TypeError("Unreadable session column error_code.");
+  }
+
+  return code ?? null;
+};
+
+const visitOf = (row: SqlRow): SessionVisit => ({
+  argv: optionalTextListAt(row, "argv") ?? null,
+  at: numberAt(row, "at"),
+  challengeOutcome:
+    row.challenge_outcome === null ? null : oneOf(CHALLENGE_OUTCOMES, row, "challenge_outcome"),
+  challengeRules: textListAt(row, "challenge_rules"),
+  deviceDigest: optionalTextAt(row, "device_digest") ?? null,
+  errorCode: errorCodeOf(row),
+  exitAddress: optionalTextAt(row, "exit_address") ?? null,
+  outcome: oneOf(ATTEMPT_OUTCOMES, row, "outcome"),
+  plan: optionalTextAt(row, "plan") ?? null,
+  planDigest: optionalTextAt(row, "plan_digest") ?? null,
+  proxy: optionalTextAt(row, "proxy_url") ?? null,
+  site: textAt(row, "site"),
+  status: optionalNumberAt(row, "status") ?? null,
+  url: textAt(row, "url"),
+  vendor: optionalTextAt(row, "vendor") ?? null,
+});
+
+const noOutcomes = (): Record<keyof SessionOutcomes, number> => ({
+  blocked: 0,
+  failed: 0,
+  ok: 0,
+  queued: 0,
+  suspect: 0,
+  unknown: 0,
+});
 
 const profileDirOf = (row: SqlRow): string => {
   const stored = textAt(row, "profile_dir");
@@ -224,7 +315,7 @@ const rowOf = (row: SqlRow): SessionRow => {
 
   return {
     binding: bindingOf(row),
-    browserArgs: browserArgsOf(row),
+    browserArgs: optionalTextListAt(row, "browser_args"),
     chromeMajor: numberAt(row, "chrome_major"),
     coolingStreak: numberAt(row, "cooling_streak"),
     createdAt: numberAt(row, "created_at"),
@@ -253,7 +344,12 @@ CREATE TABLE warmth(tenant TEXT NOT NULL,name TEXT NOT NULL,site TEXT NOT NULL,s
   last_visit_at INTEGER NOT NULL,changed_at INTEGER NOT NULL,verdict TEXT NOT NULL,vendor TEXT,challenge_outcome TEXT,
   challenge_rules TEXT NOT NULL,exit_address TEXT,device_digest TEXT NOT NULL,PRIMARY KEY(tenant,name,site),
   FOREIGN KEY(tenant,name) REFERENCES sessions(tenant,name) ON DELETE CASCADE);
-CREATE TABLE pools(tenant TEXT NOT NULL,name TEXT NOT NULL,next_member INTEGER NOT NULL,PRIMARY KEY(tenant,name));`;
+CREATE TABLE pools(tenant TEXT NOT NULL,name TEXT NOT NULL,next_member INTEGER NOT NULL,PRIMARY KEY(tenant,name));
+CREATE TABLE visits(id INTEGER PRIMARY KEY,tenant TEXT NOT NULL,name TEXT NOT NULL,at INTEGER NOT NULL,site TEXT NOT NULL,
+  url TEXT NOT NULL,outcome TEXT NOT NULL,error_code TEXT,status INTEGER,vendor TEXT,challenge_outcome TEXT,
+  challenge_rules TEXT NOT NULL,exit_address TEXT,proxy_url TEXT,device_digest TEXT,argv TEXT,plan TEXT,plan_digest TEXT,
+  FOREIGN KEY(tenant,name) REFERENCES sessions(tenant,name) ON DELETE CASCADE);
+CREATE INDEX visits_by_session ON visits(tenant,name,at);`;
 
 const migrate = (db: DatabaseSync): void => {
   db.exec("BEGIN IMMEDIATE");
@@ -564,6 +660,78 @@ export class SessionStore {
           .run(state, this.#tenant, owner.name, owner.epoch, owner.token).changes === 1,
     );
   }
+  #holds(owner: Ownership): boolean {
+    const row = this.read(owner.name);
+
+    return row?.epoch === owner.epoch && row.holder?.token === owner.token;
+  }
+  #logAttempt(name: string, attempt: AttemptLog, now: number): void {
+    this.#db
+      .prepare(`INSERT INTO visits(tenant,name,at,site,url,outcome,error_code,status,vendor,challenge_outcome,challenge_rules,
+      exit_address,proxy_url,device_digest,argv,plan,plan_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(
+        this.#tenant,
+        name,
+        now,
+        attempt.site,
+        attempt.url,
+        attempt.outcome,
+        attempt.errorCode,
+        attempt.status,
+        attempt.vendor,
+        attempt.challengeOutcome,
+        JSON.stringify(attempt.challengeRules),
+        attempt.exitAddress,
+        attempt.proxyUrl === null ? null : redactUrl(attempt.proxyUrl, { keepUsername: true }),
+        attempt.deviceDigest,
+        attempt.argv === null ? null : JSON.stringify(attempt.argv),
+        attempt.plan?.json ?? null,
+        attempt.plan?.digest ?? null,
+      );
+  }
+  async logAttempt(
+    owner: Ownership,
+    attempt: AttemptLog,
+    now: number,
+    deadline: Deadline,
+  ): Promise<boolean> {
+    return await this.#transaction(deadline, () => {
+      if (!this.#holds(owner)) {
+        return false;
+      }
+
+      this.#logAttempt(owner.name, attempt, now);
+
+      return true;
+    });
+  }
+  visitLog(name: string, { site, limit }: SessionVisitFilter): SessionVisit[] {
+    return this.#db
+      .prepare(
+        "SELECT * FROM visits WHERE tenant=? AND name=? AND (? IS NULL OR site=?) ORDER BY at DESC,id DESC LIMIT ?",
+      )
+      .all(this.#tenant, name, site ?? null, site ?? null, limit ?? NO_LIMIT)
+      .map(visitOf);
+  }
+  outcomeCounts(): Map<string, SessionOutcomes> {
+    const counts = new Map<string, Record<keyof SessionOutcomes, number>>();
+
+    const rows = this.#db
+      .prepare(
+        "SELECT name,outcome,COUNT(*) AS count FROM visits WHERE tenant=? GROUP BY name,outcome",
+      )
+      .all(this.#tenant);
+
+    for (const row of rows) {
+      const name = textAt(row, "name");
+      const session = counts.get(name) ?? noOutcomes();
+
+      session[oneOf(ATTEMPT_OUTCOMES, row, "outcome")] = numberAt(row, "count");
+      counts.set(name, session);
+    }
+
+    return counts;
+  }
   #saveSiteVisit(owner: Ownership, request: FinishRequest, visit: SiteVisit): void {
     const before = warmthAt(this.siteWarmth(owner.name, visit.site), request.now, request.maxAgeMs);
     const state = warmthAfter(before, visit.verdict);
@@ -616,7 +784,7 @@ export class SessionStore {
             request.record?.json ?? null,
             request.record?.platform ?? null,
             request.record === undefined ? null : JSON.stringify(request.record.browserArgs),
-            request.proxyUrl ?? null,
+            request.attempt.proxyUrl,
             visited,
             visited,
             request.now,
@@ -629,6 +797,8 @@ export class SessionStore {
       if (!updated) {
         return false;
       }
+
+      this.#logAttempt(owner.name, request.attempt, request.now);
 
       if (request.siteVisit !== undefined) {
         this.#saveSiteVisit(owner, request, request.siteVisit);

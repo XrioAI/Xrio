@@ -81,7 +81,7 @@ const errorClasses = {
   WAIT_FOR_TIMEOUT: XrioError,
 } satisfies Record<ErrorCode, TypeErrorConstructor | typeof XrioError>;
 
-const isErrorCode = (code: unknown): code is ErrorCode =>
+export const isErrorCode = (code: unknown): code is ErrorCode =>
   typeof code === "string" && Object.hasOwn(errorClasses, code);
 
 export function isXrioError(value: unknown): value is ErrorByCode[ErrorCode];

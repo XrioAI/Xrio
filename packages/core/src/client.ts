@@ -71,7 +71,10 @@ export type {
   ScrapeOptions,
   ScrapeResult,
   SessionInfo,
+  SessionOutcomes,
   SessionSummary,
+  SessionVisit,
+  SessionVisitFilter,
   StructuredContent,
   WaitFor,
 } from "./types.ts";
@@ -131,6 +134,11 @@ export class XrioClient {
         this.#scrapes.assertOpen();
 
         return await admin.prune(options);
+      },
+      visits: async (name, filter) => {
+        this.#scrapes.assertOpen();
+
+        return await admin.visits(name, filter);
       },
     };
   }

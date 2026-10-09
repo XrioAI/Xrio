@@ -1898,6 +1898,9 @@ describe("a named session's device record", () => {
         finish: async () => {
           await Promise.resolve();
         },
+        logAttempt: async () => {
+          await Promise.resolve();
+        },
         profile: { kind: "scratch" as const },
         retire: async () => {
           await Promise.resolve();

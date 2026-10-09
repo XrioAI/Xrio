@@ -24,6 +24,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { XrioClient } from "../client.ts";
 import { startDeadline } from "../deadline.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "../options.ts";
+import { attemptLog } from "../testing/attempt-log.ts";
 import { fakeChromePath } from "../testing/fake-chrome-path.ts";
 import type { SessionInfo } from "../types.ts";
 import { processStart, storedProfile } from "./profiles.ts";
@@ -137,6 +138,7 @@ describe("session administration", () => {
       await expect(admin.list()).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
       await expect(admin.delete("account")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
       await expect(admin.prune({ idleFor: 0 })).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+      await expect(admin.visits("account")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
     } finally {
       await rm(root, { force: true, recursive: true });
     }
@@ -348,6 +350,35 @@ describe("session administration", () => {
     } finally {
       unsubscribe("xrio:event", record);
       await chmod(caches, 0o700);
+    }
+  });
+
+  it("counts every outcome of the visit log in list(), unknown included", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-admin-"));
+    const sessions = createSessions(root, { profileUse });
+    using deadline = startDeadline(10_000);
+
+    try {
+      {
+        await using hold = await sessions.hold(intent.session, claimChecks, deadline);
+        await hold.logAttempt(attemptLog({ outcome: "unknown" }));
+        await hold.logAttempt(attemptLog({ outcome: "ok" }));
+        await hold.logAttempt(attemptLog({ outcome: "unknown" }));
+      }
+
+      const [listed] = await sessions.admin.list();
+
+      expect(listed?.outcomes).toStrictEqual({
+        blocked: 0,
+        failed: 0,
+        ok: 1,
+        queued: 0,
+        suspect: 0,
+        unknown: 2,
+      });
+    } finally {
+      await sessions.close();
+      await rm(root, { force: true, recursive: true });
     }
   });
 });

@@ -21,8 +21,15 @@ import type { ScrapeIntent } from "../intent.ts";
 import { HeldDeadline } from "../lifetime.ts";
 import type { ScrapeOutcome } from "../outcome.ts";
 import type { ProfileUse } from "../sources/browser/browser-process.ts";
-import type { FinishedVisit, Profile, SiteVisit } from "../sources/visit.ts";
-import type { ProxyEndpoint, SessionInfo, SessionSummary } from "../types.ts";
+import type { AttemptLog, FinishedVisit, Profile, SiteVisit } from "../sources/visit.ts";
+import type {
+  ProxyEndpoint,
+  SessionInfo,
+  SessionOutcomes,
+  SessionSummary,
+  SessionVisit,
+  SessionVisitFilter,
+} from "../types.ts";
 import { OwnershipLease, ownershipSchedule } from "./lease.ts";
 import type { LeaseExpiry } from "./lease.ts";
 import { choosePoolMember } from "./pools.ts";
@@ -62,6 +69,7 @@ export interface SessionHold extends AsyncDisposable {
   readonly bind: (deadline: Deadline) => HeldDeadline;
   readonly revisitWanted: (outcome: ScrapeOutcome) => boolean;
   readonly retire: () => Promise<void>;
+  readonly logAttempt: (attempt: AttemptLog) => Promise<void>;
   readonly finish: (visit: FinishedVisit) => Promise<void>;
 }
 
@@ -76,6 +84,7 @@ export interface SessionAdmin {
   readonly list: () => Promise<SessionInfo[]>;
   readonly delete: (name: string) => Promise<void>;
   readonly prune: (options: { readonly idleFor: number }) => Promise<string[]>;
+  readonly visits: (name: string, filter?: SessionVisitFilter) => Promise<SessionVisit[]>;
 }
 
 export interface SessionManager {
@@ -112,6 +121,15 @@ const STORE_OPEN_BUDGET_MS = 30_000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const NO_OUTCOMES: SessionOutcomes = {
+  blocked: 0,
+  failed: 0,
+  ok: 0,
+  queued: 0,
+  suspect: 0,
+  unknown: 0,
+};
+
 const POOL_MEMBER_MAX_IDLE_MS = 7 * DAY_MS;
 
 const HOLDER_RECHECK_MS = 1000;
@@ -133,6 +151,9 @@ const anonymousHold = (checks: ClaimChecks, deadline: Deadline): SessionHold => 
     device: { kind: "fresh", seed: checks.seed() },
     drawStickyId: stickyIdDraw(checks),
     finish: async () => {
+      await Promise.resolve();
+    },
+    logAttempt: async () => {
       await Promise.resolve();
     },
     profile: { kind: "scratch" },
@@ -212,6 +233,29 @@ const withProxy = <Session extends SessionInfo | SessionSummary>(
     ? session
     : { ...session, proxy: redactUrl(proxyUrl, { keepUsername: true }) };
 
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- JavaScript callers can pass any value.
+const isNonEmptyText = (value: string): boolean => typeof value === "string" && value.length > 0;
+
+const requireSessionName = (name: string): void => {
+  if (!isNonEmptyText(name)) {
+    throw invalidOptions("A session name is required.");
+  }
+};
+
+const visitFilter = (name: string, filter: SessionVisitFilter): SessionVisitFilter => {
+  requireSessionName(name);
+
+  if (filter.site !== undefined && !isNonEmptyText(filter.site)) {
+    throw invalidOptions("site must be a non-empty host name.");
+  }
+
+  if (filter.limit !== undefined && (!Number.isSafeInteger(filter.limit) || filter.limit < 1)) {
+    throw invalidOptions("limit must be a positive integer.");
+  }
+
+  return filter;
+};
+
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
@@ -277,11 +321,12 @@ class Sessions implements SessionManager {
   #profileDir(row: SessionRow): string {
     return path.join(this.#root, row.profileDir);
   }
-  #sessionInfo(row: SessionRow): SessionInfo {
+  #sessionInfo(row: SessionRow, outcomes: SessionOutcomes): SessionInfo {
     const info: SessionInfo = {
       ...profilePaths(this.#profileDir(row), row.browserArgs ?? [], this.#options.cacheHost),
       lastVisitAt: row.lastVisitAt,
       name: row.name,
+      outcomes,
       state: row.state,
       visits: row.visits,
     };
@@ -568,12 +613,12 @@ class Sessions implements SessionManager {
         const written = await db.finishVisit(
           lease.owner,
           {
+            attempt: visit,
             binding: visit.binding,
             exited: visit.closed.exited,
             major: checks.capabilities?.chromeMajor ?? 0,
             maxAgeMs: this.#maxAgeMs,
             now: this.#now(),
-            proxyUrl: visit.proxyUrl ?? undefined,
             record:
               visit.record === null
                 ? undefined
@@ -599,6 +644,13 @@ class Sessions implements SessionManager {
 
         if (warmthChanges) {
           publishInternalEvent({ detail: name, event: "warmth-changed" });
+        }
+      },
+      logAttempt: async (attempt) => {
+        using deadline = lease.persistence();
+
+        if (!(await db.logAttempt(lease.owner, attempt, this.#now(), deadline))) {
+          lease.lost();
         }
       },
       profile: { dir: directory, kind: "persistent" },
@@ -825,7 +877,15 @@ class Sessions implements SessionManager {
     using deadline = startDeadline(ADMIN_BUDGET_MS);
     const db = await this.#openedStore(deadline);
 
-    return db.list().map((row) => this.#sessionInfo(row));
+    const outcomes = db.outcomeCounts();
+
+    return db.list().map((row) => this.#sessionInfo(row, outcomes.get(row.name) ?? NO_OUTCOMES));
+  }
+  async #visitLog(name: string, filter: SessionVisitFilter): Promise<SessionVisit[]> {
+    using deadline = startDeadline(ADMIN_BUDGET_MS);
+    const db = await this.#openedStore(deadline);
+
+    return db.visitLog(name, filter);
   }
   async #adminRun<Result>(run: () => Promise<Result>): Promise<Result> {
     if (this.#closed) {
@@ -851,11 +911,7 @@ class Sessions implements SessionManager {
     return {
       delete: async (name) => {
         await this.#adminRun(async () => {
-          // oxlint-disable-next-line anti-slop/no-runtime-typeof -- JavaScript callers can pass any value.
-          if (typeof name !== "string" || name.length === 0) {
-            throw invalidOptions("A session name is required.");
-          }
-
+          requireSessionName(name);
           await this.#delete(name);
         });
       },
@@ -868,6 +924,8 @@ class Sessions implements SessionManager {
 
           return await this.#pruneRows((row) => this.#now() - row.lastVisitAt > idleFor);
         }),
+      visits: async (name, filter = {}) =>
+        await this.#adminRun(async () => await this.#visitLog(name, visitFilter(name, filter))),
     };
   }
   async close(): Promise<void> {

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../deadline.ts";
 import type { Clock } from "../deadline.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "../options.ts";
+import { attemptLog } from "../testing/attempt-log.ts";
 import { createSessions } from "./session.ts";
 
 interface Timer {
@@ -141,9 +142,9 @@ describe("session ownership", () => {
       visit.time.jump(55_000);
       await expect(
         visit.hold.finish({
+          ...attemptLog(),
           browserArgs: [],
           closed: { exited: true },
-          proxyUrl: null,
           record: null,
         }),
       ).rejects.toMatchObject({
@@ -165,9 +166,9 @@ describe("session ownership", () => {
       wall = 55_000;
       await expect(
         visit.hold.finish({
+          ...attemptLog(),
           browserArgs: [],
           closed: { exited: true },
-          proxyUrl: null,
           record: null,
         }),
       ).rejects.toMatchObject({
