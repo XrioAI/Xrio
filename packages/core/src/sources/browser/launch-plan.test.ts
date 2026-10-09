@@ -8,7 +8,7 @@ import { fixedDevice } from "../../testing/fixed-seed.ts";
 import { forkWithKnobs } from "../../testing/hardware-fork.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
-import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
+import { parseBrowserArgs, planHeadlessProbe, planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
 
 const scratchDir = "/tmp/xrio-501/bAbC123";
@@ -558,6 +558,48 @@ const requestOf = ({
 });
 
 const goldenOf = ({ args, env, files }: LaunchPlan): GoldenPlan => ({ args, env, files });
+
+describe(planHeadlessProbe, () => {
+  it("opens its own page headless in a bare profile that is the scratch itself", () => {
+    const page = `file://${scratchDir}/home/probe.html`;
+
+    expect(planHeadlessProbe("/opt/chrome/chrome", scratchDir)).toStrictEqual({
+      page,
+      plan: {
+        args: [
+          ...baseline,
+          "--headless",
+          "--mute-audio",
+          "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
+          ...xrioSwitches.slice(0, 3),
+          `--crash-dumps-dir=${scratchDir}/crashes`,
+          `--user-data-dir=${scratchDir}`,
+          "--remote-debugging-pipe",
+          page,
+        ],
+        directories: {
+          crashes: `${scratchDir}/crashes`,
+          downloads: `${scratchDir}/downloads`,
+          home: `${scratchDir}/home`,
+          profile: scratchDir,
+          tmp: `${scratchDir}/tmp`,
+        },
+        env: {
+          HOME: `${scratchDir}/home`,
+          TMPDIR: `${scratchDir}/tmp`,
+          XDG_CACHE_HOME: `${scratchDir}/home/.cache`,
+          XDG_CONFIG_HOME: `${scratchDir}/home/.config`,
+          XDG_DATA_HOME: `${scratchDir}/home/.local/share`,
+        },
+        executable: "/opt/chrome/chrome",
+        files: [
+          { contents: "<!DOCTYPE html><title></title>", path: `${scratchDir}/home/probe.html` },
+        ],
+        presentedUserAgent: undefined,
+      },
+    });
+  });
+});
 
 describe("the launch plan golden", () => {
   it("covers every combination of mode, platform, timezone, display and xauthority once, and each mode and platform through the relay", () => {

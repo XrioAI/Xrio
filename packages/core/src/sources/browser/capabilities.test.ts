@@ -1835,7 +1835,7 @@ describe("hostCapabilities host renderer", () => {
     execFileSync("/usr/bin/mkfifo", [page]);
     using deadline = startDeadline(2000);
 
-    const answered = await probe(executable, deadline, work);
+    const answered = await probe(executable, deadline, undefined, work);
 
     expect([answered.fork?.dialect, answered.hostRenderer]).toStrictEqual(["xrio", undefined]);
     expect(deadline.remainingMs()).toBeGreaterThan(500);
@@ -2257,7 +2257,7 @@ describe("hostCapabilities font stack refusals", () => {
     await hangFcListFor(fixture(), 1);
     using deadline = startDeadline(200);
 
-    await expect(probeOn()(fixture().binary, deadline, work)).rejects.toMatchObject({
+    await expect(probeOn()(fixture().binary, deadline, undefined, work)).rejects.toMatchObject({
       code: "TIMEOUT",
     });
 

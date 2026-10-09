@@ -22,7 +22,9 @@ import type {
   KnobRegistry,
   SpeechPersona,
 } from "../../humanizer/contracts.ts";
+import { knobOf } from "../../humanizer/contracts.ts";
 import { FORK_DUMP_SWITCH, GL_PERSONA_MAX_NAME } from "../../humanizer/owned-inputs.ts";
+import type { ResolvedMode } from "../../types.ts";
 import type { ScratchDir } from "./browser-process.ts";
 import {
   createScratchDir,
@@ -31,13 +33,16 @@ import {
   scratchRoot,
   writeAtomically,
 } from "./browser-process.ts";
+import { cdpDriver } from "./cdp/driver.ts";
 import { fileIdentityOf } from "./file-identity.ts";
 import { createFontStackCheck, fontStackBeside } from "./font-stack.ts";
 import { GL_ARTIFACT_SCHEMA, parseGlArtifact } from "./gl-artifacts.ts";
 import type { GlArtifactLimits, GlArtifactReading } from "./gl-artifacts.ts";
 import { killProcessGroup, retireProcessGroup } from "./group-lifetime.ts";
+import { createHeadlessUserAgentReader } from "./headless-user-agent.ts";
 import { createHostRendererReader } from "./host-renderer.ts";
 import { TEARDOWN_BUDGET_MS } from "./port.ts";
+import type { BrowserDriver } from "./port.ts";
 
 const PERSONA_MARKER = "personas";
 
@@ -155,6 +160,7 @@ interface RawArtifact {
 interface ProbeOptions {
   readonly budgetMs: number;
   readonly budgetSignal: (budgetMs: number) => AbortSignal;
+  readonly driver: BrowserDriver;
   readonly fcList: string;
   readonly now: () => number;
   readonly renderNodeDirectory: string;
@@ -1024,11 +1030,17 @@ export const createProbeWork = (): ProbeWork => {
   };
 };
 
+type LaunchMode = Exclude<ResolvedMode["mode"], "http">;
+
 export type HostCapabilityProbe = (
   browserPath: string | undefined,
   deadline?: Deadline,
+  mode?: LaunchMode,
   work?: ProbeWork,
 ) => Promise<HostCapabilities>;
+
+const showsHeadlessToken = (capabilities: HostCapabilities): boolean =>
+  knobOf(capabilities, "suppress-headless-token") !== "true";
 
 export const createCapabilityProbe = (
   overrides: Partial<ProbeOptions> = {},
@@ -1036,6 +1048,7 @@ export const createCapabilityProbe = (
   const options: ProbeOptions = {
     budgetMs: PROBE_BUDGET_MS,
     budgetSignal: (budgetMs) => AbortSignal.timeout(budgetMs),
+    driver: cdpDriver,
     drmDirectory: DRM_DIRECTORY,
     fcList: "fc-list",
     now: Date.now,
@@ -1059,6 +1072,8 @@ export const createCapabilityProbe = (
     runHeadless: async (binary, args) => await runHeadless(binary, args, options),
     signal: options.signal,
   });
+
+  const headlessUserAgentOf = createHeadlessUserAgentReader(options);
 
   const entries = new Map<string, ProbeEntry>();
 
@@ -1210,12 +1225,37 @@ export const createCapabilityProbe = (
     return await withinDeadline(async () => await join(checkFontStack(directory)), deadline);
   };
 
-  return async (browserPath, deadline, work = createProbeWork()) => {
+  const withHeadlessUserAgent = async (
+    capabilities: HostCapabilities,
+    browserPath: string | undefined,
+    mode: LaunchMode | undefined,
+    deadline: Deadline | undefined,
+    { join }: ProbeWork,
+  ): Promise<HostCapabilities> => {
+    if (mode !== "headless" || browserPath === undefined || !showsHeadlessToken(capabilities)) {
+      return capabilities;
+    }
+
+    const headlessUserAgent = await withinDeadline(
+      async () => await join(headlessUserAgentOf(browserPath)),
+      deadline,
+    );
+
+    return headlessUserAgent === undefined ? capabilities : { ...capabilities, headlessUserAgent };
+  };
+
+  return async (browserPath, deadline, mode, work = createProbeWork()) => {
     const [capabilities, fontStack] = await Promise.all([
       probeFork(browserPath, deadline, work),
       probeFontStack(browserPath, deadline, work),
     ]);
 
-    return fontStack === null ? capabilities : { ...capabilities, fontStack };
+    return await withHeadlessUserAgent(
+      fontStack === null ? capabilities : { ...capabilities, fontStack },
+      browserPath,
+      mode,
+      deadline,
+      work,
+    );
   };
 };

@@ -141,7 +141,8 @@ const plannedVisit = async (
   const pins = identityForVisit(intent.identity, device, observation?.locale);
 
   const capabilities =
-    context.capabilities ?? (await dependencies.host.snapshotFor(intent.source.browserPath, held));
+    context.capabilities ??
+    (await dependencies.host.snapshotFor(intent.source.browserPath, held, intent.source.mode));
 
   const fonts = await dependencies.fonts.claim(
     intent.source.browserPath,
@@ -522,7 +523,7 @@ const sessionBrowser = async (
   }
 
   const { browserArgs, browserPath, mode } = intent.source;
-  const capabilities = await host.snapshotFor(browserPath, deadline);
+  const capabilities = await host.snapshotFor(browserPath, deadline, mode);
   const chromeMajor = await host.chromeMajorFor(browserPath, capabilities, deadline);
 
   return { browserArgs, capabilities: { ...capabilities, chromeMajor }, mode };

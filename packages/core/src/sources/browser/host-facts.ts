@@ -3,6 +3,7 @@ import type { CacheDir } from "../../cache-dir.ts";
 import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import type { HostCapabilities } from "../../humanizer/contracts.ts";
+import type { ResolvedMode } from "../../types.ts";
 import { scratchRoot } from "./browser-process.ts";
 import {
   chromeMajorOf,
@@ -18,6 +19,7 @@ export interface HostFacts {
   readonly snapshotFor: (
     binary: string | undefined,
     deadline: Deadline,
+    mode?: Exclude<ResolvedMode["mode"], "http">,
   ) => Promise<HostCapabilities>;
   readonly chromeMajorFor: (
     binary: string,
@@ -97,10 +99,10 @@ export const hostFactsFor = (cacheDir: CacheDir): ClientHostFacts => {
         PROBE_SETTLE_BUDGET_MS,
       );
     },
-    snapshotFor: async (binary, deadline) => {
+    snapshotFor: async (binary, deadline, mode) => {
       deadline.throwIfExpired();
 
-      return await untilDeadline(async () => await probe(binary, deadline, work), deadline);
+      return await untilDeadline(async () => await probe(binary, deadline, mode, work), deadline);
     },
   };
 };

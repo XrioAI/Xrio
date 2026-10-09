@@ -74,6 +74,12 @@ const IDENTITY_REALMS =
 
 const CLIENT_HINTS_ECHO = /<pre id="client-hints">(?<headers>[^<]*)<\/pre>/u;
 
+const USER_AGENT_FIELD = /"userAgent":"(?<agent>[^"]*)"/gu;
+
+const FULL_VERSION = /^\d+\.\d+\.\d+\.\d+$/u;
+
+const HEADLESS_TOKEN = "HeadlessChrome";
+
 const REALM_COUNT = 8;
 
 const REALM_HARDWARE_ROW =
@@ -153,7 +159,25 @@ const STATIC_PAGE_COMMANDS = [
   "main Target.setAutoAttach",
 ];
 
+const PRESENTED_USER_AGENT_COMMAND = "main Network.setUserAgentOverride";
+
+const staticPageCommands = (presentsUserAgent: boolean): string[] =>
+  presentsUserAgent
+    ? [...STATIC_PAGE_COMMANDS, PRESENTED_USER_AGENT_COMMAND].toSorted()
+    : STATIC_PAGE_COMMANDS;
+
+const USER_AGENT_SCOPES = [
+  "main",
+  "popup",
+  "iframe",
+  "worker",
+  "service_worker",
+  "shared_worker",
+  "other",
+] as const;
+
 const ALLOWED_PAIRS = new Set([
+  ...USER_AGENT_SCOPES.map((scope) => `${scope} Network.setUserAgentOverride`),
   "browser Browser.close",
   "browser Browser.getVersion",
   "browser Browser.setDownloadBehavior",
@@ -191,6 +215,9 @@ const FAVICON = "/favicon.ico";
 const markerOf = (html: string): string | undefined => MARKER.exec(html)?.groups?.marker;
 
 const pathOf = (url: string): string => new URL(url).pathname;
+
+const userAgentsIn = (text: string): string[] =>
+  [...text.matchAll(USER_AGENT_FIELD)].map((match) => match.groups?.agent ?? "");
 
 const minutesAheadOfUtc = (month: number): number =>
   0 - new Date(new Date().getFullYear(), month, 15).getTimezoneOffset();
@@ -721,6 +748,53 @@ describe.each(MODES)("the launch identity, %s", (mode) => {
     expect(identity).toMatchObject({ observed: { clientHints: { bitness: "64" } } });
   });
 
+  it("presents one user agent without the headless token to the page and all eight realms on /identity", async () => {
+    const { html, identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const page = userAgentsIn(IDENTITY_REPORT.exec(html)?.groups?.report ?? "");
+    const realms = userAgentsIn(IDENTITY_REALMS.exec(html)?.groups?.realms ?? "");
+
+    expect(realms).toHaveLength(REALM_COUNT);
+    expect(new Set([...page, ...realms])).toStrictEqual(new Set([identity.observed.userAgent]));
+    expect(identity.observed.userAgent).not.toContain(HEADLESS_TOKEN);
+    expect(identity.tells).not.toContain("headless-token");
+  });
+
+  it("reads the browser's own full version list after capture on /identity", async () => {
+    const { identity } = await load(mode, "/identity");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const versions =
+      identity.observed.clientHints?.fullVersionList?.map(({ version }) => version) ?? [];
+
+    expect(versions).toContain(identity.binary.version);
+    expect(versions.filter((version) => !FULL_VERSION.test(version))).toStrictEqual([]);
+  });
+
+  it("sends that user agent with the browser's full version hints on /client-hints", async () => {
+    const { html, identity } = await load(mode, "/client-hints");
+
+    if (identity.mode === "http") {
+      throw new Error("A browser scrape reports a browser identity.");
+    }
+
+    const headers = CLIENT_HINTS_ECHO.exec(html)?.groups?.headers ?? "null";
+    const echoed: unknown = JSON.parse(headers);
+
+    expect(echoed).toMatchObject({
+      "sec-ch-ua-full-version": `"${identity.binary.version}"`,
+      "user-agent": identity.observed.userAgent,
+    });
+    expect(headers).toContain(String.raw`v=\"${identity.binary.version}\"`);
+  });
+
   it("reports the page's WebGPU adapter on /identity, and Xrio's read agrees when it observed one", async () => {
     const { html, identity } = await load(mode, "/identity");
 
@@ -1037,7 +1111,7 @@ describe.each(MODES)("browser lifecycle, %s", (mode) => {
       display: process.env.DISPLAY,
       headless: mode === "headless",
       identity: planIdentity({
-        capabilities: await createCapabilityProbe()(chromePath()),
+        capabilities: await createCapabilityProbe()(chromePath(), undefined, mode),
         device: fixedDevice,
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: readHostZone(),
@@ -1160,7 +1234,14 @@ describe.each(MODES)("commands our CDP client sends, %s", (mode) => {
   serveFixturePages();
 
   it("sends exactly the expected commands to load a static page", async () => {
-    await expect(tappedCommands(mode, ["/static"])).resolves.toStrictEqual(STATIC_PAGE_COMMANDS);
+    const capabilities = await createCapabilityProbe()(chromePath());
+
+    const presentsUserAgent =
+      mode === "headless" && knobOf(capabilities, "suppress-headless-token") !== "true";
+
+    await expect(tappedCommands(mode, ["/static"])).resolves.toStrictEqual(
+      staticPageCommands(presentsUserAgent),
+    );
   });
 
   it("sends only allowlisted commands to frames, workers and dialogs", async () => {

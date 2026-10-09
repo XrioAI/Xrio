@@ -802,7 +802,10 @@ const routes = new Map<
     "/client-hints",
     (response) => {
       requestedPaths.delete("/client-hints-done");
-      response.setHeader("accept-ch", "Device-Memory, Sec-CH-Device-Memory");
+      response.setHeader(
+        "accept-ch",
+        "Device-Memory, Sec-CH-Device-Memory, Sec-CH-UA-Full-Version, Sec-CH-UA-Full-Version-List",
+      );
       sendPage(
         response,
         "client-hints",

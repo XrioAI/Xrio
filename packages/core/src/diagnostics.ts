@@ -31,6 +31,7 @@ export interface InternalEvent {
     | "pool-prune-failed"
     | "fork-probed"
     | "host-renderer-probed"
+    | "headless-user-agent-probed"
     | "font-stack-checked"
     | "font-settlement-failed"
     | "browser-argv"

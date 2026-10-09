@@ -93,6 +93,8 @@ const readsByValue = (params: unknown): params is { awaitPromise: true; returnBy
 
 const IDENTITY_READ_MARKER = "requestedOffsets";
 
+const USER_AGENT_READ_MARKER = "uaFullVersion";
+
 const AFTER_CAPTURE_MARKER = "isSecureContext";
 
 const expressionCarries = (params: unknown, marker: string): params is { expression: string } =>
@@ -110,7 +112,9 @@ const hasUrl = (params: unknown): params is { url: string } =>
 
 const requested = process.env.XRIO_FAKE_SCENARIO ?? "normal";
 
-const scenario: Scenario = isScenario(requested) ? requested : "normal";
+const probing = process.argv.at(-1)?.startsWith("file:") ?? false;
+
+const scenario: Scenario = !probing && isScenario(requested) ? requested : "normal";
 
 const pageStatus = scenario === "blocked" ? BLOCKED_PAGE.status : 200;
 
@@ -400,6 +404,30 @@ const screenOf = () => {
 
 const [OUTER_WIDTH, OUTER_HEIGHT] = pairOf("--window-size", [1600, 900]);
 
+const OWN_USER_AGENT = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`;
+
+const USER_AGENT_READING: Json = {
+  result: {
+    type: "string",
+    value: JSON.stringify({
+      hints: {
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        formFactors: ["Desktop"],
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        uaFullVersion: "154.0.8037.57",
+        wow64: false,
+      },
+      userAgent: OWN_USER_AGENT,
+    }),
+  },
+};
+
 const [SCREEN_X, SCREEN_Y] = pairOf("--window-position", [22, 22]);
 
 const OBSERVATION = {
@@ -424,7 +452,7 @@ const OBSERVATION = {
   requestedZone: scenario === "identity-drift" ? "America/Chicago" : "UTC",
   screenX: SCREEN_X,
   screenY: SCREEN_Y,
-  userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${USER_AGENT_PRODUCT} Safari/537.36`,
+  userAgent: switchValue("--user-agent") ?? OWN_USER_AGENT,
   webdriver: false,
   webgl: scenario !== "no-webgl",
   webglExtensions:
@@ -649,6 +677,12 @@ const answerEvaluate = async (
 ): Promise<void> => {
   if (expressionCarries(params, AFTER_CAPTURE_MARKER)) {
     await write([reply(AFTER_CAPTURE_READ)]);
+
+    return;
+  }
+
+  if (expressionCarries(params, USER_AGENT_READ_MARKER)) {
+    await write([reply(USER_AGENT_READING)]);
 
     return;
   }
