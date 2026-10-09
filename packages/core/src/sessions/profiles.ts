@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readdirSync, renameSync, rmSync } from "node:fs";
 import { lstat, mkdir, readFile, rm } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 
@@ -32,16 +32,81 @@ export const defaultStateDir = (): string =>
 
 export const defaultDatabaseDir = (): string => path.join(homedir(), ".xrio");
 
-const profilesRoot = (root: string): string => path.join(root, "profiles");
+const PROFILES = "profiles";
 
-export const profileDirectory = (root: string, tenant: string, name: string): string =>
-  path.join(
-    profilesRoot(root),
+const STORED_PROFILE = /^profiles\/[0-9a-f]{16}$/u;
+
+const DISK_CACHE_SWITCH = "--disk-cache-dir=";
+
+const profilesRoot = (root: string): string => path.join(root, PROFILES);
+
+export const storedProfile = (tenant: string, name: string): string =>
+  path.posix.join(
+    PROFILES,
     createHash("sha256")
       .update(JSON.stringify([tenant, name]))
       .digest("hex")
       .slice(0, 16),
   );
+
+export const isStoredProfile = (stored: string): boolean => STORED_PROFILE.test(stored);
+
+export interface CacheHost {
+  readonly platform: NodeJS.Platform;
+  readonly home: () => string;
+}
+
+const LOCAL_HOST: CacheHost = { home: () => userInfo().homedir, platform: process.platform };
+
+const chromeUserCache = (directory: string, host: CacheHost): string | undefined => {
+  if (host.platform !== "darwin") {
+    return undefined;
+  }
+
+  const home = host.home();
+
+  const underApplicationSupport = path.relative(
+    path.join(home, "Library", "Application Support"),
+    directory,
+  );
+
+  const insideApplicationSupport =
+    underApplicationSupport !== "" &&
+    !underApplicationSupport.startsWith("..") &&
+    !path.isAbsolute(underApplicationSupport);
+
+  return insideApplicationSupport
+    ? path.join(home, "Library", "Caches", underApplicationSupport)
+    : undefined;
+};
+
+const chosenDiskCache = (browserArgs: readonly string[]): string | undefined =>
+  browserArgs
+    .findLast((arg) => arg.startsWith(DISK_CACHE_SWITCH) && arg.length > DISK_CACHE_SWITCH.length)
+    ?.slice(DISK_CACHE_SWITCH.length);
+
+export const cacheDirectory = (
+  profileDir: string,
+  browserArgs: readonly string[],
+  host: CacheHost = LOCAL_HOST,
+): string => {
+  const diskCache = chosenDiskCache(browserArgs);
+  const profile = path.join(profileDir, "Default");
+
+  const cacheProfile =
+    diskCache === undefined
+      ? (chromeUserCache(profile, host) ?? profile)
+      : path.resolve(diskCache, "Default");
+
+  return path.join(cacheProfile, "Cache");
+};
+
+export const cacheOutsideProfile = (
+  profileDir: string,
+  browserArgs: readonly string[],
+  host: CacheHost = LOCAL_HOST,
+): string | undefined =>
+  chosenDiskCache(browserArgs) === undefined ? chromeUserCache(profileDir, host) : undefined;
 
 export const ensurePrivateDirectory = async (directory: string): Promise<void> => {
   await mkdir(directory, { mode: 0o700, recursive: true });

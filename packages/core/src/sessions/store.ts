@@ -8,7 +8,7 @@ import { untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
 import { XrioError } from "../errors.ts";
 import type { SessionBinding, SiteVisit } from "../sources/visit.ts";
-import { LOCAL_TENANT } from "./profiles.ts";
+import { isStoredProfile, LOCAL_TENANT, storedProfile } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
 import { COOLING_RETIREMENT_STREAK, warmthAfter, warmthAt } from "./warmth.ts";
 import type { SiteWarmth } from "./warmth.ts";
@@ -20,6 +20,7 @@ export type SessionState = "ready" | "quarantined" | "retired";
 export interface SessionRow {
   readonly name: string;
   readonly pool: string | undefined;
+  readonly profileDir: string;
   readonly coolingStreak: number;
   readonly state: SessionState;
   readonly epoch: number;
@@ -177,6 +178,16 @@ const browserArgsOf = (row: SqlRow): readonly string[] | undefined => {
   return browserArgs;
 };
 
+const profileDirOf = (row: SqlRow): string => {
+  const stored = textAt(row, "profile_dir");
+
+  if (!isStoredProfile(stored)) {
+    throw new TypeError("Unreadable session column profile_dir.");
+  }
+
+  return stored;
+};
+
 const bindingOf = (row: SqlRow): SessionBinding => {
   const stickyId = textAt(row, "sticky_id");
 
@@ -215,13 +226,14 @@ const rowOf = (row: SqlRow): SessionRow => {
     name: textAt(row, "name"),
     platform: optionalTextAt(row, "platform"),
     pool: optionalTextAt(row, "pool"),
+    profileDir: profileDirOf(row),
     record: optionalTextAt(row, "record"),
     state,
     visits: numberAt(row, "visits"),
   };
 };
 
-const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,pool TEXT,state TEXT NOT NULL DEFAULT 'ready',
+const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,pool TEXT,profile_dir TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'ready',
   epoch INTEGER NOT NULL DEFAULT 0,holder_host TEXT,holder_pid INTEGER,holder_start TEXT,holder_token TEXT,
   expires_at INTEGER NOT NULL DEFAULT 0,record TEXT,platform TEXT,browser_args TEXT,chrome_major INTEGER NOT NULL DEFAULT 0,
   visits INTEGER NOT NULL DEFAULT 0,cooling_streak INTEGER NOT NULL DEFAULT 0,sticky_id TEXT NOT NULL,
@@ -380,12 +392,13 @@ export class SessionStore {
   #inserted(name: string, pool: string | undefined, request: ClaimRequest): SessionRow {
     this.#db
       .prepare(
-        "INSERT INTO sessions(tenant,name,pool,created_at,last_visit_at,sticky_id) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO sessions(tenant,name,pool,profile_dir,created_at,last_visit_at,sticky_id) VALUES(?,?,?,?,?,?,?)",
       )
       .run(
         this.#tenant,
         name,
         pool ?? null,
+        storedProfile(this.#tenant, name),
         request.now,
         request.now,
         this.unusedStickyId(request.stickyId),

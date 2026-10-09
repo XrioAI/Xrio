@@ -10,10 +10,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "../deadline.ts";
 import { profileUse } from "../sources/browser/browser-process.ts";
 import {
+  cacheDirectory,
+  cacheOutsideProfile,
   ensurePrivateDirectory,
   holderIsGone,
   processStart,
-  profileDirectory,
+  storedProfile,
 } from "./profiles.ts";
 
 const unreadableStart = async (): Promise<undefined> => {
@@ -40,10 +42,48 @@ describe("profiles", () => {
   });
 
   it("hashes the tenant and session name without exposing either in the profile path", () => {
-    expect(profileDirectory("/state", "local", "account")).toBe("/state/profiles/34b999a96c2c821a");
-    expect(profileDirectory("/state", "other", "account")).not.toBe(
-      profileDirectory("/state", "local", "account"),
-    );
+    expect(storedProfile("local", "account")).toBe("profiles/34b999a96c2c821a");
+    expect(storedProfile("other", "account")).not.toBe(storedProfile("local", "account"));
+  });
+
+  it("places a profile's HTTP cache where Chrome keeps it", () => {
+    const linux = { home: () => "/home/user", platform: "linux" } as const;
+    const mac = { home: () => "/Users/user", platform: "darwin" } as const;
+    const supported = "/Users/user/Library/Application Support/xrio/profiles/34b999a96c2c821a";
+
+    expect([
+      cacheDirectory("/state/profiles/34b999a96c2c821a", [], linux),
+      cacheDirectory(supported, [], mac),
+      cacheDirectory("/Users/user/state/profiles/34b999a96c2c821a", [], mac),
+      cacheDirectory(supported, ["--disk-cache-dir=/first", "--disk-cache-dir=/cache"], mac),
+      cacheDirectory("/state/profiles/34b999a96c2c821a", ["--disk-cache-dir="], linux),
+    ]).toStrictEqual([
+      "/state/profiles/34b999a96c2c821a/Default/Cache",
+      "/Users/user/Library/Caches/xrio/profiles/34b999a96c2c821a/Default/Cache",
+      "/Users/user/state/profiles/34b999a96c2c821a/Default/Cache",
+      "/cache/Default/Cache",
+      "/state/profiles/34b999a96c2c821a/Default/Cache",
+    ]);
+  });
+
+  it("names the cache directory outside a profile only when Chrome derived it from the profile", () => {
+    const linux = { home: () => "/home/user", platform: "linux" } as const;
+    const mac = { home: () => "/Users/user", platform: "darwin" } as const;
+    const supported = "/Users/user/Library/Application Support/xrio/profiles/34b999a96c2c821a";
+
+    expect([
+      cacheOutsideProfile(supported, [], mac),
+      cacheOutsideProfile(supported, ["--disk-cache-dir=/cache"], mac),
+      cacheOutsideProfile("/Users/user/Library/Application Support", [], mac),
+      cacheOutsideProfile("/Users/user/state/profiles/34b999a96c2c821a", [], mac),
+      cacheOutsideProfile("/state/profiles/34b999a96c2c821a", [], linux),
+    ]).toStrictEqual([
+      "/Users/user/Library/Caches/xrio/profiles/34b999a96c2c821a",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   it("identifies PID reuse and keeps an unobservable remote holder protected", async () => {

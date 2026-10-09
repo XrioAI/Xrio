@@ -31,6 +31,7 @@ const member = (
   name,
   platform: undefined,
   pool: "catalog",
+  profileDir: "profiles/0123456789abcdef",
   record: undefined,
   state,
   visits: 0,
@@ -59,9 +60,15 @@ const pooledSessions = async (profileUse: () => ProfileUse = () => "clear") => {
       await sessions.close();
       await rm(root, { force: true, recursive: true });
     },
+    root,
     sessions,
   };
 };
+
+const memberPaths = (root: string, hash: string) => ({
+  cacheDir: path.join(root, "profiles", hash, "Default", "Cache"),
+  profileDir: path.join(root, "profiles", hash),
+});
 
 const chooseCold = (members: readonly SessionRow[]) => choosePoolMember(members, () => "cold");
 
@@ -240,7 +247,7 @@ describe("pools", () => {
 
   it("serves a claim from another member when one member cannot be presented", async () => {
     await using pooled = await pooledSessions();
-    const { sessions } = pooled;
+    const { root, sessions } = pooled;
     using deadline = startDeadline(10_000);
 
     {
@@ -255,7 +262,8 @@ describe("pools", () => {
 
     await using older = await sessions.hold(pool, { capabilities: host(154), seed }, deadline);
 
-    expect(older.summary(served)).toStrictEqual({
+    expect(older.summary(served, { browserArgs: [] })).toStrictEqual({
+      ...memberPaths(root, "9868bc4147116d6f"),
       created: true,
       name: "catalog/2",
       pool: "catalog",
@@ -263,8 +271,22 @@ describe("pools", () => {
       warmth: "warm",
     });
     await expect(sessions.admin.list()).resolves.toStrictEqual([
-      { lastVisitAt: 1_000_000, name: "catalog/1", pool: "catalog", state: "ready", visits: 1 },
-      { lastVisitAt: 1_000_000, name: "catalog/2", pool: "catalog", state: "ready", visits: 0 },
+      {
+        ...memberPaths(root, "c92e5a3717c6ad81"),
+        lastVisitAt: 1_000_000,
+        name: "catalog/1",
+        pool: "catalog",
+        state: "ready",
+        visits: 1,
+      },
+      {
+        ...memberPaths(root, "9868bc4147116d6f"),
+        lastVisitAt: 1_000_000,
+        name: "catalog/2",
+        pool: "catalog",
+        state: "ready",
+        visits: 0,
+      },
     ]);
   });
 
@@ -298,7 +320,7 @@ describe("pools", () => {
   it("leaves a member ready and fails when the process table cannot be read", async () => {
     let use: ProfileUse = "clear";
     await using pooled = await pooledSessions(() => use);
-    const { sessions } = pooled;
+    const { root, sessions } = pooled;
     using deadline = startDeadline(10_000);
 
     {
@@ -315,7 +337,14 @@ describe("pools", () => {
       details: { reason: "process-table-unreadable" },
     });
     await expect(sessions.admin.list()).resolves.toStrictEqual([
-      { lastVisitAt: 1_000_000, name: "catalog/1", pool: "catalog", state: "ready", visits: 0 },
+      {
+        ...memberPaths(root, "c92e5a3717c6ad81"),
+        lastVisitAt: 1_000_000,
+        name: "catalog/1",
+        pool: "catalog",
+        state: "ready",
+        visits: 0,
+      },
     ]);
   });
 });

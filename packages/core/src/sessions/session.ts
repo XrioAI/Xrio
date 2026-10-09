@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { lstat, rm } from "node:fs/promises";
 import { hostname } from "node:os";
+import path from "node:path";
 
 import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Clock, Deadline } from "../deadline.ts";
@@ -20,15 +21,15 @@ import { OwnershipLease, ownershipSchedule } from "./lease.ts";
 import type { LeaseExpiry } from "./lease.ts";
 import { choosePoolMember } from "./pools.ts";
 import {
+  cacheDirectory,
+  cacheOutsideProfile,
   ensurePrivateDirectory,
   holderIsGone,
-  LOCAL_TENANT,
   movedProfile,
   processStart,
-  profileDirectory,
   tombstonesIn,
 } from "./profiles.ts";
-import type { Holder } from "./profiles.ts";
+import type { CacheHost, Holder } from "./profiles.ts";
 import { newHolderToken, openStore, waitForTurn } from "./store.ts";
 import type {
   Claim,
@@ -40,13 +41,17 @@ import type {
 } from "./store.ts";
 import { DEFAULT_WARMTH_MAX_AGE_MS, warmthAfter, warmthAt } from "./warmth.ts";
 
+interface VisitLaunch {
+  readonly browserArgs: readonly string[];
+}
+
 export interface SessionHold extends AsyncDisposable {
   readonly device: IdentityContext["device"];
   readonly browserArgs: readonly string[] | undefined;
   readonly profile: Profile;
   readonly binding: SessionBinding | undefined;
   readonly drawStickyId: () => string;
-  readonly summary: (visit: SiteVisit) => SessionSummary | undefined;
+  readonly summary: (visit: SiteVisit, launch: VisitLaunch) => SessionSummary | undefined;
   readonly bind: (deadline: Deadline) => HeldDeadline;
   readonly revisitWanted: (outcome: ScrapeOutcome) => boolean;
   readonly retire: () => Promise<void>;
@@ -79,6 +84,7 @@ export interface SessionManager {
 interface SessionOptions {
   readonly databaseDir?: string;
   readonly profileUse: (directory: string, deadline: Deadline) => Promise<ProfileUse>;
+  readonly cacheHost?: CacheHost;
   readonly holdMs?: number;
   readonly wallNow?: () => number;
   readonly warmthMaxAgeMs?: number;
@@ -182,16 +188,14 @@ const ownStart = async (): Promise<string> => {
   return start;
 };
 
-const sessionInfoOf = (row: SessionRow): SessionInfo => {
-  const info: SessionInfo = {
-    lastVisitAt: row.lastVisitAt,
-    name: row.name,
-    state: row.state,
-    visits: row.visits,
-  };
-
-  return row.pool === undefined ? info : { ...info, pool: row.pool };
-};
+const profilePaths = (
+  profileDir: string,
+  browserArgs: readonly string[],
+  host: CacheHost | undefined,
+) => ({
+  cacheDir: cacheDirectory(profileDir, browserArgs, host),
+  profileDir,
+});
 
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
@@ -254,6 +258,20 @@ class Sessions implements SessionManager {
         event: "sweep-incomplete",
       });
     }
+  }
+  #profileDir(row: SessionRow): string {
+    return path.join(this.#root, row.profileDir);
+  }
+  #sessionInfo(row: SessionRow): SessionInfo {
+    const info: SessionInfo = {
+      ...profilePaths(this.#profileDir(row), row.browserArgs ?? [], this.#options.cacheHost),
+      lastVisitAt: row.lastVisitAt,
+      name: row.name,
+      state: row.state,
+      visits: row.visits,
+    };
+
+    return row.pool === undefined ? info : { ...info, pool: row.pool };
   }
   async #holder(): Promise<Holder> {
     this.#holderStart ??= ownStart();
@@ -440,7 +458,7 @@ class Sessions implements SessionManager {
     db: SessionStore,
     deadline: Deadline,
   ): Promise<string> {
-    const directory = profileDirectory(this.#root, LOCAL_TENANT, row.name);
+    const directory = this.#profileDir(row);
 
     await Sessions.#recordedProfileExists(row, lease, directory);
     await ensurePrivateDirectory(directory);
@@ -452,6 +470,7 @@ class Sessions implements SessionManager {
 
     if (row.record === undefined) {
       await Sessions.#resetProfile(lease, db, directory);
+      await this.#removeCacheOutsideProfile(row, directory);
     }
 
     held.throwIfExpired();
@@ -573,8 +592,9 @@ class Sessions implements SessionManager {
         }
       },
       revisitWanted: () => false,
-      summary: (visit) => {
+      summary: (visit, launch) => {
         const summary: SessionSummary = {
+          ...profilePaths(directory, launch.browserArgs, this.#options.cacheHost),
           created: claim.created,
           name,
           visits: claim.row.visits + 1,
@@ -690,7 +710,7 @@ class Sessions implements SessionManager {
   ): Promise<SessionUnavailable | undefined> {
     const { row } = held.claim;
     const lease = this.#lease(db, held, holder, deadline.clock);
-    const directory = profileDirectory(this.#root, LOCAL_TENANT, row.name);
+    const directory = this.#profileDir(row);
 
     try {
       await this.#refuseOpenProfile(
@@ -699,6 +719,7 @@ class Sessions implements SessionManager {
         directory,
         deadline.boundTo(lease.signal, "ownership"),
       );
+      await this.#removeCacheOutsideProfile(row, directory);
 
       const removed = movedProfile(directory);
       using persistence = lease.persistence();
@@ -718,6 +739,20 @@ class Sessions implements SessionManager {
       throw error;
     } finally {
       await lease.release();
+    }
+  }
+  async #removeCacheOutsideProfile(row: SessionRow, profileDir: string): Promise<void> {
+    try {
+      const cache = cacheOutsideProfile(profileDir, row.browserArgs ?? [], this.#options.cacheHost);
+
+      if (cache !== undefined) {
+        await rm(cache, { force: true, recursive: true });
+      }
+    } catch (error) {
+      publishInternalEvent({
+        detail: `Removing the cache of session ${row.name} failed: ${messageOf(error)}`,
+        event: "sweep-incomplete",
+      });
     }
   }
   async #delete(name: string): Promise<void> {
@@ -774,7 +809,7 @@ class Sessions implements SessionManager {
     using deadline = startDeadline(ADMIN_BUDGET_MS);
     const db = await this.#openedStore(deadline);
 
-    return db.list().map(sessionInfoOf);
+    return db.list().map((row) => this.#sessionInfo(row));
   }
   async #adminRun<Result>(run: () => Promise<Result>): Promise<Result> {
     if (this.#closed) {

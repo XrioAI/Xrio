@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,10 +11,21 @@ import { chromePath } from "../testing/chrome-path.ts";
 import { startFixtureServer } from "../testing/fixture-server.ts";
 import type { FixtureHandler } from "../testing/fixture-server.ts";
 import { leftovers, nothingLeft } from "../testing/leftovers.ts";
-import { profileDirectory } from "./profiles.ts";
+import { storedProfile } from "./profiles.ts";
 
 const fixturePage: FixtureHandler = (request, response) => {
   const route = new URL(request.url ?? "/", "http://fixture").pathname;
+
+  if (route === "/cached" || route === "/cached.js") {
+    response.setHeader("cache-control", "public, max-age=3600");
+    response.setHeader("content-type", route === "/cached" ? "text/html" : "text/javascript");
+    response.end(
+      route === "/cached" ? '<html><body><script src="/cached.js"></script></body></html>' : "",
+    );
+
+    return;
+  }
+
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.setHeader("cache-control", "no-store");
 
@@ -43,7 +54,7 @@ const fixturePage: FixtureHandler = (request, response) => {
 };
 
 const cookieCount = (stateDir: string, name: string): number => {
-  const profile = profileDirectory(stateDir, "local", "failed-first");
+  const profile = path.join(stateDir, storedProfile("local", "failed-first"));
   const database = new DatabaseSync(path.join(profile, "Default", "Cookies"), { readOnly: true });
 
   try {
@@ -96,6 +107,33 @@ describe("persistent sessions through the public API", () => {
       });
       await nextClient.close();
       await expect(leftovers(stateDir)).resolves.toStrictEqual(nothingLeft);
+    } finally {
+      await rm(stateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("reports the cacheDir where Chrome keeps the session's HTTP cache", async () => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "xrio-session-browser-"));
+    const configFile = path.join(stateDir, "xrio.config.json");
+    await writeFile(configFile, "{}");
+    await using fixture = await startFixtureServer(fixturePage);
+
+    try {
+      await using client = new XrioClient({
+        browserPath: chromePath(),
+        configFile,
+        mode: "headless",
+        stateDir,
+      });
+
+      const result = await client.scrape({
+        format: "html",
+        session: "cached",
+        url: `${fixture.origin}/cached`,
+      });
+
+      await client.close();
+      await expect(readdir(result.session?.cacheDir ?? stateDir)).resolves.toContain("Cache_Data");
     } finally {
       await rm(stateDir, { force: true, recursive: true });
     }

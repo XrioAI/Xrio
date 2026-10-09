@@ -312,7 +312,9 @@ const visitOnce = async (
 
     const answered = withSession(
       outcome,
-      siteVisit === undefined ? undefined : hold.summary(siteVisit),
+      siteVisit === undefined || plan.kind !== "browser"
+        ? undefined
+        : hold.summary(siteVisit, plan),
     );
 
     if (next.kind !== "retry") {

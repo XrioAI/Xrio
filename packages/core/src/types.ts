@@ -57,6 +57,8 @@ export interface SessionSummary {
   readonly created: boolean;
   readonly visits: number;
   readonly warmth: Warmth;
+  readonly profileDir: string;
+  readonly cacheDir: string;
 }
 
 export interface SessionInfo {
@@ -65,6 +67,8 @@ export interface SessionInfo {
   readonly state: "ready" | "quarantined" | "retired";
   readonly visits: number;
   readonly lastVisitAt: number;
+  readonly profileDir: string;
+  readonly cacheDir: string;
 }
 
 export interface StructuredContent {

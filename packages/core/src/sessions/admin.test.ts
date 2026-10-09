@@ -1,7 +1,19 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { ChannelListener } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { chmod, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,8 +24,10 @@ import { XrioClient } from "../client.ts";
 import { startDeadline } from "../deadline.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "../options.ts";
 import { fakeChromePath } from "../testing/fake-chrome-path.ts";
-import { processStart, profileDirectory } from "./profiles.ts";
+import type { SessionInfo } from "../types.ts";
+import { processStart, storedProfile } from "./profiles.ts";
 import { createSessions } from "./session.ts";
+import type { SessionManager } from "./session.ts";
 import { SessionStore } from "./store.ts";
 
 const intent = resolveScrapeIntent(
@@ -24,6 +38,8 @@ const intent = resolveScrapeIntent(
 const profileUse = async () => await Promise.resolve("clear" as const);
 
 const PAGE = "https://fake.test/page";
+
+const ACCOUNT_PROFILE = "34b999a96c2c821a";
 
 const exists = async (directory: string): Promise<boolean> => {
   try {
@@ -54,6 +70,54 @@ const sessionClient = async (mode: "headless" | "http" = "headless") => {
     stateDir,
   };
 };
+
+const claimChecks = {
+  capabilities: { chromeMajor: 154, permittedCpus: 32, platform: "linux" },
+  seed: () => "9f2c41d07a3be815",
+} as const;
+
+const createdSession = async (sessions: SessionManager, name: string): Promise<void> => {
+  using deadline = startDeadline(10_000);
+
+  const { session } = resolveScrapeIntent(
+    { format: "html", session: name, url: PAGE },
+    resolveClientOptions({ browserPath: "/browser", mode: "headless" }),
+  );
+
+  const hold = await sessions.hold(session, claimChecks, deadline);
+  await hold[Symbol.asyncDispose]();
+};
+
+const macSessions = async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "xrio-home-"));
+  const root = path.join(home, "Library", "Application Support", "xrio");
+
+  const sessions = createSessions(root, {
+    cacheHost: { home: () => home, platform: "darwin" },
+    profileUse,
+  });
+
+  return {
+    [Symbol.asyncDispose]: async () => {
+      await sessions.close();
+      await rm(home, { force: true, recursive: true });
+    },
+    caches: path.join(home, "Library", "Caches", "xrio", "profiles"),
+    home,
+    root,
+    sessions,
+  };
+};
+
+const isSweepIncomplete = (
+  message: unknown,
+): message is { event: "sweep-incomplete"; detail: string } =>
+  typeof message === "object" &&
+  message !== null &&
+  "event" in message &&
+  message.event === "sweep-incomplete" &&
+  "detail" in message &&
+  typeof message.detail === "string";
 
 describe("session administration", () => {
   it("refuses an admin reference captured before the client closed", async () => {
@@ -91,7 +155,7 @@ describe("session administration", () => {
       await hold[Symbol.asyncDispose]();
       await deleting;
       await closing;
-      await expect(exists(profileDirectory(root, "local", "account"))).resolves.toBeFalsy();
+      await expect(exists(path.join(root, storedProfile("local", "account")))).resolves.toBeFalsy();
     } finally {
       await hold[Symbol.asyncDispose]();
       await sessions.close();
@@ -156,6 +220,129 @@ describe("session administration", () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+
+  it("removes a session's cache under ~/Library/Caches with it and keeps a --disk-cache-dir directory", async () => {
+    await using mac = await macSessions();
+    const { caches, home, root, sessions } = mac;
+    const shared = path.join(home, "shared-cache");
+
+    await createdSession(sessions, "account");
+    await createdSession(sessions, "shared");
+
+    const database = new DatabaseSync(path.join(root, "xrio.db"));
+
+    try {
+      database.exec("PRAGMA busy_timeout=1000");
+      database
+        .prepare("UPDATE sessions SET browser_args=? WHERE name='shared'")
+        .run(JSON.stringify([`--disk-cache-dir=${shared}`]));
+    } finally {
+      database.close();
+    }
+
+    const listed = await sessions.admin.list();
+
+    await Promise.all(
+      listed.map(async ({ cacheDir }) => {
+        await mkdir(cacheDir, { recursive: true });
+      }),
+    );
+    await sessions.admin.delete("account");
+    await sessions.admin.delete("shared");
+
+    expect({
+      cacheDirs: listed.map(({ cacheDir }) => cacheDir),
+      left: {
+        accountCache: await exists(path.join(caches, ACCOUNT_PROFILE)),
+        accountProfile: await exists(path.join(root, "profiles", ACCOUNT_PROFILE)),
+        otherCaches: await exists(caches),
+        sharedCache: await exists(path.join(shared, "Default", "Cache")),
+      },
+    }).toStrictEqual({
+      cacheDirs: [
+        path.join(caches, ACCOUNT_PROFILE, "Default", "Cache"),
+        path.join(shared, "Default", "Cache"),
+      ],
+      left: { accountCache: false, accountProfile: false, otherCaches: true, sharedCache: true },
+    });
+  });
+
+  it("empties a record-less session's cache under ~/Library/Caches before its next scrape and keeps a recorded one's", async () => {
+    await using mac = await macSessions();
+    const { root, sessions } = mac;
+
+    await createdSession(sessions, "account");
+    await createdSession(sessions, "recorded");
+
+    const database = new DatabaseSync(path.join(root, "xrio.db"));
+
+    try {
+      database.exec(
+        "PRAGMA busy_timeout=1000; UPDATE sessions SET record='{}' WHERE name='recorded'",
+      );
+    } finally {
+      database.close();
+    }
+
+    const listed = await sessions.admin.list();
+
+    await Promise.all(
+      listed.map(async ({ cacheDir }) => {
+        await mkdir(cacheDir, { recursive: true });
+        await writeFile(path.join(cacheDir, "entry"), "cached");
+      }),
+    );
+
+    using deadline = startDeadline(10_000);
+
+    const cachedWhileHeld = async ({ cacheDir, name }: SessionInfo) => {
+      const hold = await sessions.hold({ kind: "named", name }, claimChecks, deadline);
+
+      try {
+        return [name, await exists(path.join(cacheDir, "entry"))] as const;
+      } finally {
+        await hold[Symbol.asyncDispose]();
+      }
+    };
+
+    expect(Object.fromEntries(await Promise.all(listed.map(cachedWhileHeld)))).toStrictEqual({
+      account: false,
+      recorded: true,
+    });
+  });
+
+  it("holds and deletes a session whose cache it cannot remove and publishes sweep-incomplete each time", async () => {
+    await using mac = await macSessions();
+    const { caches, sessions } = mac;
+    const failures: string[] = [];
+
+    const record: ChannelListener = (message) => {
+      if (isSweepIncomplete(message)) {
+        failures.push(message.detail);
+      }
+    };
+
+    await createdSession(sessions, "account");
+    await mkdir(path.join(caches, ACCOUNT_PROFILE, "Default", "Cache"), { recursive: true });
+    await chmod(caches, 0o500);
+    subscribe("xrio:event", record);
+
+    try {
+      await createdSession(sessions, "account");
+      await sessions.admin.delete("account");
+
+      expect({ failures, listed: await sessions.admin.list() }).toStrictEqual({
+        failures: [
+          expect.stringMatching(/^Removing the cache of session account failed: /u),
+          expect.stringMatching(/^Removing the cache of session account failed: /u),
+        ],
+        listed: [],
+      });
+    } finally {
+      unsubscribe("xrio:event", record);
+      await chmod(caches, 0o700);
+    }
+  });
 });
 
 describe("sessions through the public client", () => {
@@ -172,7 +359,7 @@ describe("sessions through the public client", () => {
     const profiles = async () =>
       await Promise.all(
         ["alpha", "beta"].map(
-          async (name) => await exists(profileDirectory(stateDir, "local", name)),
+          async (name) => await exists(path.join(stateDir, storedProfile("local", name))),
         ),
       );
 
@@ -232,6 +419,97 @@ describe("sessions through the public client", () => {
     await expect(
       client.scrape({ format: "html", session: "account", url: PAGE }),
     ).rejects.toMatchObject({ code: "SESSION_UNAVAILABLE", details: { reason } });
+  });
+
+  it("reports the profile and cache paths in a scrape's result and in list()", async () => {
+    await using visited = await sessionClient();
+    const { client, stateDir } = visited;
+    const profileDir = path.join(stateDir, "profiles", ACCOUNT_PROFILE);
+    const paths = { cacheDir: path.join(profileDir, "Default", "Cache"), profileDir };
+
+    const result = await client.scrape({ format: "html", session: "account", url: PAGE });
+
+    expect(result.session).toMatchObject(paths);
+    await expect(client.sessions.list()).resolves.toMatchObject([{ name: "account", ...paths }]);
+    await expect(readdir(path.join(profileDir, "Default"))).resolves.toContain("Preferences");
+  });
+
+  it("resolves a session's profile from its stored path after stateDir moves", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "xrio-moved-"));
+    const configFile = path.join(parent, "xrio.config.json");
+    const created = path.join(parent, "created");
+    const moved = path.join(parent, "moved");
+    const browserPath = await fakeChromePath("normal");
+    await writeFile(configFile, "{}");
+
+    try {
+      {
+        await using client = new XrioClient({
+          browserPath,
+          configFile,
+          mode: "headless",
+          stateDir: created,
+        });
+
+        const first = await client.scrape({ format: "html", session: "account", url: PAGE });
+
+        await writeFile(path.join(first.session?.profileDir ?? created, "kept"), "yes");
+      }
+
+      await rename(created, moved);
+
+      await using client = new XrioClient({
+        browserPath,
+        configFile,
+        mode: "headless",
+        stateDir: moved,
+      });
+
+      const resumed = await client.scrape({ format: "html", session: "account", url: PAGE });
+      const database = new DatabaseSync(path.join(moved, "xrio.db"), { readOnly: true });
+
+      try {
+        expect({
+          kept: await readFile(path.join(resumed.session?.profileDir ?? moved, "kept"), "utf-8"),
+          session: resumed.session,
+          stored: database.prepare("SELECT profile_dir FROM sessions").all(),
+        }).toMatchObject({
+          kept: "yes",
+          session: {
+            created: false,
+            profileDir: path.join(moved, "profiles", ACCOUNT_PROFILE),
+            visits: 2,
+          },
+          stored: [{ profile_dir: `profiles/${ACCOUNT_PROFILE}` }],
+        });
+      } finally {
+        database.close();
+      }
+    } finally {
+      await rm(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses a stored profile path outside stateDir's profiles and leaves that directory alone", async () => {
+    await using visited = await sessionClient();
+    const { client, stateDir } = visited;
+    const outside = path.join(stateDir, "outside");
+
+    await client.scrape({ format: "html", session: "account", url: PAGE });
+    await mkdir(outside);
+
+    const database = new DatabaseSync(path.join(stateDir, "xrio.db"));
+
+    try {
+      database.exec("PRAGMA busy_timeout=1000; UPDATE sessions SET profile_dir='outside'");
+    } finally {
+      database.close();
+    }
+
+    await expect(client.sessions.delete("account")).rejects.toThrow(
+      "Unreadable session column profile_dir.",
+    );
+    await expect(exists(outside)).resolves.toBeTruthy();
   });
 
   it("refuses a session scrape with INVALID_OPTIONS naming a stateDir that others can read", async () => {
