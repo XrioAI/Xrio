@@ -6,9 +6,13 @@ xrio-knobs: 77 knobs
 [der] gl-table = <absent>
 [def] gl-table-suffix = .xrio-gl.json
 [def] hardware-concurrency = <unset>
+[umb] jitter-text-metrics = false
 [def] media-table-suffix = .xrio-media.json
 [def] persona-dir = <unset>
 [def] persona-dir-name = personas
+[def] perturb-audio = false
+[def] perturb-canvas = false
+[def] seed = <unset>
 [set] speech-persona = synthetic-voices-154
 [der] speech-table = <absent>
 [def] speech-table-suffix = .xrio-speech.json
@@ -71,8 +75,4 @@ xrio-knobs: 77 knobs
 [def] synthetic-knob-55 = 165
 [def] synthetic-knob-56 = 168
 [def] synthetic-knob-57 = 171
-[def] synthetic-knob-58 = 174
-[def] synthetic-knob-59 = 177
-[def] synthetic-knob-60 = 180
-[def] synthetic-knob-61 = 183
 [umb] synthetic-umbrella-knob = true

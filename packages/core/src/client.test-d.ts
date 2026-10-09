@@ -344,6 +344,11 @@ describe("XrioClient types", () => {
     }>();
     expectTypeOf<"fork-commit-unreadable">().toExtend<IdentityTell>();
     expectTypeOf<"flag-infobar">().toExtend<IdentityTell>();
+    expectTypeOf<"noise-unhonored">().toExtend<IdentityTell>();
+    expectTypeOf<BrowserIdentityReport["surfaces"]["noise"]>().toEqualTypeOf<
+      | { readonly enabled: true; readonly reason: "software-gpu" }
+      | { readonly enabled: false; readonly reason: "native-gpu" | "unhonored" | "host-hardware" }
+    >();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
       | "fonts-drift"
@@ -381,6 +386,7 @@ describe("XrioClient types", () => {
       | "timezone"
       | "gpu"
       | "hardware"
+      | "noise"
       | "window"
       | "screen"
       | "fonts"

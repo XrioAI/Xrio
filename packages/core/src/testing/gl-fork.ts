@@ -5,7 +5,7 @@ import type {
   KnobRegistry,
   RefusedGlArtifact,
 } from "../humanizer/contracts.ts";
-import { HARDWARE_KNOBS } from "./hardware-fork.ts";
+import { HARDWARE_AND_NOISE_KNOBS } from "./hardware-fork.ts";
 
 export const SWIFTSHADER_RENDERER =
   "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)";
@@ -53,7 +53,7 @@ interface GlForkOptions {
 
 export const forkWithGl = (
   gl: readonly GlPersona[],
-  { knobs = HARDWARE_KNOBS, refusedGl = [] }: GlForkOptions = {},
+  { knobs = HARDWARE_AND_NOISE_KNOBS, refusedGl = [] }: GlForkOptions = {},
 ): ForkFacts => ({
   buildUnreadable: false,
   commit: null,

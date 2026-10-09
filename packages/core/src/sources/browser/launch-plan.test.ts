@@ -134,7 +134,7 @@ describe(planLaunch, () => {
     ]);
   });
 
-  it("sends a fork's hardware knobs after the GPU switches and before the window's", () => {
+  it("sends a fork's hardware and noise knobs after the GPU switches and before the window's", () => {
     const { args } = planLaunch({
       browserArgs: [],
       browserPath: "/opt/xrio-chrome/chrome",
@@ -162,6 +162,9 @@ describe(planLaunch, () => {
       "--enable-unsafe-swiftshader",
       "--xrio-hardware-concurrency=6",
       "--xrio-device-memory=16",
+      "--xrio-seed=0x063140f55c3932af",
+      "--xrio-perturb-canvas=true",
+      "--xrio-perturb-audio=true",
     ]);
   });
 
@@ -574,6 +577,17 @@ describe(parseBrowserArgs, () => {
       `browserArgs cannot include ${name}, which Xrio manages.`,
     );
   });
+
+  it.each(["--xrio-seed=0x1", "--xrio-perturb-canvas=false", "--xrio-perturb-audio=true"])(
+    "refuses the fork noise switch %s, which the identity sends itself",
+    (arg) => {
+      const [name] = arg.split("=", 1);
+
+      expect(() => parseBrowserArgs([arg])).toThrow(
+        `browserArgs cannot include ${name}, which Xrio manages.`,
+      );
+    },
+  );
 
   it("drops a valueless baseline switch, which Chrome already gets, and refuses it with a value", () => {
     const sentOnce = baseline.filter((arg) => !arg.includes("="));

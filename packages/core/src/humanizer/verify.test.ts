@@ -353,7 +353,10 @@ describe("severity", () => {
         },
         { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
       ],
-      report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+      report: {
+        notes: [],
+        tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
+      },
     });
   });
 
@@ -370,7 +373,12 @@ describe("severity", () => {
           },
           { expected: "en", field: "intlLocale", observed: "de", surface: "locale" },
         ],
-        tells: ["unmeasured-chrome", "gl-persona-unavailable", "hardware-unhonored"],
+        tells: [
+          "unmeasured-chrome",
+          "gl-persona-unavailable",
+          "hardware-unhonored",
+          "noise-unhonored",
+        ],
       },
     });
   });
@@ -419,7 +427,7 @@ describe("severity", () => {
             surface: "timezone",
           },
         ],
-        tells: ["gl-persona-unavailable", "hardware-unhonored"],
+        tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
       },
     });
   });
@@ -440,7 +448,12 @@ describe("severity", () => {
         mismatches: [{ expected: "UTC0", field: "zone", observed: zone, surface: "timezone" }],
         report: {
           notes: [],
-          tells: ["unmeasured-chrome", "gl-persona-unavailable", "hardware-unhonored"],
+          tells: [
+            "unmeasured-chrome",
+            "gl-persona-unavailable",
+            "hardware-unhonored",
+            "noise-unhonored",
+          ],
         },
       });
     },
@@ -765,7 +778,10 @@ describe("the hardware expectations", () => {
       evaluate(planFor(), { ...linuxHeadless, afterCapture: secure(32), hardwareConcurrency: 64 }),
     ).toMatchObject({
       mismatches: [],
-      report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+      report: {
+        notes: [],
+        tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
+      },
     });
   });
 
@@ -789,7 +805,7 @@ describe("the colour scheme", () => {
         notes: [
           { expected: "light", field: "colorScheme", observed: "dark", surface: "automation" },
         ],
-        tells: ["gl-persona-unavailable", "hardware-unhonored"],
+        tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
       },
     });
   });
@@ -851,6 +867,7 @@ describe("the headed window", () => {
           "display-implausible",
           "gl-persona-unavailable",
           "hardware-unhonored",
+          "noise-unhonored",
           "flag-infobar",
         ],
       },
@@ -875,7 +892,7 @@ describe("a pinned alias", () => {
           notes: [],
           observed: { timeZone: "Europe/Kiev" },
           surfaces: { timezone: { source: "pin", zone: "Europe/Kiev" } },
-          tells: ["gl-persona-unavailable", "hardware-unhonored"],
+          tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
         },
       },
     );
@@ -913,6 +930,7 @@ describe("tells", () => {
       "headless-token",
       "gl-persona-unavailable",
       "hardware-unhonored",
+      "noise-unhonored",
     ]);
   });
 
@@ -929,6 +947,7 @@ describe("tells", () => {
       "exit-unknown",
       "gl-persona-unavailable",
       "hardware-unhonored",
+      "noise-unhonored",
     ]);
   });
 });
@@ -970,7 +989,7 @@ describe("the fonts evidence", () => {
       fontEvidence: { kind: "confirmed" },
       mismatches: [],
       notes: [],
-      tells: ["gl-persona-unavailable", "hardware-unhonored"],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
     });
   });
 
@@ -995,7 +1014,7 @@ describe("the fonts evidence", () => {
       notes: [
         { expected: "c6755abb", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
       ],
-      tells: ["gl-persona-unavailable", "hardware-unhonored", "fonts-drift"],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored", "fonts-drift"],
     });
   });
 
@@ -1020,7 +1039,7 @@ describe("the fonts evidence", () => {
       notes: [
         { expected: true, field: "fontsSentinelResolved", observed: false, surface: "fonts" },
       ],
-      tells: ["gl-persona-unavailable", "hardware-unhonored", "fonts-drift"],
+      tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored", "fonts-drift"],
     });
   });
 
@@ -1365,7 +1384,10 @@ describe("the zone check run against the host's Intl", () => {
       expect(zoneCheckUnder(zone)).toMatchObject({
         mismatches: [],
         observation: { requestedZone: zone },
-        report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+        report: {
+          notes: [],
+          tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
+        },
       });
     },
   );
@@ -1382,7 +1404,10 @@ describe("the zone check run against the host's Intl", () => {
       }).toMatchObject({
         described: [`timezone zone (TZ=${zone}; Chrome named no zone)`],
         mismatches: [{ expected: zone, field: "zone", observed: null, surface: "timezone" }],
-        report: { notes: [], tells: ["gl-persona-unavailable", "hardware-unhonored"] },
+        report: {
+          notes: [],
+          tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"],
+        },
       });
     },
   );

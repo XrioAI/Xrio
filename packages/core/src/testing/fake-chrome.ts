@@ -762,6 +762,28 @@ const answer = async ({ id, method, params, sessionId }: Command): Promise<void>
   }
 };
 
+const SEED_SWITCH = "--xrio-seed";
+
+const KIT_SEED = /^(?:0x[\dA-Fa-f]{1,16}|\d{1,20})$/u;
+
+const KIT_SEED_LIMIT = 2n ** 64n;
+
+const isKitSeed = (value: string): boolean =>
+  KIT_SEED.test(value) && BigInt(value) > 0n && BigInt(value) < KIT_SEED_LIMIT;
+
+const seedArg = process.argv.find(
+  (arg) => arg === SEED_SWITCH || arg.startsWith(`${SEED_SWITCH}=`),
+);
+
+const seed = seedArg?.slice(SEED_SWITCH.length + 1) ?? "";
+
+if (scenario === "fork" && seedArg !== undefined && !isKitSeed(seed)) {
+  process.stderr.write(
+    `${SEED_SWITCH} must be a non-zero seed (decimal, or 0x-prefixed hex), not ${JSON.stringify(seed)}\n`,
+  );
+  process.exit(1);
+}
+
 if (scenario === "argv-on-stderr") {
   process.stderr.write(`${process.argv.slice(2).join("\n")}\n`);
   process.exit(1);

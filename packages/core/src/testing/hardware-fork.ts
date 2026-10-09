@@ -1,4 +1,5 @@
 import type { HostCapabilities, KnobRegistry } from "../humanizer/contracts.ts";
+import { NOISE_KNOBS } from "./noise-fork.ts";
 
 export const HARDWARE_KNOBS: KnobRegistry = {
   "device-memory": { origin: "def", value: null },
@@ -6,8 +7,10 @@ export const HARDWARE_KNOBS: KnobRegistry = {
   "spoof-hardware": { origin: "def", value: "true" },
 };
 
+export const HARDWARE_AND_NOISE_KNOBS: KnobRegistry = { ...HARDWARE_KNOBS, ...NOISE_KNOBS };
+
 export const forkWithKnobs = (
-  knobs: KnobRegistry = HARDWARE_KNOBS,
+  knobs: KnobRegistry = HARDWARE_AND_NOISE_KNOBS,
   permittedCpus = 32,
 ): HostCapabilities => ({
   fork: {
