@@ -20,6 +20,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -49,6 +50,7 @@ import {
   trapExecuted,
 } from "../../testing/fake-fork.ts";
 import type { FakeForkScenario } from "../../testing/fake-fork.ts";
+import { manualClock } from "../../testing/manual-clock.ts";
 import { sweepAbandonedScratch } from "./browser-process.ts";
 import { createCapabilityProbe, createProbeWork } from "./capabilities.ts";
 import { waitForGroupExit } from "./group-lifetime.ts";
@@ -1823,12 +1825,49 @@ describe("hostCapabilities host renderer", () => {
 
     await rm(page);
     execFileSync("/usr/bin/mkfifo", [page]);
-    using deadline = startDeadline(2000);
+    const { advance, clock } = manualClock();
+    using deadline = startDeadline(2000, undefined, clock);
+    const probeStarted = announceNextRenderProbe(executable);
 
-    const answered = await probe(executable, deadline, undefined, work);
+    let settled = false;
+
+    const answering = probe(executable, deadline, undefined, work).finally(() => {
+      settled = true;
+    });
+
+    await probeStarted();
+
+    advance(999);
+    await nextTurn();
+    expect(settled).toBeFalsy();
+
+    advance(1);
+
+    const answered = await answering;
 
     expect([answered.fork?.dialect, answered.hostRenderer]).toStrictEqual(["xrio", undefined]);
-    expect(deadline.remainingMs()).toBeGreaterThan(500);
+    expect(deadline.remainingMs()).toBe(1000);
+
+    await setHostRenderer(executable, null);
+    await work.settled();
+  });
+
+  it("keeps learning after answering within its deadline, for later scrapes", async () => {
+    const executable = await readyForkIn(root);
+    const work = createProbeWork();
+    const page = path.join(path.dirname(executable), "renderer-page.html");
+
+    await rm(page);
+    execFileSync("/usr/bin/mkfifo", [page]);
+
+    const { advance, clock } = manualClock();
+    using deadline = startDeadline(2000, undefined, clock);
+    const probeStarted = announceNextRenderProbe(executable);
+    const answering = rendererProbeIn(root)(executable, deadline, undefined, work);
+
+    await probeStarted();
+    advance(1000);
+    await answering;
 
     await setHostRenderer(executable, AMD);
     await work.settled();
