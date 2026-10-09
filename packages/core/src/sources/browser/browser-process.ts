@@ -56,7 +56,7 @@ export const scratchRoot = (): string => path.join("/tmp", `xrio-${currentUid()}
 
 const groupAndOtherPermissions = (mode: number): number => mode % OWNER_PERMISSION_UNIT;
 
-export const ensureScratchRoot = async (root: string): Promise<void> => {
+export const ensureScratchRoot = async (root: string, uid = currentUid()): Promise<void> => {
   await mkdir(root, { mode: 0o700, recursive: true });
   const stats = await lstat(root);
 
@@ -64,7 +64,7 @@ export const ensureScratchRoot = async (root: string): Promise<void> => {
     throw new Error(`${root} is not a directory Xrio can own.`);
   }
 
-  if (stats.uid !== currentUid() || groupAndOtherPermissions(stats.mode) !== 0) {
+  if (stats.uid !== uid || groupAndOtherPermissions(stats.mode) !== 0) {
     throw new Error(`${root} must belong to this user with mode 0700.`);
   }
 };
