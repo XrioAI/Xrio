@@ -58,7 +58,7 @@ const measureTargets = async (
 
 const benchmark = async (targets: readonly ScrapeTarget[], options: BenchOptions) => {
   const browserPath = chromePath();
-  const settings: ScrapeSettings = { browserPath, mode: options.mode };
+  const settings: ScrapeSettings = { browserPath, mode: options.mode, proxy: options.proxy };
   const { argv, samples } = await measureTargets(targets, settings, options);
 
   return {
@@ -66,6 +66,7 @@ const benchmark = async (targets: readonly ScrapeTarget[], options: BenchOptions
       argv,
       environment: describeEnvironment(browserPath),
       mode: options.mode,
+      proxied: options.proxy !== undefined,
       runs: options.runs,
       targets: targets.map(({ label }) => label),
       warmup: options.warmup,
@@ -74,14 +75,23 @@ const benchmark = async (targets: readonly ScrapeTarget[], options: BenchOptions
   };
 };
 
-const options = readBenchOptions();
+const options = await readBenchOptions();
 
-await using server = await startFixtureServer(conformancePages);
+const report = await (async () => {
+  if (options.liveUrls !== undefined) {
+    return await benchmark(
+      options.liveUrls.map((url) => ({ label: url, url })),
+      options,
+    );
+  }
 
-const report = await benchmark(
-  [{ label: options.route, url: new URL(options.route, server.origin).href }],
-  options,
-);
+  await using server = await startFixtureServer(conformancePages);
+
+  return await benchmark(
+    [{ label: options.route, url: new URL(options.route, server.origin).href }],
+    options,
+  );
+})();
 
 if (options.out !== undefined) {
   await writeFile(options.out, `${JSON.stringify(report, undefined, 2)}\n`);

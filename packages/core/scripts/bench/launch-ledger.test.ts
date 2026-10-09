@@ -28,6 +28,21 @@ describe("launch ledger", () => {
     ]);
   });
 
+  it("agrees when only the local proxy relay port differs", () => {
+    const ledger = createLaunchLedger();
+
+    ledger.admit([
+      ...launchArgv("/tmp/xrio-501/aaa", "1280,984", "en-US"),
+      "--proxy-server=http://127.0.0.1:43521",
+    ]);
+    ledger.admit([
+      ...launchArgv("/tmp/xrio-501/bbb", "1280,984", "en-US"),
+      "--proxy-server=http://127.0.0.1:35573",
+    ]);
+
+    expect(ledger.agreedArgv().at(-1)).toBe("--proxy-server=http://127.0.0.1:<port>");
+  });
+
   it("fails with the changed flag when a fixed flag differs", () => {
     const ledger = createLaunchLedger();
 

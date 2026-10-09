@@ -17,6 +17,7 @@ export interface ScrapeTarget {
 export interface ScrapeSettings {
   readonly mode: "headless" | "headed";
   readonly browserPath: string;
+  readonly proxy: string | undefined;
 }
 
 export interface MeasuredScrape {
@@ -87,6 +88,7 @@ export const measureScrape = async (
   const client = new XrioClient({
     browserPath: settings.browserPath,
     mode: settings.mode,
+    proxy: settings.proxy,
   });
 
   const { answerMs, exitMs, observation, status, usage } = await answerThenClose(

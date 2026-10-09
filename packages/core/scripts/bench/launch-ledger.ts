@@ -4,6 +4,10 @@ import { isOwnedSwitch } from "../../src/humanizer/owned-inputs.ts";
 
 const USER_DATA_DIR = "--user-data-dir=";
 
+const RELAY_ADDRESS = /^(?<flag>--proxy-server=\w+:\/\/127\.0\.0\.1:)\d+$/u;
+
+const PORT_MASK = "<port>";
+
 const DRAWN_MASK = "<drawn>";
 
 const SCRATCH_MASK = "<scratch>";
@@ -22,12 +26,20 @@ const isDrawn = (arg: string): boolean => isOwnedSwitch(arg.split("=")[0] ?? arg
 
 export const drawnValuesOf = (argv: readonly string[]): string[] => argv.filter(isDrawn);
 
+const comparableArg = (arg: string, scratchRoot: string): string => {
+  if (isDrawn(arg)) {
+    return `${arg.split("=")[0]}=${DRAWN_MASK}`;
+  }
+
+  const relay = RELAY_ADDRESS.exec(arg)?.groups?.flag;
+
+  return relay === undefined ? arg.replaceAll(scratchRoot, SCRATCH_MASK) : `${relay}${PORT_MASK}`;
+};
+
 const comparableArgv = (argv: readonly string[]): string[] => {
   const scratchRoot = scratchRootOf(argv);
 
-  return argv.map((arg) =>
-    isDrawn(arg) ? `${arg.split("=")[0]}=${DRAWN_MASK}` : arg.replaceAll(scratchRoot, SCRATCH_MASK),
-  );
+  return argv.map((arg) => comparableArg(arg, scratchRoot));
 };
 
 const differences = (expected: readonly string[], actual: readonly string[]): string[] => [
