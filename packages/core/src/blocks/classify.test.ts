@@ -91,11 +91,14 @@ const blockMarkerEndingAt = (end: number): string => {
   return `${opener}${filler}${ABUSE_BLOCK_MARKER}</body></html>`;
 };
 
-const challengeRules = new Set(
+const challengeRulesFrom = (readsMarkup: boolean): string[] =>
   rules.flatMap((rule) =>
-    "proves" in rule && rule.proves === "challenge_issued" ? [rule.id] : [],
-  ),
-);
+    "proves" in rule &&
+    rule.proves === "challenge_issued" &&
+    (rule.source === "dom") === readsMarkup
+      ? [rule.id]
+      : [],
+  );
 
 const htmlResponse = (overrides: Partial<ResponseDetails> = {}): ResponseDetails => ({
   cookies: [],
@@ -105,8 +108,8 @@ const htmlResponse = (overrides: Partial<ResponseDetails> = {}): ResponseDetails
   ...overrides,
 });
 
-const challengeCases = () =>
-  [...challengeRules].map((rule) => {
+const challengeCases = (ruleIds: readonly string[]) =>
+  ruleIds.map((rule) => {
     const named = classifiedCases.find(
       ({ blockCase }) =>
         blockCase.expect.verdict === "blocked" &&
@@ -179,7 +182,7 @@ describe("the block cases", () => {
     expect(report.evidence.some((entry) => SELF_NAMING_RULES.has(entry.rule))).toBeTruthy();
   });
 
-  it.each(challengeCases())(
+  it.each(challengeCases(challengeRulesFrom(false)))(
     "withholds $rule on a served page and decides on an empty shell",
     ({ input, rule }) => {
       const served = classifyResponse({ ...input, html: page(prose.repeat(10)) });
@@ -189,6 +192,21 @@ describe("the block cases", () => {
       expect(shell.passedChallenges).not.toContain(rule);
       expect(shell.verdict).toBe("blocked");
       expect(shell.evidence.map((entry) => entry.rule)).toContain(rule);
+    },
+  );
+
+  it.each(challengeCases(challengeRulesFrom(true)))(
+    "decides on the interstitial that carries $rule and ignores it once a served page surrounds it",
+    ({ input, rule }) => {
+      const served = (input.html ?? "").replace(/<\/body>/iu, `${prose.repeat(10)}</body>`);
+      const interstitial = classifyResponse(input);
+      const surrounded = classifyResponse({ ...input, html: served });
+
+      expect(interstitial.verdict).toBe("blocked");
+      expect(ruleIdsOf(interstitial)).toContain(rule);
+      expect(served.length).toBeGreaterThan(gates.interstitialMaxHtmlChars);
+      expect(surrounded).toMatchObject({ passedChallenges: [], verdict: "ok" });
+      expect(ruleIdsOf(surrounded)).not.toContain(rule);
     },
   );
 

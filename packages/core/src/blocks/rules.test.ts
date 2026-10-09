@@ -201,7 +201,7 @@ const sameSource = (nonSignal: NonSignal, rule: Rule): boolean =>
 
 describe("ruleset v9", () => {
   it("holds all 46 rules except the three driven by options Xrio does not have", () => {
-    expect(rules).toHaveLength(43);
+    expect(rules).toHaveLength(44);
     expect(new Set(ids(ruleList)).size).toBe(rules.length);
     expect(ruleList.every((rule) => rule.detail.length > 0)).toBeTruthy();
   });

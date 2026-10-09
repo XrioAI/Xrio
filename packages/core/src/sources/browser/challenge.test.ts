@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { describe, expect, it } from "vite-plus/test";
 
+import { akamaiCases } from "../../testing/block-cases/akamai.ts";
 import {
   CHALLENGE,
   challengeHeaders,
@@ -22,6 +23,10 @@ const challenged = (index: number, vendorHeader = "cf-mitigated"): DocumentHop =
 const CLOUDFLARE_ROUND = { rule: "cf_mitigated_challenge", vendor: "cloudflare" } as const;
 
 const LATE_ROUND = { rule: "cf_challenge_platform_request", vendor: "cloudflare" } as const;
+
+const SEC_CPT_ROUND = { rule: "akamai_sec_cpt_challenge", vendor: "akamai" } as const;
+
+const SEC_CPT_CHALLENGE = akamaiCases.tp_akamai_sec_cpt_challenge_200.html;
 
 const CHALLENGE_SCRIPT_URL = `${PAGE_URL}cdn-cgi/challenge-platform/h/g/orchestrate/test`;
 
@@ -309,6 +314,86 @@ describe("challenge waits", () => {
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
+  });
+});
+
+describe("a challenge page that reloads itself", () => {
+  it("waits for the reload and counts the replacement page as passed", async () => {
+    const run = startedRender(served(1));
+    using _deadline = run.deadline;
+    run.setHtml(SEC_CPT_CHALLENGE);
+    await nextTurn();
+    run.commit(served(2));
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed",
+      rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
+    });
+    expect(source.html).toBe(CONTENT);
+    expect(source.block.verdict).toBe("ok");
+  });
+
+  it("counts the page as passed when its markup clears without a new document", async () => {
+    const run = startedRender(served(1));
+    using _deadline = run.deadline;
+    run.setHtml(SEC_CPT_CHALLENGE);
+    await nextTurn();
+    run.setHtml(CONTENT);
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed_in_place",
+      rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
+    });
+    expect(source.html).toBe(CONTENT);
+  });
+
+  it("reports a blocked Akamai challenge when the page never reloads", async () => {
+    const run = startedRender(served(1));
+    using _deadline = run.deadline;
+    run.setHtml(SEC_CPT_CHALLENGE);
+    await nextTurn();
+    await run.tick(19_750);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "budget_exhausted",
+      rounds: [{ ...SEC_CPT_ROUND, waitedMs: 20_000 }],
+    });
+    expect(source.block).toMatchObject({ vendor: "akamai", verdict: "blocked" });
+    expect(source.html).toBe(SEC_CPT_CHALLENGE);
+  });
+
+  it("stops waiting when the reload lands on an edge error page and grades that page itself", async () => {
+    const run = startedRender(served(1));
+    using _deadline = run.deadline;
+    run.setHtml(SEC_CPT_CHALLENGE);
+    await nextTurn();
+    run.commit(served(2, { status: 403 }), akamaiCases.tp_akamai_edge_error_403.html);
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "passed",
+      rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
+    });
+    expect(source.status).toBe(403);
+    expect(source.block).toMatchObject({ vendor: null, verdict: "suspect" });
+  });
+
+  it("reports rounds_exhausted when the reload brings the same challenge page back", async () => {
+    const run = startedRender(served(1));
+    using _deadline = run.deadline;
+    run.setHtml(SEC_CPT_CHALLENGE);
+    await nextTurn();
+    run.commit(served(2), SEC_CPT_CHALLENGE);
+    await run.tick();
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      outcome: "rounds_exhausted",
+      rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
+    });
+    expect(source.block).toMatchObject({ vendor: "akamai", verdict: "blocked" });
   });
 });
 

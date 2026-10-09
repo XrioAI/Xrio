@@ -147,4 +147,80 @@ https&#58;&#47;&#47;errors&#46;edgesuite&#46;net&#47;18&#46;7f3a1c2d&#46;1786518
     url: "https://www.air.example/booking/search?from=FRA&to=LIS",
     why: "Akamai's error reference triple decides alone on an interstitial-shaped page.",
   },
+  tp_akamai_sec_cpt_challenge_200: {
+    cookies: [],
+    expect: {
+      decoys: [],
+      page: "interstitial_heavy_script",
+      passedChallenges: [],
+      ruleIds: ["akamai_sec_cpt_challenge", "thin_text_heavy_script"],
+      vendor: "akamai",
+      verdict: "blocked",
+    },
+    headers: { "content-type": "text/html;charset=UTF-8" },
+    html: `<!DOCTYPE html><html><head></head><body><script type="text/javascript" src="/AbCdEfGh/Q1B/_xx/REDACTED/challenge?v=REDACTED&amp;t=REDACTED"></script>
+<div id="sec-if-cpt-container" role="main" style="display: none">
+    <div class="behavioral-content">
+        <div id="sec-bc-text-container"></div>
+        <div id="sec-bc-tile-parent">
+            <div id="sec-bc-tile-container"></div>
+        </div>
+        <div class="sec-bc-button-parent">
+            <div class="behavioral-button progress-btn-disabled">
+                <div class="btn" id="progress-button" role="button" tabindex="0" disabled=""></div>
+                <div class="progress"></div>
+            </div>
+        </div>
+        <div class="scf-akamai-logo-sec-abc">
+            <div class="scf-akamai-logo-msg">
+                <p class="scf-akamai-protected-by">Powered and protected by</p>
+            </div>
+            <div class="scf-akamai-logo-img">
+                <img src="https://www.example.com/images/logo/akamai-logo.svg" class="scf-akamai-logo" loading="lazy" alt="Akamai">
+            </div>
+            <div class="akamai-privacy"><a href="https://www.example.com/privacy" target="_blank">Privacy<span class="_hidden"></span></a></div>
+        </div>
+    </div>
+</div>
+<script>
+    (function() {
+        var chlgeId = '';
+        var context = 't';
+        var scripts = document.getElementsByTagName('script');
+        for (var i = 0; i < scripts.length; i++) {
+            if (scripts[i].src && scripts[i].src.match(/t=([^&#]*)/)) {
+                chlgeId = scripts[i].src.match(/t=([^&#]*)/)[1];
+                context = /[?&]ch=true/.test(scripts[i].src) ? 'i' : 't';
+            }
+        }
+        var proxied = window.XMLHttpRequest.prototype.send;
+        window.XMLHttpRequest.prototype.send = function() {
+            var pointer = this
+            var intervalId = window.setInterval(function() {
+                if (pointer.readyState === 4 && pointer.responseURL && pointer.responseURL.indexOf('t=' + chlgeId) > -1) {
+                    if (context === 't') {
+                        location.reload(true);
+                    }
+                    clearInterval(intervalId);
+                }
+            }, 1);
+            return proxied.apply(this, [].slice.call(arguments));
+        };
+    })();
+</script>
+<script type="text/javascript" src="https://www.example.com/AbCdEfGh/Q1B/_xx/REDACTED/sensor"></script>
+
+
+
+</body></html>
+`,
+    requestUrls: [
+      "https://www.example.com/products/widget",
+      "https://www.example.com/AbCdEfGh/Q1B/_xx/REDACTED/challenge?v=REDACTED&t=REDACTED",
+      "https://www.example.com/AbCdEfGh/Q1B/_xx/REDACTED/sensor",
+    ],
+    status: 200,
+    url: "https://www.example.com/products/widget",
+    why: "Akamai's sec-cpt interstitial arrives as a 200 with a hidden challenge container and almost no prose, and its own script reloads the document when the challenge request completes, so it is a challenge to wait on and not a delivered page.",
+  },
 } satisfies Record<string, BlockCase>;
