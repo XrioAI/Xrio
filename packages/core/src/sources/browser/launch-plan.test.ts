@@ -398,6 +398,66 @@ describe(planLaunch, () => {
     );
   });
 
+  it("hands the user agent the identity presents to the driver, after the identity's other switches", () => {
+    const presented = {
+      metadata: {
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        formFactors: ["Desktop"],
+        fullVersion: "154.0.8037.57",
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        wow64: false,
+      },
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36",
+    };
+
+    const plan = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/chrome/chrome",
+      display: undefined,
+      headless: true,
+      identity: planIdentity({
+        capabilities: { headlessUserAgent: presented, permittedCpus: 32, platform: "linux" },
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headless",
+        pins: noPins,
+      }).inputs,
+      proxyServer: undefined,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(plan.presentedUserAgent).toStrictEqual(presented);
+    expect(plan.args.slice(-5)).toStrictEqual([
+      `--user-agent=${presented.userAgent}`,
+      `--crash-dumps-dir=${scratchDir}/crashes`,
+      ...tail,
+    ]);
+  });
+
+  it("presents no user agent of its own unless the identity does", () => {
+    const plan = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/chrome/chrome",
+      display: undefined,
+      headless: true,
+      identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      proxyServer: undefined,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(plan.presentedUserAgent).toBeUndefined();
+    expect(plan.args.filter((arg) => arg.startsWith("--user-agent"))).toStrictEqual([]);
+  });
+
   it("keeps Chrome's singleton socket path within the 108-byte limit", () => {
     const { env } = planLaunch({
       browserArgs: [],

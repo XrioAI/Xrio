@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { invalidOptions } from "../../errors.ts";
+import type { PresentedUserAgent } from "../../humanizer/contracts.ts";
 import { isMinted } from "../../humanizer/inputs.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
 import { isOwnedSwitch } from "../../humanizer/owned-inputs.ts";
@@ -36,6 +37,7 @@ export interface LaunchPlan {
   env: Readonly<Record<string, string>>;
   directories: LaunchDirectories;
   files: readonly ProfileFile[];
+  presentedUserAgent: PresentedUserAgent | undefined;
 }
 
 const IDENTITY_FILES_DIRECTORY = "identity-files";
@@ -264,5 +266,6 @@ export const planLaunch = (request: LaunchRequest): LaunchPlan => {
     env: childEnvironment(request, directories),
     executable: request.browserPath,
     files: profileFiles(request, directories),
+    presentedUserAgent: request.identity.userAgent,
   };
 };

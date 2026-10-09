@@ -8,7 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { connectOverPipe } from "./connection.ts";
 import type { ConnectionEvent } from "./connection.ts";
 import { BROWSER } from "./protocol.ts";
-import type { TargetSession } from "./protocol.ts";
+import type { TargetSession, UserAgentOverride } from "./protocol.ts";
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
@@ -43,6 +43,30 @@ const isInternalEvent = (message: unknown): message is { event: string; detail: 
   typeof message.event === "string" &&
   "detail" in message &&
   typeof message.detail === "string";
+
+interface SessionCommand {
+  readonly method: string;
+  readonly params: object;
+  readonly sessionId: string;
+}
+
+const isSessionCommand = (message: unknown): message is SessionCommand =>
+  typeof message === "object" &&
+  message !== null &&
+  "method" in message &&
+  typeof message.method === "string" &&
+  "params" in message &&
+  typeof message.params === "object" &&
+  message.params !== null &&
+  "sessionId" in message &&
+  typeof message.sessionId === "string";
+
+const sessionCommandsIn = (frames: readonly string[]): SessionCommand[] =>
+  frames.flatMap((frame) => {
+    const command: unknown = JSON.parse(frame);
+
+    return isSessionCommand(command) ? [command] : [];
+  });
 
 const isSentCommand = (message: unknown): message is { method: string; scope: string } =>
   typeof message === "object" &&
@@ -82,7 +106,25 @@ const outcomeOf = async (call: Promise<unknown>) => {
   }
 };
 
-const startConnection = () => {
+const PRESENTED: UserAgentOverride = {
+  userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36",
+  userAgentMetadata: {
+    architecture: "x86",
+    bitness: "64",
+    brands: [{ brand: "Chromium", version: "154" }],
+    formFactors: ["Desktop"],
+    // oxlint-disable-next-line typescript/no-deprecated -- the driver must pass Chrome the full version it still reads from here.
+    fullVersion: "154.0.8037.57",
+    fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+    mobile: false,
+    model: "",
+    platform: "Linux",
+    platformVersion: "6.8.0",
+    wow64: false,
+  },
+};
+
+const startConnection = (userAgent?: UserAgentOverride) => {
   const fromBrowser = new PassThrough();
   const written: string[] = [];
   const events: ConnectionEvent[] = [];
@@ -95,9 +137,14 @@ const startConnection = () => {
     },
   });
 
-  const send = connectOverPipe({ fromBrowser, toBrowser }, lifetime.signal, (event) => {
-    events.push(event);
-  });
+  const send = connectOverPipe(
+    { fromBrowser, toBrowser },
+    lifetime.signal,
+    (event) => {
+      events.push(event);
+    },
+    userAgent,
+  );
 
   return {
     chrome: (...messages: readonly Json[]) => {
@@ -437,6 +484,52 @@ describe(connectOverPipe, () => {
       '{"id":13,"method":"Network.enable","params":{"maxResourceBufferSize":0,"maxTotalBufferSize":0},"sessionId":"S5"}',
       '{"id":14,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S5"}',
     ]);
+  });
+
+  it("presents the planned user agent to every target it attaches, before resuming it", () => {
+    const { chrome, sent } = startConnection(PRESENTED);
+
+    chrome(
+      pageAttached("S1", "T1"),
+      childAttached("S1", "S2", "iframe"),
+      childAttached("S1", "S3", "service_worker"),
+      pageAttached("S4", "T4"),
+    );
+
+    const commands = sessionCommandsIn(sent());
+
+    expect(
+      commands.flatMap(({ method, sessionId }) =>
+        method === "Network.enable" ? [] : [`${sessionId} ${method}`],
+      ),
+    ).toStrictEqual([
+      "S1 Target.setAutoAttach",
+      "S1 Network.setUserAgentOverride",
+      "S1 Runtime.runIfWaitingForDebugger",
+      "S2 Target.setAutoAttach",
+      "S2 Network.setUserAgentOverride",
+      "S2 Runtime.runIfWaitingForDebugger",
+      "S3 Network.setUserAgentOverride",
+      "S3 Runtime.runIfWaitingForDebugger",
+      "S4 Target.setAutoAttach",
+      "S4 Network.setUserAgentOverride",
+      "S4 Runtime.runIfWaitingForDebugger",
+    ]);
+    expect(
+      commands.flatMap(({ method, params, sessionId }) =>
+        method === "Network.setUserAgentOverride" ? [{ params, sessionId }] : [],
+      ),
+    ).toStrictEqual(
+      ["S1", "S2", "S3", "S4"].map((sessionId) => ({ params: PRESENTED, sessionId })),
+    );
+  });
+
+  it("overrides no target's user agent unless the launch planned one", () => {
+    const { chrome, sent } = startWithMainPage();
+
+    chrome(childAttached("S1", "S2", "worker"));
+
+    expect(sent().filter((frame) => frame.includes("setUserAgentOverride"))).toStrictEqual([]);
   });
 
   it("taps each command's scope and method, never its params", () => {
