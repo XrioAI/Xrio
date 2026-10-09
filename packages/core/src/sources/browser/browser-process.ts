@@ -141,6 +141,82 @@ export const writeAtomically = async (file: string, contents: string): Promise<v
   }
 };
 
+type ProfileValue = null | boolean | number | string | readonly ProfileValue[] | ProfileKeys;
+
+interface ProfileKeys {
+  [key: string]: ProfileValue;
+}
+
+const isProfileValue = (value: unknown): value is ProfileValue => {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(isProfileValue);
+  }
+
+  return typeof value === "object" && Object.values(value).every(isProfileValue);
+};
+
+const jsonObject = (value: unknown): value is ProfileKeys =>
+  typeof value === "object" && value !== null && !Array.isArray(value) && isProfileValue(value);
+
+const mergeProfileKeys = (stored: ProfileKeys, owned: ProfileKeys): ProfileKeys => {
+  const result = { ...stored };
+
+  for (const [key, value] of Object.entries(owned)) {
+    const existing = result[key];
+    result[key] =
+      jsonObject(value) && jsonObject(existing) ? mergeProfileKeys(existing, value) : value;
+  }
+
+  return result;
+};
+
+const readProfileKeys = async (file: string): Promise<ProfileKeys> => {
+  try {
+    const stored: unknown = JSON.parse(await readFile(file, "utf-8"));
+
+    if (!jsonObject(stored)) {
+      throw new Error("Chrome profile keys must be a JSON object.");
+    }
+
+    return stored;
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+
+    return {};
+  }
+};
+
+const profileContents = async (
+  file: { readonly path: string; readonly contents: string },
+  profile: string,
+): Promise<string> => {
+  if (
+    file.path !== path.join(profile, "Default", "Preferences") &&
+    file.path !== path.join(profile, "Local State")
+  ) {
+    return file.contents;
+  }
+
+  const owned: unknown = JSON.parse(file.contents);
+
+  if (!jsonObject(owned)) {
+    throw new Error("Owned profile keys must be a JSON object.");
+  }
+
+  return JSON.stringify(mergeProfileKeys(await readProfileKeys(file.path), owned));
+};
+
 export const prepareProfile = async (plan: LaunchPlan): Promise<void> => {
   await Promise.all(
     [
@@ -155,7 +231,7 @@ export const prepareProfile = async (plan: LaunchPlan): Promise<void> => {
   );
   await Promise.all(
     plan.files.map(async (file) => {
-      await writeAtomically(file.path, file.contents);
+      await writeAtomically(file.path, await profileContents(file, plan.directories.profile));
     }),
   );
 };
