@@ -117,6 +117,7 @@ export const parseProxy = (value: string): ProxyEndpoint => {
     port: url.port === "" ? defaultProxyPorts[protocol] : Number(url.port),
     protocol,
     redactedUrl: redactUrl(url),
+    url: url.href,
   };
 };
 

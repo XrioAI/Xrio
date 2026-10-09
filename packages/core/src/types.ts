@@ -59,6 +59,7 @@ export interface SessionSummary {
   readonly warmth: Warmth;
   readonly profileDir: string;
   readonly cacheDir: string;
+  readonly proxy?: string;
 }
 
 export interface SessionInfo {
@@ -69,6 +70,7 @@ export interface SessionInfo {
   readonly lastVisitAt: number;
   readonly profileDir: string;
   readonly cacheDir: string;
+  readonly proxy?: string;
 }
 
 export interface StructuredContent {
@@ -122,5 +124,6 @@ export interface ProxyEndpoint {
   hostname: string;
   port: number;
   credentials: { username: string; password: string } | undefined;
+  url: string;
   redactedUrl: string;
 }

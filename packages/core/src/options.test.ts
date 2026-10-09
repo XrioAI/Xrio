@@ -145,6 +145,7 @@ describe("proxy option", () => {
       ...expected,
       credentials: undefined,
       redactedUrl: new URL(proxy).href,
+      url: new URL(proxy).href,
     });
   });
 
@@ -157,6 +158,7 @@ describe("proxy option", () => {
     expect(proxy).toMatchObject({
       credentials: { password: "p%40ss word", username: "us:er" },
       redactedUrl: "http://proxy.test:8000/",
+      url: "http://us%3Aer:p%2540ss%20word@proxy.test:8000/",
     });
   });
 

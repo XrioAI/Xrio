@@ -12,6 +12,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
@@ -49,6 +50,12 @@ const exists = async (directory: string): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+const fileMode = async (file: string): Promise<number> => {
+  const stats = await stat(file);
+
+  return stats.mode % 0o1000;
 };
 
 const sessionClient = async (mode: "headless" | "http" = "headless") => {
@@ -510,6 +517,21 @@ describe("sessions through the public client", () => {
       "Unreadable session column profile_dir.",
     );
     await expect(exists(outside)).resolves.toBeTruthy();
+  });
+
+  it("keeps xrio.db and its -wal and -shm files at mode 0600 after a session scrape", async () => {
+    await using visited = await sessionClient();
+    const { client, stateDir } = visited;
+
+    await client.scrape({ format: "html", session: "account", url: PAGE });
+
+    const modes = await Promise.all(
+      ["xrio.db", "xrio.db-wal", "xrio.db-shm"].map(
+        async (file) => await fileMode(path.join(stateDir, file)),
+      ),
+    );
+
+    expect(modes).toStrictEqual([0o600, 0o600, 0o600]);
   });
 
   it("refuses a session scrape with INVALID_OPTIONS naming a stateDir that others can read", async () => {

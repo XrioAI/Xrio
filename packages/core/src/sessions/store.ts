@@ -1,5 +1,6 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- SQLite rows are parsed into session rows here. */
 import { randomUUID } from "node:crypto";
+import { chmodSync, closeSync, openSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { SQLOutputValue } from "node:sqlite";
@@ -30,6 +31,7 @@ export interface SessionRow {
   readonly record: string | undefined;
   readonly platform: string | undefined;
   readonly browserArgs: readonly string[] | undefined;
+  readonly proxyUrl: string | undefined;
   readonly visits: number;
   readonly createdAt: number;
   readonly lastVisitAt: number;
@@ -76,6 +78,7 @@ export interface FinishRequest {
   };
   readonly siteVisit?: SiteVisit;
   readonly binding?: SessionBinding;
+  readonly proxyUrl?: string;
   readonly now: number;
   readonly maxAgeMs: number;
 }
@@ -89,6 +92,12 @@ const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
 
 const STICKY_ID_DRAWS = 100;
+
+const DATABASE_FILE = "xrio.db";
+
+const DATABASE_COMPANIONS = ["-wal", "-shm"] as const;
+
+const PRIVATE_FILE_MODE = 0o600;
 
 export const waitForTurn = async (
   deadline: Deadline,
@@ -227,6 +236,7 @@ const rowOf = (row: SqlRow): SessionRow => {
     platform: optionalTextAt(row, "platform"),
     pool: optionalTextAt(row, "pool"),
     profileDir: profileDirOf(row),
+    proxyUrl: optionalTextAt(row, "proxy_url"),
     record: optionalTextAt(row, "record"),
     state,
     visits: numberAt(row, "visits"),
@@ -235,7 +245,7 @@ const rowOf = (row: SqlRow): SessionRow => {
 
 const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,pool TEXT,profile_dir TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'ready',
   epoch INTEGER NOT NULL DEFAULT 0,holder_host TEXT,holder_pid INTEGER,holder_start TEXT,holder_token TEXT,
-  expires_at INTEGER NOT NULL DEFAULT 0,record TEXT,platform TEXT,browser_args TEXT,chrome_major INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL DEFAULT 0,record TEXT,platform TEXT,browser_args TEXT,proxy_url TEXT,chrome_major INTEGER NOT NULL DEFAULT 0,
   visits INTEGER NOT NULL DEFAULT 0,cooling_streak INTEGER NOT NULL DEFAULT 0,sticky_id TEXT NOT NULL,
   binding_kind TEXT NOT NULL DEFAULT 'unbound',exit_country TEXT,exit_zone TEXT,created_at INTEGER NOT NULL,
   last_visit_at INTEGER NOT NULL,PRIMARY KEY(tenant,name));
@@ -264,6 +274,25 @@ const migrate = (db: DatabaseSync): void => {
   }
 };
 
+const privateDatabase = (root: string): string => {
+  const database = path.join(root, DATABASE_FILE);
+
+  closeSync(openSync(database, "a", PRIVATE_FILE_MODE));
+  chmodSync(database, PRIVATE_FILE_MODE);
+
+  for (const companion of DATABASE_COMPANIONS) {
+    try {
+      chmodSync(`${database}${companion}`, PRIVATE_FILE_MODE);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+  }
+
+  return database;
+};
+
 const isFree = (row: SessionRow, takeover: Takeover): boolean =>
   row.holder === undefined ||
   takeover.dead.has(row.holder.token) ||
@@ -290,7 +319,7 @@ export class SessionStore {
   readonly #tenant: string;
   constructor(root: string, tenant = LOCAL_TENANT) {
     this.#tenant = tenant;
-    this.#db = new DatabaseSync(path.join(root, "xrio.db"));
+    this.#db = new DatabaseSync(privateDatabase(root));
 
     try {
       this.#db.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
@@ -579,7 +608,7 @@ export class SessionStore {
       const updated =
         this.#db
           .prepare(
-            "UPDATE sessions SET chrome_major=MAX(chrome_major,?),state=?,record=COALESCE(record,?),platform=COALESCE(platform,?),browser_args=COALESCE(browser_args,?),visits=visits+?,last_visit_at=CASE WHEN ? THEN ? ELSE last_visit_at END WHERE tenant=? AND name=? AND epoch=? AND holder_token=?",
+            "UPDATE sessions SET chrome_major=MAX(chrome_major,?),state=?,record=COALESCE(record,?),platform=COALESCE(platform,?),browser_args=COALESCE(browser_args,?),proxy_url=?,visits=visits+?,last_visit_at=CASE WHEN ? THEN ? ELSE last_visit_at END WHERE tenant=? AND name=? AND epoch=? AND holder_token=?",
           )
           .run(
             request.major,
@@ -587,6 +616,7 @@ export class SessionStore {
             request.record?.json ?? null,
             request.record?.platform ?? null,
             request.record === undefined ? null : JSON.stringify(request.record.browserArgs),
+            request.proxyUrl ?? null,
             visited,
             visited,
             request.now,

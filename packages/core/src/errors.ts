@@ -104,10 +104,13 @@ export const invalidOptions = (message: string, cause?: unknown): InvalidOptions
     code: "INVALID_OPTIONS" as const,
   });
 
-export const redactUrl = (url: URL | string): string => {
+export const redactUrl = (url: URL | string, { keepUsername = false } = {}): string => {
   const redacted = new URL(url);
 
-  redacted.username = "";
+  if (!keepUsername) {
+    redacted.username = "";
+  }
+
   redacted.password = "";
 
   return redacted.href;

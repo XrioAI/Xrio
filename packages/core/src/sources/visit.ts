@@ -64,6 +64,7 @@ export interface SiteVisit {
 export interface FinishedVisit {
   readonly siteVisit?: SiteVisit;
   readonly binding?: SessionBinding;
+  readonly proxyUrl: string | null;
   readonly record: DeviceRecord | null;
   readonly browserArgs: readonly string[];
   readonly closed: Closed;

@@ -7,7 +7,13 @@ import path from "node:path";
 import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Clock, Deadline } from "../deadline.ts";
 import { publishInternalEvent } from "../diagnostics.ts";
-import { clientClosed, invalidOptions, isXrioError, sessionUnavailable } from "../errors.ts";
+import {
+  clientClosed,
+  invalidOptions,
+  isXrioError,
+  redactUrl,
+  sessionUnavailable,
+} from "../errors.ts";
 import type { XrioError } from "../errors.ts";
 import type { DeviceRecord, HostCapabilities, Seed } from "../humanizer/contracts.ts";
 import type { IdentityContext } from "../humanizer/surfaces.ts";
@@ -16,7 +22,7 @@ import { HeldDeadline } from "../lifetime.ts";
 import type { ScrapeOutcome } from "../outcome.ts";
 import type { ProfileUse } from "../sources/browser/browser-process.ts";
 import type { FinishedVisit, Profile, SiteVisit } from "../sources/visit.ts";
-import type { SessionInfo, SessionSummary } from "../types.ts";
+import type { ProxyEndpoint, SessionInfo, SessionSummary } from "../types.ts";
 import { OwnershipLease, ownershipSchedule } from "./lease.ts";
 import type { LeaseExpiry } from "./lease.ts";
 import { choosePoolMember } from "./pools.ts";
@@ -43,6 +49,7 @@ import { DEFAULT_WARMTH_MAX_AGE_MS, warmthAfter, warmthAt } from "./warmth.ts";
 
 interface VisitLaunch {
   readonly browserArgs: readonly string[];
+  readonly proxy: ProxyEndpoint | undefined;
 }
 
 export interface SessionHold extends AsyncDisposable {
@@ -197,6 +204,14 @@ const profilePaths = (
   profileDir,
 });
 
+const withProxy = <Session extends SessionInfo | SessionSummary>(
+  session: Session,
+  proxyUrl: string | undefined,
+): Session =>
+  proxyUrl === undefined
+    ? session
+    : { ...session, proxy: redactUrl(proxyUrl, { keepUsername: true }) };
+
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
@@ -271,7 +286,7 @@ class Sessions implements SessionManager {
       visits: row.visits,
     };
 
-    return row.pool === undefined ? info : { ...info, pool: row.pool };
+    return withProxy(row.pool === undefined ? info : { ...info, pool: row.pool }, row.proxyUrl);
   }
   async #holder(): Promise<Holder> {
     this.#holderStart ??= ownStart();
@@ -558,6 +573,7 @@ class Sessions implements SessionManager {
             major: checks.capabilities?.chromeMajor ?? 0,
             maxAgeMs: this.#maxAgeMs,
             now: this.#now(),
+            proxyUrl: visit.proxyUrl ?? undefined,
             record:
               visit.record === null
                 ? undefined
@@ -601,7 +617,7 @@ class Sessions implements SessionManager {
           warmth: warmthAfter(this.#warmth(db, name, visit.site), visit.verdict),
         };
 
-        return pool === undefined ? summary : { ...summary, pool };
+        return withProxy(pool === undefined ? summary : { ...summary, pool }, launch.proxy?.url);
       },
     };
   }

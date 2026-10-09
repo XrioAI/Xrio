@@ -329,6 +329,7 @@ const visitOnce = async (
       closed: await visit.closed,
       next,
       outcome: answered,
+      proxyUrl: plan.proxy?.url ?? null,
       record,
       siteVisit,
     };

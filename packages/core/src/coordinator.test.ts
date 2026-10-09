@@ -18,7 +18,7 @@ import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
 import { loadHttpDocument } from "./sources/http.ts";
-import type { Sources, Visit, VisitPlan } from "./sources/visit.ts";
+import type { FinishedVisit, Sources, Visit, VisitPlan } from "./sources/visit.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { fixedRandom } from "./testing/fixed-seed.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
@@ -73,6 +73,7 @@ interface HarnessOptions {
 const harness = (options: HarnessOptions = {}) => {
   const events: string[] = [];
   const plans: VisitPlan[] = [];
+  const finished: FinishedVisit[] = [];
   const fontLocales: string[] = [];
   const failure = new XrioError("NETWORK_ERROR", "The fake stage failed.", { details: undefined });
   const owner = new AbortController();
@@ -152,8 +153,9 @@ const harness = (options: HarnessOptions = {}) => {
           browserArgs: undefined,
           device: { kind: "fresh", seed: checks.seed() },
           drawStickyId: () => checks.stickyId?.() ?? "drawn",
-          finish: async () => {
+          finish: async (visit) => {
             stage("finish");
+            finished.push(visit);
             warmth = false;
             await Promise.resolve();
           },
@@ -207,7 +209,7 @@ const harness = (options: HarnessOptions = {}) => {
     },
   });
 
-  return { events, failure, fontLocales, owner, plans, scrapes };
+  return { events, failure, finished, fontLocales, owner, plans, scrapes };
 };
 
 const relevantEvents = (events: readonly string[]) =>
@@ -1246,6 +1248,43 @@ describe("session exit binding", () => {
       await scrapes.close();
     }
   });
+
+  it.each([
+    {
+      expected: "http://account-stored-id:secret@proxy.test/",
+      route: undefined,
+      routing: { bindings: [binding], config: configured },
+    },
+    {
+      expected: "http://client:secret@proxy.test:8080/",
+      route: parseProxy("http://client:secret@proxy.test:8080"),
+      routing: { bindings: [binding], config: configured },
+    },
+    { expected: null, route: undefined, routing: {} },
+  ])(
+    "finishes a visit with the exact proxy URL $expected it used",
+    async ({ expected, route, routing }) => {
+      const { finished, scrapes } = harness({
+        ...routing,
+        proxyInfo: async () => await Promise.resolve(accepted),
+      });
+
+      using deadline = startDeadline(1000);
+
+      try {
+        const run = scrapes.start(
+          { ...browserIntent, route, session: { kind: "named", name: "account" } },
+          deadline,
+        );
+
+        await run.answer;
+        await run.settled;
+        expect(finished.map(({ proxyUrl }) => proxyUrl)).toStrictEqual([expected]);
+      } finally {
+        await scrapes.close();
+      }
+    },
+  );
 
   it.each([
     { binding: { kind: "direct", stickyId: "direct" } as const, proxy: "http://proxy.test" },

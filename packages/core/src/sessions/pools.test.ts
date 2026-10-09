@@ -32,6 +32,7 @@ const member = (
   platform: undefined,
   pool: "catalog",
   profileDir: "profiles/0123456789abcdef",
+  proxyUrl: undefined,
   record: undefined,
   state,
   visits: 0,
@@ -255,6 +256,7 @@ describe("pools", () => {
       await newer.finish({
         browserArgs: [],
         closed: { exited: true },
+        proxyUrl: null,
         record: null,
         siteVisit: served,
       });
@@ -262,7 +264,7 @@ describe("pools", () => {
 
     await using older = await sessions.hold(pool, { capabilities: host(154), seed }, deadline);
 
-    expect(older.summary(served, { browserArgs: [] })).toStrictEqual({
+    expect(older.summary(served, { browserArgs: [], proxy: undefined })).toStrictEqual({
       ...memberPaths(root, "9868bc4147116d6f"),
       created: true,
       name: "catalog/2",
@@ -301,6 +303,7 @@ describe("pools", () => {
       await newer.finish({
         browserArgs: [],
         closed: { exited: true },
+        proxyUrl: null,
         record: null,
         siteVisit: served,
       });

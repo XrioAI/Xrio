@@ -1,13 +1,15 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { describe, expect, it } from "vite-plus/test";
 
 import { startDeadline } from "../deadline.ts";
-import { resolveClientOptions, resolveScrapeIntent } from "../options.ts";
+import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "../options.ts";
 import { anonymousSessions } from "../testing/anonymous-sessions.ts";
+import type { ProxyEndpoint } from "../types.ts";
 import { createSessions } from "./session.ts";
 
 const browser = resolveScrapeIntent(
@@ -20,6 +22,23 @@ const profileUse = async () => await Promise.resolve("clear" as const);
 const OPEN_SETTLE_MS = 100;
 
 const seed = () => "9f2c41d07a3be815";
+
+const reportedProxy = (
+  session: { readonly name: string; readonly proxy?: string } | undefined,
+) => ({
+  name: session?.name,
+  proxy: session !== undefined && Object.hasOwn(session, "proxy") ? session.proxy : "none",
+});
+
+const served = {
+  challengeOutcome: null,
+  challengeRules: [],
+  deviceDigest: "digest",
+  exitAddress: "203.0.113.7",
+  site: "example.com",
+  vendor: null,
+  verdict: "ok",
+} as const;
 
 describe(anonymousSessions, () => {
   it("draws a fresh device and holds ownership until it is released", async () => {
@@ -111,6 +130,69 @@ describe(createSessions, () => {
           deadline,
         ),
       ).rejects.toMatchObject({ code: "PROXY_SESSION_GENERATION_FAILED" });
+    } finally {
+      await sessions.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("stores a visit's proxy URL with its password and reports it without the password", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "xrio-session-"));
+    const sessions = createSessions(root, { profileUse });
+    const capabilities = { chromeMajor: 154, permittedCpus: 8, platform: "linux" } as const;
+    const proxy = parseProxy("http://user-sticky:secret@proxy.test:8000");
+    using deadline = startDeadline(10_000);
+
+    const finished = async (name: string, used: ProxyEndpoint | null) => {
+      await using hold = await sessions.hold(
+        { kind: "named", name },
+        { capabilities, seed },
+        deadline,
+      );
+
+      const summary = hold.summary(served, { browserArgs: [], proxy: used ?? undefined });
+
+      await hold.finish({
+        browserArgs: [],
+        closed: { exited: true },
+        proxyUrl: used?.url ?? null,
+        record: null,
+        siteVisit: served,
+      });
+
+      return summary;
+    };
+
+    try {
+      const summaries = [await finished("direct", null), await finished("proxied", proxy)];
+      const listed = await sessions.admin.list();
+      const database = new DatabaseSync(path.join(root, "xrio.db"), { readOnly: true });
+
+      try {
+        expect({
+          listed: listed.map(reportedProxy),
+          stored: database
+            .prepare("SELECT name,proxy_url FROM sessions ORDER BY name")
+            .all()
+            .map((row) => ({ ...row })),
+          summaries: summaries.map(reportedProxy),
+        }).toStrictEqual({
+          listed: [
+            { name: "direct", proxy: "none" },
+            { name: "proxied", proxy: "http://user-sticky@proxy.test:8000/" },
+          ],
+          stored: [
+            { name: "direct", proxy_url: null },
+            { name: "proxied", proxy_url: "http://user-sticky:secret@proxy.test:8000/" },
+          ],
+          summaries: [
+            { name: "direct", proxy: "none" },
+            { name: "proxied", proxy: "http://user-sticky@proxy.test:8000/" },
+          ],
+        });
+      } finally {
+        database.close();
+      }
     } finally {
       await sessions.close();
       await rm(root, { force: true, recursive: true });

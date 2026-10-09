@@ -140,7 +140,12 @@ describe("session ownership", () => {
     try {
       visit.time.jump(55_000);
       await expect(
-        visit.hold.finish({ browserArgs: [], closed: { exited: true }, record: null }),
+        visit.hold.finish({
+          browserArgs: [],
+          closed: { exited: true },
+          proxyUrl: null,
+          record: null,
+        }),
       ).rejects.toMatchObject({
         code: "SESSION_UNAVAILABLE",
         details: { reason: "ownership-lost" },
@@ -159,7 +164,12 @@ describe("session ownership", () => {
     try {
       wall = 55_000;
       await expect(
-        visit.hold.finish({ browserArgs: [], closed: { exited: true }, record: null }),
+        visit.hold.finish({
+          browserArgs: [],
+          closed: { exited: true },
+          proxyUrl: null,
+          record: null,
+        }),
       ).rejects.toMatchObject({
         code: "SESSION_UNAVAILABLE",
         details: { reason: "ownership-lost" },
