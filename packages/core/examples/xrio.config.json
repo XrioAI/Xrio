@@ -30,6 +30,7 @@
       "memoryGb": 16,
       "gpuPolicy": "announce"
     },
+    "noise": "auto",
     "browserArgs": ["--disable-dev-shm-usage"]
   },
   "scrape": { "retries": 2 }

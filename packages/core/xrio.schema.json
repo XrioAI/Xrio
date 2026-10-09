@@ -9,7 +9,7 @@
     },
     "host": {
       "additionalProperties": false,
-      "description": "The locale, timezone, display and hardware that every scrape of the client presents, plus extra Chrome switches. Browser scrapes use each field the browser can present, and http scrapes use only locale. A scrape cannot override them. A browserArgs option on the client replaces host.browserArgs.",
+      "description": "The locale, timezone, display, hardware and readback noise that every scrape of the client presents, plus extra Chrome switches. Browser scrapes use each field the browser can present, and http scrapes use only locale. A scrape cannot override them. A browserArgs option on the client replaces host.browserArgs.",
       "properties": {
         "browserArgs": {
           "description": "Chrome switches added to every browser scrape, each as \"--name\" or \"--name=value\". A browserArgs option on the client replaces this list. Switches Xrio manages are refused when the config loads.",
@@ -486,6 +486,15 @@
             "zh-CN",
             "zh-HK",
             "zh-TW"
+          ],
+          "type": "string"
+        },
+        "noise": {
+          "description": "Whether a browser on Xrio's Chromium fork turns on its seeded canvas and audio noise. auto, the default, turns it on where Chrome renders on SwiftShader and off on a native GPU. on and off force it either way. Stock Chrome and a fork without the noise knobs present none.",
+          "enum": [
+            "auto",
+            "on",
+            "off"
           ],
           "type": "string"
         },

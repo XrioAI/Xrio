@@ -28,7 +28,7 @@ import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
-import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
+import { EMISSION_ORDER, identityForVisit, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
@@ -42,7 +42,7 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
 });
 
 const pinnedTo = (locale: string): Partial<IdentityContext> => ({
-  pins: { display: undefined, hardware: undefined, locale, timezone: undefined },
+  pins: { ...noPins, locale },
 });
 
 const expectedLocale = (
@@ -1926,10 +1926,10 @@ const noiseInputs = (seed: string) => [
 const noiseOf = (overrides: Partial<IdentityContext>) =>
   resolveSurfaces(contextOf({ capabilities: forkWithKnobs(), ...overrides })).noise;
 
-const seededNoise = (seed: string) => ({
+const seededNoise = (seed: string, reason: "software-gpu" | "pinned" = "software-gpu") => ({
   expected: [],
   inputs: noiseInputs(seed),
-  value: { enabled: true, reason: "software-gpu" },
+  value: { enabled: true, reason },
 });
 
 const kitWithout = (knob: string): KnobRegistry =>
@@ -2062,6 +2062,72 @@ describe("the noise surface", () => {
       kit: { noise: { enabled: true, reason: "software-gpu" }, tells: false },
       stock: { noise: { enabled: false, reason: "unhonored" }, tells: true },
     });
+  });
+});
+
+const nativeKit = { ...forkWithKnobs(), readableRenderNode: true } as const;
+
+describe("a noise setting the config pins", () => {
+  it("sends nothing and tells nothing on SwiftShader when the config turns noise off", () => {
+    expect(noiseOf({ pins: { ...noPins, noise: "off" } })).toStrictEqual({
+      expected: [],
+      inputs: [],
+      value: { enabled: false, reason: "pinned" },
+    });
+  });
+
+  it("seeds the noise on a native GPU when the config turns it on", () => {
+    expect(noiseOf({ capabilities: nativeKit, pins: { ...noPins, noise: "on" } })).toStrictEqual(
+      seededNoise(FIXED_NOISE_SEED, "pinned"),
+    );
+  });
+
+  it("decides by the GPU when the config says auto, as when it says nothing", () => {
+    expect([
+      noiseOf({ pins: { ...noPins, noise: "auto" } }),
+      noiseOf({ capabilities: nativeKit, pins: { ...noPins, noise: "auto" } }),
+    ]).toStrictEqual([noiseOf({}), noiseOf({ capabilities: nativeKit })]);
+  });
+
+  it.each([
+    {
+      capabilities: { permittedCpus: 32, platform: "darwin" } as const,
+      name: "stock Chrome",
+      reason: "unhonored",
+    },
+    {
+      capabilities: { ...forkWithKnobs(HARDWARE_KNOBS), readableRenderNode: true } as const,
+      name: "a fork without the noise knobs",
+      reason: "unhonored",
+    },
+  ])(
+    "sends nothing and tells noise-unhonored when the config turns noise on for $name",
+    ({ capabilities, reason }) => {
+      expect(noiseOf({ capabilities, pins: { ...noPins, noise: "on" } })).toStrictEqual({
+        expected: [],
+        inputs: [],
+        tells: ["noise-unhonored"],
+        value: { enabled: false, reason },
+      });
+    },
+  );
+
+  it("keeps a config that turns noise off when it replays a record", () => {
+    expect(
+      noiseOf({
+        device: { kind: "record", record: recordWith(6, 16) },
+        pins: { ...noPins, noise: "off" },
+      }).value,
+    ).toStrictEqual({ enabled: false, reason: "pinned" });
+  });
+
+  it("carries the config's noise setting into a visit that replays a record", () => {
+    expect(
+      identityForVisit(
+        { ...noPins, hardware: undefined, noise: "off" },
+        { kind: "record", record: recordWith(6, 16) },
+      ).noise,
+    ).toBe("off");
   });
 });
 

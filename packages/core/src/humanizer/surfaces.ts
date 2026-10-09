@@ -1,6 +1,12 @@
 import { invalidOptions } from "../errors.ts";
 import type { ResolvedMode } from "../types.ts";
-import { DEFAULT_GPU_POLICY, knobOf, headlessWindowOf, withoutPersona } from "./contracts.ts";
+import {
+  DEFAULT_GPU_POLICY,
+  DEFAULT_NOISE_POLICY,
+  knobOf,
+  headlessWindowOf,
+  withoutPersona,
+} from "./contracts.ts";
 import type {
   DeviceRecord,
   ExitFacts,
@@ -11,6 +17,7 @@ import type {
   Insets,
   MediaDeviceCounts,
   NameRow,
+  NoisePolicy,
   PersonaClaims,
   Seed,
 } from "./contracts.ts";
@@ -78,10 +85,10 @@ type DeviceSource = "drawn" | "display" | "record";
 type WebRtcPolicy = "default" | "disable_non_proxied_udp";
 
 type NoiseChoice =
-  | { readonly enabled: true; readonly reason: "software-gpu" }
+  | { readonly enabled: true; readonly reason: "software-gpu" | "pinned" }
   | {
       readonly enabled: false;
-      readonly reason: "native-gpu" | "unhonored" | "host-hardware";
+      readonly reason: "native-gpu" | "pinned" | "unhonored" | "host-hardware";
     };
 
 export interface SurfaceChoices {
@@ -195,6 +202,7 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
       display: context.pins.display,
       hardware: context.pins.hardware,
       locale,
+      noise: context.pins.noise,
       timezone: timezone.kind === "pinned" ? timezone.zone : undefined,
     },
   };
@@ -255,6 +263,7 @@ export const identityForVisit = (
       display: undefined,
       hardware: undefined,
       locale: device.record.policy.locale,
+      noise: pins.noise,
       timezone: undefined,
     };
   }
@@ -614,18 +623,25 @@ const noiseInputs = (seed: Seed): LaunchInput[] => [
   { name: "--xrio-perturb-audio", sink: "switch", value: "true" },
 ];
 
-const wantedNoise = (backend: GlBackend["kind"]): NoiseChoice =>
-  backend === "swiftshader"
+const wantedNoise = (policy: NoisePolicy, backend: GlBackend["kind"]): NoiseChoice => {
+  if (policy !== "auto") {
+    return policy === "on"
+      ? { enabled: true, reason: "pinned" }
+      : { enabled: false, reason: "pinned" };
+  }
+
+  return backend === "swiftshader"
     ? { enabled: true, reason: "software-gpu" }
     : { enabled: false, reason: "native-gpu" };
+};
 
 const resolveNoise = (
-  { capabilities }: Pick<IdentityContext, "capabilities">,
+  { capabilities, pins }: Pick<IdentityContext, "capabilities" | "pins">,
   { seed }: Device,
   gl: GlChoice,
   hardware: SurfaceChoices["hardware"],
 ): Resolutions["noise"] => {
-  const wanted = wantedNoise(gl.backend.kind);
+  const wanted = wantedNoise(pins.noise ?? DEFAULT_NOISE_POLICY, gl.backend.kind);
 
   if (!wanted.enabled) {
     return { expected: [], inputs: [], value: wanted };

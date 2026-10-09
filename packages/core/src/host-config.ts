@@ -1,11 +1,12 @@
 /* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-object-parameters -- This module is the runtime parser for untrusted host configuration. */
 import { invalidOptions } from "./errors.ts";
-import { GPU_POLICIES } from "./humanizer/contracts.ts";
+import { GPU_POLICIES, NOISE_POLICIES } from "./humanizer/contracts.ts";
 import type {
   DisplayTables,
   GpuPolicy,
   HardwareTables,
   Insets,
+  NoisePolicy,
   WindowPin,
 } from "./humanizer/contracts.ts";
 import { displayMisfit } from "./humanizer/draws.ts";
@@ -71,6 +72,7 @@ export interface HostConfig {
   timezone?: string;
   display?: DisplayOptions;
   hardware?: HardwareOptions;
+  noise?: NoisePolicy;
   browserArgs?: readonly string[];
 }
 
@@ -91,7 +93,7 @@ const POSIX_LOCALE_MESSAGE =
 
 const BCP47_LOCALE_MESSAGE = "host.locale must be one BCP 47 language tag such as de-DE.";
 
-const HOST_FIELDS = new Set(["locale", "timezone", "display", "hardware", "browserArgs"]);
+const HOST_FIELDS = new Set(["locale", "timezone", "display", "hardware", "noise", "browserArgs"]);
 
 const DISPLAY_FIELDS = new Set(["screen", "taskbar", "window"]);
 
@@ -479,6 +481,20 @@ const resolveHardware = (hardware: unknown): HardwareTables | undefined => {
   };
 };
 
+const resolveNoise = (noise: unknown): NoisePolicy | undefined => {
+  if (noise === undefined) {
+    return undefined;
+  }
+
+  const parsed = NOISE_POLICIES.find((candidate) => candidate === noise);
+
+  if (parsed === undefined) {
+    throw invalidOptions('host.noise must be "auto", "on" or "off".');
+  }
+
+  return parsed;
+};
+
 const resolveBrowserArgs = (browserArgs: unknown): readonly string[] | undefined => {
   if (browserArgs === undefined) {
     return undefined;
@@ -495,12 +511,18 @@ export const resolveHostConfig = (value?: unknown): HostSettings => {
   if (value === undefined) {
     return {
       browserArgs: undefined,
-      identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
+      identity: {
+        display: undefined,
+        hardware: undefined,
+        locale: undefined,
+        noise: undefined,
+        timezone: undefined,
+      },
     };
   }
 
   if (!isPlainObject(value) || !holdsOnly(value, HOST_FIELDS)) {
-    throw invalidOptions("host takes locale, timezone, display, hardware and browserArgs.");
+    throw invalidOptions("host takes locale, timezone, display, hardware, noise and browserArgs.");
   }
 
   return {
@@ -509,6 +531,7 @@ export const resolveHostConfig = (value?: unknown): HostSettings => {
       display: resolveDisplay(fieldOf(value, "display")),
       hardware: resolveHardware(fieldOf(value, "hardware")),
       locale: resolveLocale(fieldOf(value, "locale")),
+      noise: resolveNoise(fieldOf(value, "noise")),
       timezone: resolveTimezone(fieldOf(value, "timezone")),
     },
   };

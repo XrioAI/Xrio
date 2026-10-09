@@ -474,6 +474,7 @@ describe("host settings from xrio.config", () => {
     browserArgs: ["--no-sandbox"],
     hardware: { cores: 8 },
     locale: "de-DE",
+    noise: "on",
     timezone: "Europe/Berlin",
   });
 
@@ -491,6 +492,7 @@ describe("host settings from xrio.config", () => {
         memoryGb: undefined,
       },
       locale: "de-DE",
+      noise: "on",
       timezone: "Europe/Berlin",
     });
     expect(resolveScrapeIntent({ ...page, mode: "http" }, defaults).identity.locale).toBe("de-DE");
@@ -528,7 +530,7 @@ describe("host settings from xrio.config", () => {
 });
 
 describe("identity options moved to xrio.config", () => {
-  it.each(["locale", "timezone", "display", "hardware"])(
+  it.each(["locale", "timezone", "display", "hardware", "noise"])(
     "rejects %s on both public boundaries",
     (field) => {
       const options = { mode: "http", [field]: undefined } as const;

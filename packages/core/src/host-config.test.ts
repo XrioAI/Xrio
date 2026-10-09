@@ -11,7 +11,13 @@ describe("the host section", () => {
   it("is empty when the config sets no host", () => {
     expect(resolveHostConfig()).toStrictEqual({
       browserArgs: undefined,
-      identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
+      identity: {
+        display: undefined,
+        hardware: undefined,
+        locale: undefined,
+        noise: undefined,
+        timezone: undefined,
+      },
     });
     expect(resolveHostConfig({})).toStrictEqual(resolveHostConfig());
   });
@@ -23,6 +29,7 @@ describe("the host section", () => {
         display: { screen: { height: 1080, width: 1920 }, taskbar: { bottom: 48 } },
         hardware: { cores: 8, gpuPolicy: "matched", memoryGb: 16 },
         locale: "de-DE",
+        noise: "off",
         timezone: "Europe/Berlin",
       }),
     ).toStrictEqual({
@@ -40,6 +47,7 @@ describe("the host section", () => {
           memoryGb: [{ value: 16, weight: 1 }],
         },
         locale: "de-DE",
+        noise: "off",
         timezone: "Europe/Berlin",
       },
     });
@@ -53,8 +61,29 @@ describe("the host section", () => {
   ])("refuses $name", ({ host }) => {
     expect(() => resolveHostConfig(host)).toThrow(
       expect.objectContaining(
-        refusal("host takes locale, timezone, display, hardware and browserArgs."),
+        refusal("host takes locale, timezone, display, hardware, noise and browserArgs."),
       ),
+    );
+  });
+});
+
+describe("host.noise", () => {
+  it.each(["auto", "on", "off"])("takes %s", (noise) => {
+    expect(identityOf({ noise }).noise).toBe(noise);
+  });
+
+  it("leaves noise to the planner's default when the config sets none", () => {
+    expect(identityOf({}).noise).toBeUndefined();
+  });
+
+  it.each([
+    { name: "another case", noise: "On" },
+    { name: "a boolean", noise: true },
+    { name: "an unknown setting", noise: "always" },
+    { name: "null", noise: null },
+  ])("refuses noise given as $name", ({ noise }) => {
+    expect(() => resolveHostConfig({ noise })).toThrow(
+      expect.objectContaining(refusal('host.noise must be "auto", "on" or "off".')),
     );
   });
 });

@@ -154,7 +154,7 @@ const resolveBrowserArgs = (
   browserArgs === undefined ? (configured ?? []) : parseBrowserArgs(browserArgs);
 
 const refuseIdentityOptions = (options: ClientOptions | ScrapeOptions): void => {
-  for (const field of ["locale", "timezone", "display", "hardware"]) {
+  for (const field of ["locale", "timezone", "display", "hardware", "noise"]) {
     if (field in options) {
       throw invalidOptions(
         `${field} is not a client or scrape option. Set it in the host section of xrio.config.`,

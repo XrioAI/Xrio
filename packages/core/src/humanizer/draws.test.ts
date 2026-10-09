@@ -861,6 +861,7 @@ describe("the device record", () => {
         display: undefined,
         hardware: undefined,
         locale: "de-DE",
+        noise: undefined,
         timezone: "America/New_York",
       },
     });
@@ -1215,6 +1216,7 @@ describe("a record made from a scrape's pins", () => {
     },
     hardware: undefined,
     locale: "de-DE",
+    noise: undefined,
     timezone: "Europe/Berlin",
   } as const;
 

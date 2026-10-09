@@ -19,7 +19,13 @@ const execute = promisify(execFile);
 
 const NO_HOST = {
   browserArgs: undefined,
-  identity: { display: undefined, hardware: undefined, locale: undefined, timezone: undefined },
+  identity: {
+    display: undefined,
+    hardware: undefined,
+    locale: undefined,
+    noise: undefined,
+    timezone: undefined,
+  },
 };
 
 const NO_RETRIES = { retries: 0 };

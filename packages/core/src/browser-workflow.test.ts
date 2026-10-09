@@ -356,6 +356,20 @@ describe("browsers on the kit fork", () => {
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
+  it("sends no noise over SwiftShader when the config turns it off", async () => {
+    const identity = await visitOnSwiftShader(
+      "noise-off",
+      await fakeForkPath("kit", { root: path.join(root, "noise-off") }),
+      { ...noPins, noise: "off" },
+    );
+
+    expect({
+      noise: identity.surfaces.noise,
+      tells: identity.tells.filter((tell) => tell === "noise-unhonored"),
+    }).toStrictEqual({ noise: { enabled: false, reason: "pinned" }, tells: [] });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
+  });
+
   const pinHidden: IdentityIntent = {
     ...noPins,
     hardware: { gpu: [{ name: "synthetic-swiftshader-hidden", weight: 1 }] },
@@ -1761,7 +1775,7 @@ describe("the launch identity check", () => {
         await settledValue(
           browsers.visit({
             ...(await normalRequest(deadline)),
-            pins: { display: undefined, hardware: undefined, locale: "de-DE", timezone: undefined },
+            pins: { ...noPins, locale: "de-DE" },
           }).document,
         ),
     );

@@ -382,7 +382,7 @@ describe(planLaunch, () => {
         exit: { facts: { kind: "unknown" }, route: "direct" },
         hostZone: "UTC",
         mode: "headless",
-        pins: { display: undefined, hardware: undefined, locale: "de-DE", timezone: undefined },
+        pins: { ...noPins, locale: "de-DE" },
       }).inputs,
       proxyServer: undefined,
       scratchDir,
