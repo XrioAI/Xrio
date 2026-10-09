@@ -129,6 +129,14 @@ const fixedPages = new Map(
       bytes: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("<p>Hi</p>", "utf16le")]),
       headers: { "content-type": "text/html; charset=windows-1252" },
     },
+    "/preview/shift-jis": {
+      bytes: Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]),
+      headers: { "content-type": "text/plain; charset=Shift_JIS" },
+    },
+    "/preview/windows-1251": {
+      bytes: Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+      headers: { "content-type": 'application/json; charset="windows-1251"' },
+    },
   }),
 );
 
@@ -572,6 +580,23 @@ describe("http mode body limits", () => {
       await expect(
         client.scrape({ format: "html", url: `${fixture.origin}/bomb/${encoding}` }),
       ).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
+    },
+  );
+
+  it.each([
+    { expected: "日本語", path: "/preview/shift-jis" },
+    { expected: "Привет", path: "/preview/windows-1251" },
+  ])(
+    "decodes the unsupported-content preview of $path with its declared charset",
+    async ({ expected, path }) => {
+      await using fixture = await startFixtureServer(routes);
+
+      await expect(
+        client.scrape({ format: "html", url: `${fixture.origin}${path}` }),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_CONTENT_TYPE",
+        details: { body: expected },
+      });
     },
   );
 });
