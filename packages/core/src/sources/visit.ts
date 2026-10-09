@@ -4,6 +4,7 @@ import type { DeviceRecord, HostCapabilities, PlanRecord } from "../humanizer/co
 import type { HttpPlan, IdentityPlan } from "../humanizer/humanizer.ts";
 import type { ScrapeIntent } from "../intent.ts";
 import type { HeldDeadline } from "../lifetime.ts";
+import type { Relay } from "../proxy/relay.ts";
 import type { SeedCookie } from "../seed-cookies.ts";
 import type { Slot } from "../slot.ts";
 import type { ProxyEndpoint, SourceDocument } from "../types.ts";
@@ -91,6 +92,6 @@ export interface FinishedVisit extends AttemptLog {
 }
 
 export interface Sources {
-  readonly start: (plan: VisitPlan, slot: Slot, deadline: HeldDeadline) => Visit;
+  readonly start: (plan: VisitPlan, slot: Slot, deadline: HeldDeadline, relay?: Relay) => Visit;
   readonly close: () => Promise<void>;
 }

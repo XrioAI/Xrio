@@ -24,8 +24,10 @@ import type { ProxyExits } from "./proxy/exit.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
 import type { ProxyObservation } from "./proxy/info.ts";
 import { ProxyManager } from "./proxy/manager.ts";
+import { startRelay } from "./proxy/relay.ts";
+import type { Relay } from "./proxy/relay.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
-import { bindSessionExit } from "./proxy/session-exit.ts";
+import { bindSessionExit, firstExitProxy } from "./proxy/session-exit.ts";
 import { createRetries } from "./retries.ts";
 import type { Retries } from "./retries.ts";
 import { reportSkippedCookies } from "./seed-cookies.ts";
@@ -92,20 +94,20 @@ const comparisonFacts = async ({
   }
 };
 
-const sessionExit = async (
-  { dependencies, held, hold, intent }: VisitContext,
+const exitRouteOf = (
+  { dependencies, hold, intent }: VisitContext,
   proxy: ProxyEndpoint | undefined,
-) => {
-  const exit = await bindSessionExit(
-    {
-      binding: hold.binding,
-      drawStickyId: hold.drawStickyId,
-      manager: intent.route === undefined ? dependencies.managedProxy : undefined,
-      observe: dependencies.proxyInfo,
-      proxy,
-    },
-    held,
-  );
+) => ({
+  binding: hold.binding,
+  drawStickyId: hold.drawStickyId,
+  manager: intent.route === undefined ? dependencies.managedProxy : undefined,
+  observe: dependencies.proxyInfo,
+  proxy,
+});
+
+const sessionExit = async (context: VisitContext, proxy: ProxyEndpoint | undefined) => {
+  const { held, hold } = context;
+  const exit = await bindSessionExit(exitRouteOf(context, proxy), held);
 
   if (exit.kind === "changed") {
     await hold.retire();
@@ -113,6 +115,41 @@ const sessionExit = async (
   }
 
   return exit;
+};
+
+interface PredialedRelay extends AsyncDisposable {
+  readonly relayFor: (plan: VisitPlan) => Promise<Relay | undefined>;
+}
+
+const predialedRelay = async (
+  { held, intent }: VisitContext,
+  expected: ProxyEndpoint | undefined,
+): Promise<PredialedRelay> => {
+  const relayThrough = async (proxy: ProxyEndpoint | undefined) =>
+    intent.source.mode === "http" || proxy === undefined
+      ? undefined
+      : { proxy, relay: await startRelay(proxy, held, "loopback", intent.url) };
+
+  let current = await relayThrough(expected);
+
+  const close = async () => {
+    const closing = current;
+
+    current = undefined;
+    await closing?.relay[Symbol.asyncDispose]();
+  };
+
+  return {
+    [Symbol.asyncDispose]: close,
+    relayFor: async ({ proxy }) => {
+      if (current?.proxy.url !== proxy?.url) {
+        await close();
+        current = await relayThrough(proxy);
+      }
+
+      return current?.relay;
+    },
+  };
 };
 
 const plannedVisit = async (
@@ -197,10 +234,15 @@ interface VisitResult extends FinishedVisit {
   readonly answered: ScrapeOutcome;
 }
 
-const planVisits = (context: VisitContext, visitor: Visitor): (() => Promise<VisitPlan>) => {
+interface VisitPlanner {
+  readonly expectedProxy: () => ProxyEndpoint | undefined;
+  readonly plan: () => Promise<VisitPlan>;
+}
+
+const planVisits = (context: VisitContext, visitor: Visitor): VisitPlanner => {
   let frozen: VisitPlan | undefined;
 
-  return async () => {
+  const plan = async () => {
     if (frozen === undefined) {
       frozen = await plannedVisit(context, visitor);
 
@@ -219,6 +261,12 @@ const planVisits = (context: VisitContext, visitor: Visitor): (() => Promise<Vis
     );
 
     return { ...frozen, fonts };
+  };
+
+  return {
+    expectedProxy: () =>
+      frozen === undefined ? firstExitProxy(exitRouteOf(context, visitor.proxy)) : frozen.proxy,
+    plan,
   };
 };
 
@@ -343,7 +391,7 @@ const visitOnce = async (
   context: VisitContext,
   terminal: boolean,
   retries: Retries,
-  planVisit: () => Promise<VisitPlan>,
+  planner: VisitPlanner,
 ): Promise<VisitResult> => {
   const { answer, attempts, dependencies, held, hold, intent } = context;
 
@@ -359,12 +407,23 @@ const visitOnce = async (
     held,
   );
 
-  const plan = await startAttempt(async () => await timeStage("identity", planVisit, held), held);
+  await using predialed = await startAttempt(
+    async () => await predialedRelay(context, planner.expectedProxy()),
+    held,
+  );
+
+  const plan = await startAttempt(
+    async () => await timeStage("identity", planner.plan, held),
+    held,
+  );
+
   let transferred = false;
 
   try {
+    const relay = await startAttempt(async () => await predialed.relayFor(plan), held, plan);
+
     const visit = await startAttempt(
-      () => dependencies.sources.start(plan, slot, held),
+      () => dependencies.sources.start(plan, slot, held, relay),
       held,
       plan,
     );
@@ -413,11 +472,11 @@ const visitAfterStartFailures = async (
   context: VisitContext,
   terminal: boolean,
   retries: Retries,
-  planVisit: () => Promise<VisitPlan>,
+  planner: VisitPlanner,
 ): Promise<VisitResult> => {
   for (;;) {
     try {
-      return await visitOnce(context, terminal, retries, planVisit);
+      return await visitOnce(context, terminal, retries, planner);
     } catch (error) {
       if (!(error instanceof AttemptStartError)) {
         throw error;
@@ -455,10 +514,10 @@ const visitorBehind = (
 const completeVisits = async (context: VisitContext, retries: Retries): Promise<void> => {
   let terminal = false;
   let visitor = firstVisitor(context);
-  let planVisit = planVisits(context, visitor);
+  let planner = planVisits(context, visitor);
 
   for (;;) {
-    const visit = await visitAfterStartFailures(context, terminal, retries, planVisit);
+    const visit = await visitAfterStartFailures(context, terminal, retries, planner);
 
     await context.hold.finish(visit);
 
@@ -468,7 +527,7 @@ const completeVisits = async (context: VisitContext, retries: Retries): Promise<
 
     if (visit.next.kind === "revisit") {
       terminal = true;
-      planVisit = planVisits(context, visitor);
+      planner = planVisits(context, visitor);
       continue;
     }
 
@@ -479,7 +538,7 @@ const completeVisits = async (context: VisitContext, retries: Retries): Promise<
 
     if (visit.next.kind === "fresh-exit") {
       visitor = visitorBehind(visit.next.route, visitor, context.dependencies);
-      planVisit = planVisits(context, visitor);
+      planner = planVisits(context, visitor);
       context.attempts.freshExits += 1;
     }
   }

@@ -12,7 +12,6 @@ import {
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import type { HeldDeadline } from "../../lifetime.ts";
 import { pollAfter } from "../../poll.ts";
-import { startRelay } from "../../proxy/relay.ts";
 import type { Relay } from "../../proxy/relay.ts";
 import type { Slot } from "../../slot.ts";
 import type { SourceDocument } from "../../types.ts";
@@ -196,7 +195,12 @@ const observeAfterCapture = async (
 type BrowserVisitPlan = Extract<VisitPlan, { kind: "browser" }>;
 
 export interface Browsers {
-  readonly start: (plan: BrowserVisitPlan, slot: Slot, deadline: HeldDeadline) => Visit;
+  readonly start: (
+    plan: BrowserVisitPlan,
+    slot: Slot,
+    deadline: HeldDeadline,
+    relay?: Relay,
+  ) => Visit;
   readonly close: () => Promise<void>;
 }
 
@@ -207,12 +211,6 @@ const settleFonts = async ({ fonts }: BrowserVisitPlan): Promise<void> => {
     publishInternalEvent({ detail: messageOf(error), event: "font-settlement-failed" });
   }
 };
-
-const proxyRelayFor = async (
-  { proxy }: BrowserVisitPlan,
-  deadline: HeldDeadline,
-): Promise<Relay | undefined> =>
-  proxy === undefined ? undefined : await startRelay(proxy, deadline, "loopback");
 
 const renderInScope = async (
   driver: BrowserDriver,
@@ -289,6 +287,7 @@ export const createBrowsers = (
     plan: BrowserVisitPlan,
     slot: Slot,
     deadline: HeldDeadline,
+    relay: Relay | undefined,
     document: PromiseWithResolvers<SourceDocument>,
     launched: (argv: readonly string[]) => void,
   ): Promise<Closed> => {
@@ -300,7 +299,10 @@ export const createBrowsers = (
         throw clientClosed();
       }
 
-      await using relay = await proxyRelayFor(plan, deadline);
+      if (plan.proxy !== undefined && relay === undefined) {
+        throw new Error("A proxied browser visit needs its proxy relay.");
+      }
+
       const scope = new ChromeScope(await createOwnedScratch(registry, deadline), steps);
 
       return await renderInScope(driver, plan, slot, deadline, scope, document, relay, launched);
@@ -318,11 +320,11 @@ export const createBrowsers = (
     visits.delete(closing);
   };
 
-  const start: Browsers["start"] = (plan, slot, deadline) => {
+  const start: Browsers["start"] = (plan, slot, deadline, relay) => {
     const document = Promise.withResolvers<SourceDocument>();
     let argv: readonly string[] | null = null;
 
-    const closing = visit(plan, slot, deadline, document, (launched) => {
+    const closing = visit(plan, slot, deadline, relay, document, (launched) => {
       argv = launched;
     });
 
