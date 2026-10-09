@@ -9,6 +9,7 @@ export interface BenchOptions {
   readonly warmup: number;
   readonly liveUrls: readonly string[] | undefined;
   readonly proxy: string | undefined;
+  readonly browserArgs: readonly string[];
 }
 
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//iu;
@@ -81,6 +82,7 @@ const requireLiveRoute = (proxy: string | undefined): void => {
 export const readBenchOptions = async (): Promise<BenchOptions> => {
   const { values } = parseArgs({
     options: {
+      "browser-arg": { multiple: true, type: "string" },
       mode: { default: "headless", type: "string" },
       out: { type: "string" },
       proxy: { type: "string" },
@@ -98,6 +100,7 @@ export const readBenchOptions = async (): Promise<BenchOptions> => {
   }
 
   return {
+    browserArgs: values["browser-arg"] ?? [],
     liveUrls: values.urls === undefined ? undefined : await readLiveUrls(values.urls),
     mode: parseMode(values.mode),
     out: values.out,

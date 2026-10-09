@@ -58,12 +58,20 @@ const measureTargets = async (
 
 const benchmark = async (targets: readonly ScrapeTarget[], options: BenchOptions) => {
   const browserPath = chromePath();
-  const settings: ScrapeSettings = { browserPath, mode: options.mode, proxy: options.proxy };
+
+  const settings: ScrapeSettings = {
+    browserArgs: options.browserArgs,
+    browserPath,
+    mode: options.mode,
+    proxy: options.proxy,
+  };
+
   const { argv, samples } = await measureTargets(targets, settings, options);
 
   return {
     config: {
       argv,
+      browserArgs: options.browserArgs,
       environment: describeEnvironment(browserPath),
       mode: options.mode,
       proxied: options.proxy !== undefined,
