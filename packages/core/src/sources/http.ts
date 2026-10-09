@@ -1,77 +1,305 @@
-import type { DocumentRequest, ResponseDetails, SourceDocument } from "../types.ts";
+import { createSession, RequestError } from "wreq-js";
+import type { CreateSessionOptions, Response as ClientResponse, Session } from "wreq-js";
+
+import { classifyResponse } from "../blocks/classify.ts";
+import type { Deadline } from "../deadline.ts";
+import { redactUrl, XrioError } from "../errors.ts";
+import type { HttpInputs } from "../humanizer/humanizer.ts";
+import type { HttpIdentityReport } from "../humanizer/report.ts";
+import { requestHeaderOrder } from "../humanizer/request-headers.ts";
+import { startRelay } from "../proxy/relay.ts";
+import type { Relay } from "../proxy/relay.ts";
+import type { SourceDocument } from "../types.ts";
+import { isHtmlContentType, unsupportedContentType } from "./content-type.ts";
+import { decodeBody } from "./decode.ts";
+import { networkFailure } from "./net-error.ts";
+import { responseDetailsFrom } from "./response.ts";
+import type { VisitPlan } from "./visit.ts";
+
+const chromeProfile = (
+  { browser, headerOrder, headers, os }: HttpInputs,
+  callerHeaders: Readonly<Record<string, string>>,
+) =>
+  ({
+    browser,
+    defaultHeaders: { Connection: "keep-alive", ...headers },
+    emulation: {
+      http2Options: {
+        enablePush: false,
+        headerTableSize: 65_536,
+        headersPseudoOrder: ["Method", "Authority", "Scheme", "Path"],
+        headersStreamDependency: { dependencyId: 0, exclusive: true, weight: 255 },
+        initialConnectionWindowSize: 15_728_640,
+        initialWindowSize: 6_291_456,
+        maxHeaderListSize: 262_144,
+        settingsOrder: ["HeaderTableSize", "EnablePush", "InitialWindowSize", "MaxHeaderListSize"],
+      },
+      origHeaders: requestHeaderOrder(headerOrder, callerHeaders),
+    },
+    os,
+  }) satisfies CreateSessionOptions;
+
+const MAX_REDIRECTS = 20;
+
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
 const UNSUPPORTED_BODY_PREVIEW_BYTES = 65_536;
 
-const readResponseDetails = (response: Response): ResponseDetails => {
-  const headers: ResponseDetails["headers"] = {};
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-  for (const [name, value] of response.headers) {
-    if (name !== "set-cookie") {
-      headers[name] = value;
-    }
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+const LEADING_EMPTY_VALUES = /^(?:\s*,)+/u;
+
+const FAILURE_AFTER_REQUEST_URI = /for uri \(\S*\): (?<failure>.*)$/su;
+
+const TUNNEL_FAILURE = /ProxyConnect/u;
+
+const readBody = async (
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+  deadline: Deadline,
+  url: string,
+): Promise<{ bytes: Uint8Array; truncated: boolean }> => {
+  deadline.throwIfExpired();
+
+  if (body === null) {
+    return { bytes: new Uint8Array(), truncated: false };
   }
 
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+
+  const cancelOnAbort = () => {
+    void Promise.allSettled([reader.cancel()]);
+  };
+
+  deadline.signal.addEventListener("abort", cancelOnAbort, { once: true });
+
+  try {
+    for (;;) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- body chunks arrive in order and are counted as they stream.
+      const { done, value } = await reader.read();
+      deadline.signal.throwIfAborted();
+
+      if (done) {
+        return { bytes: Buffer.concat(chunks), truncated: false };
+      }
+
+      const kept = value.subarray(0, maxBytes - length);
+      chunks.push(kept);
+      length += kept.byteLength;
+
+      if (kept.byteLength < value.byteLength) {
+        break;
+      }
+    }
+
+    await reader.cancel();
+
+    return { bytes: Buffer.concat(chunks), truncated: true };
+  } catch (error) {
+    deadline.throwIfExpired();
+    throw new XrioError("NETWORK_ERROR", `Reading the response from ${redactUrl(url)} failed.`, {
+      cause: error,
+      details: undefined,
+    });
+  } finally {
+    deadline.signal.removeEventListener("abort", cancelOnAbort);
+  }
+};
+
+interface FollowedResponse {
+  response: ClientResponse;
+  requestUrls: string[];
+}
+
+const readDocument = async (
+  { requestUrls, response }: FollowedResponse,
+  deadline: Deadline,
+  identityNow: () => HttpIdentityReport,
+): Promise<SourceDocument> => {
+  const details = responseDetailsFrom(response.url, response.status, response.headers);
+  const contentType = details.headers["content-type"] ?? "";
+  const body = NULL_BODY_STATUSES.has(response.status) ? null : response.body;
+
+  if (body === null) {
+    throw unsupportedContentType(details, requestUrls, null);
+  }
+
+  if (!isHtmlContentType(contentType)) {
+    const preview = await readBody(body, UNSUPPORTED_BODY_PREVIEW_BYTES, deadline, response.url);
+
+    throw unsupportedContentType(details, requestUrls, decodeBody(preview.bytes, contentType));
+  }
+
+  const { bytes, truncated } = await readBody(body, MAX_BODY_BYTES, deadline, response.url);
+
+  if (truncated) {
+    throw new XrioError(
+      "RESPONSE_TOO_LARGE",
+      `The response from ${redactUrl(response.url)} is larger than ${MAX_BODY_BYTES} bytes.`,
+      { details: undefined },
+    );
+  }
+
+  const html = decodeBody(bytes, contentType);
+
   return {
-    cookies: response.headers.getSetCookie(),
-    headers,
-    status: response.status,
-    url: response.url,
+    ...details,
+    block: classifyResponse({ html, requestUrls, response: details }),
+    html,
+    identity: identityNow(),
+    requestUrls,
+    scriptsRan: false,
   };
 };
 
-const readBodyPreview = async (body: ReadableStream<Uint8Array> | null): Promise<string> => {
-  if (body === null) {
-    return "";
-  }
+const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {
+  const failure = FAILURE_AFTER_REQUEST_URI.exec(error.message)?.groups?.failure ?? "";
 
-  const decoder = new TextDecoder();
-  let preview = "";
-  let remainingBytes = UNSUPPORTED_BODY_PREVIEW_BYTES;
-
-  for await (const chunk of body) {
-    const kept = chunk.subarray(0, remainingBytes);
-
-    preview += decoder.decode(kept, { stream: true });
-    remainingBytes -= kept.byteLength;
-
-    if (remainingBytes === 0) {
-      break;
-    }
-  }
-
-  preview += decoder.decode();
-
-  return preview;
-};
-
-const readHtmlDocument = async (response: Response): Promise<SourceDocument> => {
-  const details = readResponseDetails(response);
-  const contentType = response.headers.get("content-type") ?? "";
-  const [mediaType] = contentType.split(";");
-
-  // ponytail: HTML input only; add plain-text and JSON parsing when needed.
-  if (mediaType.trim().toLowerCase() !== "text/html" || response.body === null) {
-    const received = response.body === null ? "no response body" : contentType || "no content type";
-    const body = await readBodyPreview(response.body);
-
-    throw Object.assign(new Error(`Expected HTML from ${response.url}; received ${received}.`), {
-      ...details,
-      body,
-      code: "UNSUPPORTED_CONTENT_TYPE",
+  if (failure === "") {
+    return new XrioError("NETWORK_ERROR", `The request to ${redactUrl(url)} failed.`, {
+      cause: error,
+      details: undefined,
     });
   }
 
-  return { ...details, html: await response.text() };
+  if (TUNNEL_FAILURE.test(failure)) {
+    return (
+      relay.failureFor(url.hostname) ??
+      new XrioError("NETWORK_ERROR", `Could not open a tunnel to ${url.host}.`, {
+        cause: error,
+        details: undefined,
+      })
+    );
+  }
+
+  return networkFailure(url, failure, error);
 };
 
-export const loadHttpDocument = async ({
-  url,
-  timeoutMs,
-  signal,
-}: DocumentRequest): Promise<SourceDocument> => {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const response = await fetch(url, { signal: requestSignal });
+const fetchOnce = async (
+  session: Session,
+  url: URL,
+  deadline: Deadline,
+  relay: Relay,
+  headers: Readonly<Record<string, string>>,
+): Promise<ClientResponse> => {
+  deadline.throwIfExpired();
+  let response: ClientResponse;
 
-  return await readHtmlDocument(response);
+  try {
+    response = await session.fetch(url.href, {
+      headers,
+      redirect: "manual",
+      signal: deadline.signal,
+    });
+  } catch (error) {
+    throw error instanceof RequestError ? translateRequestError(error, url, relay) : error;
+  }
+
+  const relayFailure = url.protocol === "http:" ? relay.failureFor(url.hostname) : undefined;
+
+  if (relayFailure !== undefined) {
+    await response.body?.cancel();
+    throw relayFailure;
+  }
+
+  return response;
+};
+
+const resolveRedirect = (location: string, base: string): URL => {
+  const url = URL.parse(location, base);
+
+  const isFollowable =
+    url !== null &&
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.username === "" &&
+    url.password === "";
+
+  if (!isFollowable) {
+    throw new XrioError(
+      "NETWORK_ERROR",
+      `${redactUrl(base)} redirected to an unsupported location.`,
+      {
+        details: undefined,
+      },
+    );
+  }
+
+  return url;
+};
+
+const redirectTarget = (response: ClientResponse): string | undefined => {
+  const location = response.headers.get("location")?.replace(LEADING_EMPTY_VALUES, "").trim();
+
+  return location === undefined || location === "" ? undefined : location;
+};
+
+const fetchFollowingRedirects = async (
+  session: Session,
+  url: URL,
+  deadline: Deadline,
+  relay: Relay,
+  headers: Readonly<Record<string, string>>,
+  requestUrls: string[] = [],
+): Promise<FollowedResponse> => {
+  const response = await fetchOnce(session, url, deadline, relay, headers);
+  const location = redirectTarget(response);
+  const redirects = requestUrls.length;
+
+  requestUrls.push(url.href);
+
+  if (!REDIRECT_STATUSES.has(response.status) || location === undefined) {
+    return { requestUrls, response };
+  }
+
+  await response.body?.cancel();
+
+  if (redirects === MAX_REDIRECTS) {
+    throw new XrioError(
+      "TOO_MANY_REDIRECTS",
+      `${redactUrl(url)} redirected more than ${MAX_REDIRECTS} times.`,
+      {
+        details: undefined,
+      },
+    );
+  }
+
+  const next = resolveRedirect(location, response.url);
+
+  return await fetchFollowingRedirects(
+    session,
+    next,
+    deadline,
+    relay,
+    next.origin === url.origin ? headers : {},
+    requestUrls,
+  );
+};
+
+export const loadHttpDocument = async (
+  { capabilities, identity, proxy, url, headers, cookies }: Extract<VisitPlan, { kind: "http" }>,
+  deadline: Deadline,
+): Promise<SourceDocument> => {
+  const { inputs, report } = identity;
+
+  await using relay = await startRelay(proxy, deadline, "token");
+
+  await using session = await createSession({
+    ...chromeProfile(inputs, headers),
+    proxy: relay.url,
+    timeout: 0,
+  });
+
+  for (const { name, setCookieHeader } of cookies) {
+    session.setCookie(name, setCookieHeader.slice(setCookieHeader.indexOf("=") + 1), url);
+  }
+
+  return await readDocument(
+    await fetchFollowingRedirects(session, url, deadline, relay, headers),
+    deadline,
+    () => report(capabilities),
+  );
 };

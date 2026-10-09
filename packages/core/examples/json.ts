@@ -1,7 +1,7 @@
 // From the repository root: vp node packages/core/examples/json.ts
 import { XrioClient } from "../src/client.ts";
 
-const client = new XrioClient();
+const client = new XrioClient({ mode: "http" });
 
 const url = "https://example.com";
 

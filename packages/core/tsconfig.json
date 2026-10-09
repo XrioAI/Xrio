@@ -1,4 +1,4 @@
 {
   "extends": "@xrio/typescript-config/base.json",
-  "include": ["src", "examples", "vite.config.ts"]
+  "include": ["src", "examples", "scripts", "vite.config.ts"]
 }

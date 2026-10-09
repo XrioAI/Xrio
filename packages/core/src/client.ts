@@ -1,11 +1,20 @@
+import { createAdmission } from "./admission.ts";
+import { hostCacheRoot } from "./cache-dir.ts";
+import { loadXrioConfig } from "./config.ts";
 import { extractContent, getHtml, renderMarkdown } from "./content/formats.ts";
-import { resolveClientOptions, resolveScrapeOptions } from "./options.ts";
-import { loadHeadedDocument, loadHeadlessDocument } from "./sources/browser.ts";
-import { loadHttpDocument } from "./sources/http.ts";
+import { createScrapes } from "./coordinator.ts";
+import type { Scrapes } from "./coordinator.ts";
+import { startDeadline } from "./deadline.ts";
+import type { ClientDefaults } from "./intent.ts";
+import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
+import { anonymousSessions } from "./sessions/session.ts";
+import { cdpDriver } from "./sources/browser/cdp/driver.ts";
+import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
+import { hostFactsFor } from "./sources/browser/host-facts.ts";
+import type { ClientHostFacts } from "./sources/browser/host-facts.ts";
+import { createSources } from "./sources/source.ts";
 import type {
-  DocumentRequest,
-  ModeOptions,
-  ResolvedMode,
+  ClientOptions,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
@@ -13,18 +22,53 @@ import type {
 } from "./types.ts";
 
 export type {
+  BlockEvidence,
+  BlockReport,
+  BlockVerdict,
+  ChallengeOutcome,
+  ChallengeReport,
+  ChallengeRound,
+} from "./blocks/classify.ts";
+
+export { isXrioError, XrioError } from "./errors.ts";
+
+export type { XrioConfig } from "./config.ts";
+
+export type {
+  DisplayOptions,
+  HardwareOptions,
+  HostConfig,
+  ScreenSize,
+  Taskbar,
+  WindowSize,
+} from "./host-config.ts";
+
+export type {
+  BrowserIdentityReport,
+  Coverage,
+  CoverageReason,
+  CoveredSurface,
+  HttpIdentityReport,
+  IdentityCoverage,
+  IdentityReport,
+  ObservedIdentity,
+} from "./humanizer/report.ts";
+
+export type { SurfaceChoices } from "./humanizer/surfaces.ts";
+
+export type { IdentityMismatch, IdentityTell } from "./humanizer/verify.ts";
+
+export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
+
+export type {
+  ClientOptions,
   ModeOptions,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
   StructuredContent,
+  WaitFor,
 } from "./types.ts";
-
-const sources = {
-  headed: loadHeadedDocument,
-  headless: loadHeadlessDocument,
-  http: loadHttpDocument,
-} satisfies Record<ResolvedMode["mode"], (request: DocumentRequest) => Promise<SourceDocument>>;
 
 const formats = {
   html: (document) => ({ data: getHtml(document), format: "html" }),
@@ -37,28 +81,57 @@ const formats = {
 };
 
 export class XrioClient {
-  readonly #mode: ResolvedMode;
+  readonly #defaults: ClientDefaults;
+  readonly #hostFacts: ClientHostFacts;
+  readonly #scrapes: Scrapes;
 
-  constructor(options: ModeOptions = {}) {
-    this.#mode = resolveClientOptions(options);
+  constructor(options: ClientOptions) {
+    const config = loadXrioConfig(options?.configFile);
+
+    this.#defaults = resolveClientOptions(options, config.host, config.scrape);
+    this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
+
+    this.#scrapes = createScrapes({
+      admission: createAdmission(this.#defaults.maxBrowsers),
+      comparisonBinary: this.#defaults.browser.browserPath,
+      config,
+      fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
+      host: this.#hostFacts,
+      sessions: anonymousSessions(),
+      sources: createSources(cdpDriver),
+    });
   }
 
   scrape<Format extends ScrapeFormat>(
     options: ScrapeOptions<Format>,
   ): Promise<ScrapeResult<Format>>;
   async scrape(options: ScrapeOptions): Promise<ScrapeResult> {
-    const request = resolveScrapeOptions(options, this.#mode);
-    const loadDocument = sources[request.mode];
-    const renderContent = formats[request.format];
+    this.#scrapes.assertOpen();
+    const intent = resolveScrapeIntent(options, this.#defaults);
+    using deadline = startDeadline(intent.timeoutMs, intent.signal);
+    const document = await this.#scrapes.start(intent, deadline).answer;
 
-    const document = await loadDocument(request);
+    deadline.throwIfExpired();
+    const content = formats[intent.format](document);
+    deadline.throwIfExpired();
 
     return {
-      ...renderContent(document),
+      ...content,
+      block: document.block,
       cookies: document.cookies,
       headers: document.headers,
+      identity: document.identity,
       status: document.status,
       url: document.url,
     };
+  }
+
+  async close(): Promise<void> {
+    await this.#scrapes.close();
+    await this.#hostFacts.settle();
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
   }
 }

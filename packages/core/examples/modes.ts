@@ -1,9 +1,8 @@
 // From the repository root: vp node packages/core/examples/modes.ts
 import { XrioClient } from "../src/client.ts";
 
-// All modes accept html, markdown, and json. Browser modes currently throw "not implemented".
-// Paths below illustrate configuration; no browser is launched by the current implementation.
-const client = new XrioClient({ browserPath: "/path/to/chrome", mode: "headless" });
+// All modes accept html, markdown, and json. Replace the paths with real Chrome executables.
+await using client = new XrioClient({ browserPath: "/path/to/chrome", mode: "headless" });
 
 const url = "https://example.com";
 
@@ -26,7 +25,7 @@ try {
   console.error(error);
 }
 
-// An HTTP override works today and does not change the client's headless default.
+// An HTTP override does not change the client's headless default.
 const result = await client.scrape({ format: "html", mode: "http", url });
 
 console.log(result.data);

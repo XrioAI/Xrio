@@ -1,12 +1,47 @@
+import type { BlockReport } from "./blocks/classify.ts";
+import type { IdentityReport } from "./humanizer/report.ts";
+
 export type ScrapeFormat = "html" | "markdown" | "json";
 
-export type ModeOptions =
-  | { mode?: "http"; browserPath?: never }
-  | { mode: "headless" | "headed"; browserPath: string };
+interface HttpMode {
+  mode: "http";
+  browserPath?: never;
+  waitFor?: never;
+}
 
-export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOptions & {
+interface BrowserMode {
+  mode: "headless" | "headed";
+  browserPath: string;
+}
+
+export interface WaitFor {
+  selector: string;
+}
+
+export type ModeOptions = HttpMode | BrowserMode | { mode?: never; browserPath: string };
+
+type ModeOverride =
+  | (HttpMode & { headers?: Readonly<Record<string, string>> })
+  | (BrowserMode & { waitFor?: WaitFor; headers?: never })
+  | { mode?: never; browserPath?: never; waitFor?: WaitFor; headers?: never };
+
+export type ClientOptions = (
+  | { mode: "http"; browserPath?: string }
+  | BrowserMode
+  | { mode?: never; browserPath: string }
+) & {
+  browserArgs?: readonly string[];
+  proxy?: string;
+  maxBrowsers?: number;
+  cacheDir?: string;
+  configFile?: string;
+};
+
+export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOverride & {
   url: string;
   format: Format;
+  proxy?: string;
+  cookies?: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -37,17 +72,28 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
   [Selected in Format]: ResponseDetails & {
     data: Selected extends "json" ? StructuredContent : string;
     format: Selected;
+    block: BlockReport;
+    identity: IdentityReport;
   };
 }[Format];
 
 export interface SourceDocument extends ResponseDetails {
+  scriptsRan: boolean;
   html: string;
+  block: BlockReport;
+  requestUrls: readonly string[];
+  identity: IdentityReport;
 }
 
-export type ResolvedMode = ModeOptions & { mode: NonNullable<ModeOptions["mode"]> };
+export type RenderedDocument = Pick<SourceDocument, "html" | "url"> &
+  Partial<Pick<SourceDocument, "scriptsRan">>;
 
-export type DocumentRequest = ResolvedMode & {
-  url: URL;
-  timeoutMs: number;
-  signal?: AbortSignal;
-};
+export type ResolvedMode = HttpMode | BrowserMode;
+
+export interface ProxyEndpoint {
+  protocol: "http" | "https" | "socks5";
+  hostname: string;
+  port: number;
+  credentials: { username: string; password: string } | undefined;
+  redactedUrl: string;
+}

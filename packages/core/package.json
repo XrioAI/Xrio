@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "files": [
-    "dist"
+    "dist",
+    "xrio.schema.json"
   ],
   "type": "module",
   "sideEffects": false,
@@ -18,10 +19,16 @@
     "typecheck": "vp exec tsc --noEmit"
   },
   "dependencies": {
-    "@mdream/js": "1.7.2"
+    "@mdream/js": "1.7.2",
+    "entities": "8.1.0",
+    "socks": "2.8.10",
+    "tldts": "7.4.16",
+    "wreq-js": "3.2.0"
   },
   "devDependencies": {
-    "@xrio/typescript-config": "workspace:*"
+    "@xrio/typescript-config": "workspace:*",
+    "ajv": "8.20.0",
+    "devtools-protocol": "0.0.1707781"
   },
   "engines": {
     "node": ">=24.0.0"

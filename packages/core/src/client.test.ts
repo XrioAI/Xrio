@@ -1,9 +1,21 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+import { performance } from "node:perf_hooks";
+import { inspect } from "node:util";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
-import { XrioClient } from "./client.ts";
+import { isXrioError, XrioClient, XrioError } from "./client.ts";
+import type { IdentityReport } from "./client.ts";
+import { scratchRoot } from "./sources/browser/browser-process.ts";
+import { fakeChromePath } from "./testing/fake-chrome-path.ts";
+import { dumpsRun, fakeForkPath, hangDumpFor } from "./testing/fake-fork.ts";
+import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
+import { startFixtureServer } from "./testing/fixture-server.ts";
+import type { FixtureServer } from "./testing/fixture-server.ts";
+import { stageTimeline } from "./testing/stage-timeline.ts";
 
 const html = `<!doctype html>
 <html lang="en">
@@ -38,7 +50,30 @@ const cookies = [
 
 const previewBytes = 65_536;
 
-const server = createServer((request, response) => {
+const CAPTURE_BEFORE_TEARDOWN_MS = 1500;
+
+const ABORT_DURING_LAUNCH_MS = 200;
+
+const LAUNCH_TIMEOUT_MS = 500;
+
+const HOST_FACTS_FILE = /^host-facts-[\da-f]+\.json$/u;
+
+const storedFactsIn = async (directory: string): Promise<string[]> => {
+  try {
+    const names = await readdir(directory);
+
+    return names.filter((name) => HOST_FACTS_FILE.test(name));
+  } catch {
+    return [];
+  }
+};
+
+let onRequest: (() => void) | undefined;
+
+const routes = (request: IncomingMessage, response: ServerResponse) => {
+  onRequest?.();
+  onRequest = undefined;
+
   const url = new URL(request.url ?? "/", "http://localhost");
   const status = Number(url.searchParams.get("status") ?? 200);
 
@@ -129,41 +164,36 @@ const server = createServer((request, response) => {
         .end(html);
     }
   }
-});
+};
 
 describe(XrioClient, () => {
+  let server: FixtureServer;
   let origin: string;
 
   beforeAll(async () => {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Node returns either a TCP address, a pipe path, or null.
-    if (address === null || typeof address === "string") {
-      throw new Error("Test server did not receive a TCP port.");
-    }
-
-    origin = `http://127.0.0.1:${address.port}`;
+    server = await startFixtureServer(routes);
+    ({ origin } = server);
   });
 
   afterAll(async () => {
-    const closed = once(server, "close");
-    server.close();
-    server.closeAllConnections();
-    await closed;
+    await server[Symbol.asyncDispose]();
   });
 
   it.each(["html", "markdown", "json"] as const)(
     "returns the shared result fields and final response headers for %s",
     async (format) => {
-      const result = await new XrioClient().scrape({ format, url: `${origin}/redirect` });
+      const result = await new XrioClient({ mode: "http" }).scrape({
+        format,
+        url: `${origin}/redirect`,
+      });
 
       expect(Object.keys(result).toSorted()).toStrictEqual([
+        "block",
         "cookies",
         "data",
         "format",
         "headers",
+        "identity",
         "status",
         "url",
       ]);
@@ -174,6 +204,13 @@ describe(XrioClient, () => {
           "content-type": "text/html; charset=utf-8",
           "x-source": "document",
         },
+        identity: {
+          coverage: { requestHeaders: { reason: "no-request-log", state: "unchecked" } },
+          locale: "en-US",
+          mode: "http",
+          profile: { chromeMajor: 149, platform: "linux" },
+          tells: [],
+        },
         status: 200,
         url: `${origin}/pages/document`,
       });
@@ -183,7 +220,7 @@ describe(XrioClient, () => {
   );
 
   it("preserves HTML and shares body-wide Markdown with JSON after redirects", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
     const url = `${origin}/redirect`;
     const source = await client.scrape({ format: "html", url });
     const markdown = await client.scrape({ format: "markdown", url });
@@ -214,7 +251,11 @@ describe(XrioClient, () => {
   });
 
   it("converts the whole body while excluding document-head content", async () => {
-    const page = await new XrioClient().scrape({ format: "json", url: `${origin}/redirect` });
+    const page = await new XrioClient({ mode: "http" }).scrape({
+      format: "json",
+      url: `${origin}/redirect`,
+    });
+
     const { markdown, text } = page.data.content;
 
     for (const fragment of [
@@ -241,7 +282,7 @@ describe(XrioClient, () => {
   });
 
   it("handles omitted document wrappers and missing metadata", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
     const page = await client.scrape({ format: "json", url: `${origin}/fragment` });
     const titled = await client.scrape({ format: "json", url: `${origin}/implicit-head` });
 
@@ -255,14 +296,13 @@ describe(XrioClient, () => {
     expect(page.cookies).toStrictEqual([]);
   });
 
-  it("keeps mode overrides local to one call and rejects browser modes", async () => {
-    const client = new XrioClient({ browserPath: "/browser", mode: "headed" });
+  it("keeps mode overrides local to one call", async () => {
+    const client = new XrioClient({ browserPath: "/nonexistent/chrome" });
     const url = `${origin}/fragment`;
 
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
-      code: "MODE_NOT_IMPLEMENTED",
-      message: "The headed mode is not implemented.",
-      name: "Error",
+      code: "BROWSER_LAUNCH_FAILED",
+      name: "XrioError",
     });
     await expect(client.scrape({ format: "html", mode: "http", url })).resolves.toMatchObject({
       data: "<p>Body only</p>",
@@ -271,22 +311,39 @@ describe(XrioClient, () => {
       url,
     });
     await expect(client.scrape({ format: "html", url })).rejects.toMatchObject({
-      code: "MODE_NOT_IMPLEMENTED",
-      message: "The headed mode is not implemented.",
+      code: "BROWSER_LAUNCH_FAILED",
     });
-    await expect(
-      new XrioClient().scrape({ browserPath: "/browser", format: "json", mode: "headless", url }),
-    ).rejects.toMatchObject({
-      code: "MODE_NOT_IMPLEMENTED",
-      message: "The headless mode is not implemented.",
-      name: "Error",
+  });
+
+  it("rejects scrapes once the client is closed", async () => {
+    const client = new XrioClient({ mode: "http" });
+
+    await client.close();
+
+    await expect(client.scrape({ format: "html", url: origin })).rejects.toMatchObject({
+      code: "CLIENT_CLOSED",
+      message: "The client is closed.",
+      name: "XrioError",
+    });
+  });
+
+  it("closes when disposed", async () => {
+    let disposed: XrioClient;
+
+    {
+      await using client = new XrioClient({ mode: "http" });
+      disposed = client;
+    }
+
+    await expect(disposed.scrape({ format: "html", url: origin })).rejects.toMatchObject({
+      code: "CLIENT_CLOSED",
     });
   });
 
   it.each([202, 403, 404, 500])(
     "returns HTML responses with HTTP %s in every format",
     async (status) => {
-      const client = new XrioClient();
+      const client = new XrioClient({ mode: "http" });
       const url = `${origin}/pages/document?status=${status}`;
 
       const [source, markdown, page] = await Promise.all([
@@ -317,29 +374,29 @@ describe(XrioClient, () => {
     "rejects unsupported content from $path with response details",
     async ({ body, path, status }) => {
       await expect(
-        new XrioClient().scrape({ format: "json", url: `${origin}${path}` }),
+        new XrioClient({ mode: "http" }).scrape({ format: "json", url: `${origin}${path}` }),
       ).rejects.toMatchObject({
-        body,
         code: "UNSUPPORTED_CONTENT_TYPE",
-        name: "Error",
-        status,
-        url: `${origin}${path}`,
+        details: { body, status, url: `${origin}${path}` },
+        name: "XrioError",
       });
     },
   );
 
   it("preserves response headers and cookies on unsupported-content errors", async () => {
-    const rejection = new XrioClient().scrape({ format: "html", url: `${origin}/json` });
+    const rejection = new XrioClient({ mode: "http" }).scrape({
+      format: "html",
+      url: `${origin}/json`,
+    });
 
     await expect(rejection).rejects.toMatchObject({
-      cookies,
-      headers: { "content-type": "application/json" },
+      details: { cookies, headers: { "content-type": "application/json" } },
     });
-    await expect(rejection).rejects.not.toHaveProperty(["headers", "set-cookie"]);
+    await expect(rejection).rejects.not.toHaveProperty(["details", "headers", "set-cookie"]);
   });
 
   it("validates URLs before fetching", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
 
     await expect(
       client.scrape({ format: "html", url: "file:///tmp/page.html" }),
@@ -348,53 +405,36 @@ describe(XrioClient, () => {
       name: "TypeError",
     });
     await expect(client.scrape({ format: "html", url: "relative/path" })).rejects.toMatchObject({
-      code: "ERR_INVALID_URL",
+      code: "INVALID_OPTIONS",
       name: "TypeError",
     });
+
+    const withCredentials = client.scrape({
+      format: "html",
+      url: "https://user:secret@xrio.invalid/",
+    });
+
+    await expect(withCredentials).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+    await expect(withCredentials).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Number.POSITIVE_INFINITY }).includes("secret"),
+    );
   });
 
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
     "rejects invalid timeout %s",
     async (timeoutMs) => {
       await expect(
-        new XrioClient().scrape({ format: "html", timeoutMs, url: origin }),
+        new XrioClient({ mode: "http" }).scrape({ format: "html", timeoutMs, url: origin }),
       ).rejects.toMatchObject({ code: "INVALID_OPTIONS", name: "TypeError" });
     },
   );
 
-  it("defaults to 60 seconds and allows a per-call timeout", async () => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
-    const client = new XrioClient();
-
-    try {
-      await client.scrape({ format: "html", url: `${origin}/fragment` });
-      expect(timeout).toHaveBeenCalledWith(60_000);
-      await expect(
-        client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/slow` }),
-      ).rejects.toThrow(/abort|timeout/iu);
-      expect(timeout).toHaveBeenLastCalledWith(100);
-    } finally {
-      timeout.mockRestore();
-    }
-  });
-
-  it("propagates native network and timeout errors", async () => {
-    const client = new XrioClient();
-
-    await expect(
-      client.scrape({ format: "html", url: `${origin}/disconnect` }),
-    ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKET" }, name: "TypeError" });
-    await expect(
-      client.scrape({ format: "html", timeoutMs: 100, url: `${origin}/waiting` }),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-  });
-
   it("allows callers to abort before fetching or during a request", async () => {
-    const client = new XrioClient();
+    const client = new XrioClient({ mode: "http" });
     const controller = new AbortController();
-    server.once("request", () => {
+    onRequest = () => {
       controller.abort();
-    });
+    };
 
     const pending = client.scrape({
       format: "html",
@@ -416,5 +456,496 @@ describe(XrioClient, () => {
     ).resolves.toMatchObject({
       data: "<p>Body only</p>",
     });
+  });
+});
+
+describe("XrioClient errors", () => {
+  let server: FixtureServer;
+  let origin: string;
+
+  beforeAll(async () => {
+    server = await startFixtureServer(routes);
+    ({ origin } = server);
+  });
+
+  afterAll(async () => {
+    await server[Symbol.asyncDispose]();
+  });
+
+  it.each(["/waiting", "/slow"])(
+    "rejects with TIMEOUT when the deadline passes while loading %s",
+    async (path) => {
+      const rejection = new XrioClient({ mode: "http" }).scrape({
+        format: "html",
+        timeoutMs: 100,
+        url: `${origin}${path}`,
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(XrioError);
+      await expect(rejection).rejects.toMatchObject({ code: "TIMEOUT", name: "XrioError" });
+    },
+  );
+
+  it("maps a dropped connection to NETWORK_ERROR and keeps the client error as the cause", async () => {
+    await expect(
+      new XrioClient({ mode: "http" }).scrape({ format: "html", url: `${origin}/disconnect` }),
+    ).rejects.toMatchObject({
+      cause: { name: "RequestError" },
+      code: "NETWORK_ERROR",
+      name: "XrioError",
+    });
+  });
+
+  it("rejects with errors that isXrioError recognizes by code", async () => {
+    const client = new XrioClient({ mode: "http" });
+
+    await expect(client.scrape({ format: "html", url: `${origin}/plain` })).rejects.toSatisfy(
+      (error) => isXrioError(error, "UNSUPPORTED_CONTENT_TYPE"),
+    );
+    await expect(client.scrape({ format: "html", url: "ftp://xrio.invalid" })).rejects.toSatisfy(
+      (error) => isXrioError(error, "INVALID_OPTIONS"),
+    );
+  });
+});
+
+const fullDepth = (value: IdentityReport | XrioError): string =>
+  inspect(value, { depth: Number.POSITIVE_INFINITY });
+
+describe("the identity report's secrets", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["abort", "timeout"] as const)(
+    "closes metadata sockets and prevents browser launch on %s",
+    async (ending) => {
+      await using proxy = await startFakeHttpProxy({ silent: true, tunnelTo: 0 });
+
+      await using client = new XrioClient({
+        browserPath: "/must-not-launch",
+        mode: "headless",
+        proxy: proxy.url,
+      });
+
+      const controller = new AbortController();
+      const stopped = new Error("Caller stopped metadata lookup.");
+
+      const pending = client.scrape({
+        format: "html",
+        signal: controller.signal,
+        timeoutMs: ending === "abort" ? 5000 : 500,
+        url: "http://target.invalid",
+      });
+
+      const settled = Promise.allSettled([pending]);
+      await vi.waitFor(() => {
+        expect(proxy.requests).toHaveLength(1);
+      });
+      const closing = client.close();
+
+      if (ending === "abort") {
+        controller.abort(stopped);
+      }
+
+      const expected = ending === "abort" ? { message: stopped.message } : { code: "TIMEOUT" };
+      await expect(settled).resolves.toMatchObject([{ reason: expected, status: "rejected" }]);
+      await closing;
+      await vi.waitFor(() => {
+        expect(proxy.openConnections).toBe(0);
+      });
+      expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["ipwho.is:443"]);
+    },
+  );
+
+  it("preserves proxy authentication failures without exposing credentials", async () => {
+    await using proxy = await startFakeHttpProxy({ connectStatus: 407, tunnelTo: 0 });
+
+    await using client = new XrioClient({
+      mode: "http",
+      proxy: proxy.url.replace("://", "://user:secret@"),
+    });
+
+    const result = client.scrape({ format: "html", url: "https://origin.test/" });
+
+    await expect(result).rejects.toMatchObject({ code: "PROXY_AUTH_FAILED" });
+    await expect(result).rejects.toSatisfy(
+      (error) => !inspect(error, { depth: Infinity }).includes("secret"),
+    );
+    expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["origin.test:443"]);
+  });
+
+  it("holds no scratch path in a browser report or a launch error", async () => {
+    const root = scratchRoot();
+
+    vi.stubEnv("TZ", "America/Chicago");
+
+    await using client = new XrioClient({
+      browserPath: await fakeChromePath("normal"),
+      mode: "headless",
+    });
+
+    const { identity } = await client.scrape({ format: "html", url: "https://fake.test/page" });
+
+    await using drifted = new XrioClient({
+      browserPath: await fakeChromePath("identity-drift"),
+      mode: "headless",
+    });
+
+    expect({ leaked: fullDepth(identity).includes(root), mode: identity.mode }).toStrictEqual({
+      leaked: false,
+      mode: "headless",
+    });
+    await expect(
+      drifted.scrape({ format: "html", url: "https://fake.test/page" }),
+    ).rejects.toSatisfy(
+      (error) =>
+        isXrioError(error, "BROWSER_LAUNCH_FAILED") &&
+        error.details.mismatches.length === 1 &&
+        !fullDepth(error).includes(root),
+    );
+  });
+});
+
+describe("XrioClient browser lifecycle", () => {
+  it("returns a capture that finished in time even when teardown runs past the deadline", async () => {
+    await using client = new XrioClient({
+      browserPath: await fakeChromePath("ignore-close"),
+      mode: "headless",
+    });
+
+    await expect(
+      client.scrape({
+        format: "html",
+        timeoutMs: CAPTURE_BEFORE_TEARDOWN_MS,
+        url: "https://fake.test/page",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+  });
+});
+
+describe("XrioClient browser admission", () => {
+  it("rejects queued work on close without another Chrome launch and waits for running cleanup", async () => {
+    using stages = stageTimeline(new Set(["launch", "teardown"]));
+
+    await stages.recording(async () => {
+      const client = new XrioClient({
+        browserPath: await fakeChromePath("ignore-close"),
+        maxBrowsers: 1,
+        mode: "headless",
+      });
+
+      try {
+        await expect(
+          client.scrape({ format: "html", url: "https://fake.test/page" }),
+        ).resolves.toMatchObject({ status: 200 });
+        const queued = client.scrape({ format: "html", url: "https://fake.test/queued" });
+        const closed = client.close();
+
+        await expect(queued).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+        expect(stages.timeline).toStrictEqual(["launch"]);
+        await closed;
+        expect(stages.timeline).toStrictEqual(["launch", "teardown"]);
+      } finally {
+        await client.close();
+      }
+    });
+  });
+
+  it("sweeps no browser scratch for http scrapes, refused scrapes or a closed client", async () => {
+    await using fixture = await startFixtureServer(routes);
+    using stages = stageTimeline(new Set(["scratch-sweep"]));
+
+    await stages.recording(async () => {
+      const http = new XrioClient({ mode: "http" });
+
+      await expect(
+        http.scrape({ format: "html", url: `${fixture.origin}/pages/document` }),
+      ).resolves.toMatchObject({ status: 200 });
+      await http.close();
+
+      const browser = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        mode: "headless",
+      });
+
+      await expect(browser.scrape({ format: "html", url: "relative/path" })).rejects.toMatchObject({
+        code: "INVALID_OPTIONS",
+      });
+      await browser.close();
+      await expect(browser.scrape({ format: "html", url: fixture.origin })).rejects.toMatchObject({
+        code: "CLIENT_CLOSED",
+      });
+    });
+
+    expect(stages.timeline).toStrictEqual([]);
+  });
+
+  it("sweeps abandoned scratch once, before the first browser launch", async () => {
+    using stages = stageTimeline(new Set(["scratch-sweep", "launch"]));
+
+    await stages.recording(async () => {
+      await using client = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        mode: "headless",
+      });
+
+      await client.scrape({ format: "html", url: "https://fake.test/page" });
+      await client.scrape({ format: "html", url: "https://fake.test/page" });
+    });
+
+    expect(stages.timeline).toStrictEqual(["scratch-sweep", "launch", "launch"]);
+  });
+
+  it("starts a queued scrape only after the previous visit has closed", async () => {
+    using stages = stageTimeline(new Set(["launch", "teardown"]));
+
+    await stages.recording(async () => {
+      await using client = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        maxBrowsers: 1,
+        mode: "headless",
+      });
+
+      const scrapeAndMark = async (name: string) => {
+        await client.scrape({ format: "html", url: "https://fake.test/page" });
+        stages.mark(`${name} resolved`);
+      };
+
+      await Promise.all([scrapeAndMark("first"), scrapeAndMark("second")]);
+    });
+
+    expect(stages.timeline).toStrictEqual([
+      "launch",
+      "first resolved",
+      "teardown",
+      "launch",
+      "second resolved",
+      "teardown",
+    ]);
+  });
+
+  it.each([
+    { error: { code: "BROWSER_LAUNCH_FAILED" }, scenario: "no-start" },
+    { error: { code: "BROWSER_CRASHED" }, scenario: "crash-on-navigate" },
+    { error: { code: "NETWORK_ERROR" }, scenario: "navigate-error" },
+    {
+      abortAfterMs: ABORT_DURING_LAUNCH_MS,
+      error: { name: "TimeoutError" },
+      scenario: "slow-start",
+    },
+    { error: { code: "TIMEOUT" }, scenario: "slow-start", timeoutMs: LAUNCH_TIMEOUT_MS },
+  ])(
+    "admits the next scrape after $scenario rejects with $error",
+    async ({ abortAfterMs, error, scenario, timeoutMs }) => {
+      await using client = new XrioClient({
+        browserPath: await fakeChromePath("normal"),
+        maxBrowsers: 1,
+        mode: "headless",
+      });
+
+      const failing = client.scrape({
+        browserPath: await fakeChromePath(scenario),
+        format: "html",
+        mode: "headless",
+        signal: abortAfterMs === undefined ? undefined : AbortSignal.timeout(abortAfterMs),
+        timeoutMs,
+        url: "https://fake.test/page",
+      });
+
+      await expect(failing).rejects.toMatchObject(error);
+      await expect(
+        client.scrape({ format: "html", timeoutMs: 10_000, url: "https://fake.test/page" }),
+      ).resolves.toMatchObject({ status: 200 });
+    },
+  );
+});
+
+const closeTimingOf = async (client: XrioClient): Promise<string> => {
+  const started = performance.now();
+
+  await client.close();
+
+  const ms = performance.now() - started;
+
+  if (ms < 100) {
+    return "within 100 ms";
+  }
+
+  return ms >= 1000 && ms < 6000 ? "within 1 to 6 s" : `after ${Math.round(ms)} ms`;
+};
+
+describe("the client's host facts", () => {
+  it("starts no probe when constructed or closed without scraping", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      const browserPath = await fakeForkPath("kit", { root });
+
+      const client = new XrioClient({
+        browserPath,
+        cacheDir: nodePath.join(root, "cache"),
+        mode: "headless",
+      });
+
+      await client.close();
+      await expect(dumpsRun(browserPath)).resolves.toBe(0);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("shares one probe across clients, and each http scrape compares its client's binary", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      await using fixture = await startFixtureServer(routes);
+      const browserPath = await fakeForkPath("kit", { root });
+
+      const comparisonPath = await fakeForkPath("kit", {
+        root: nodePath.join(root, "comparison"),
+        version: "149.0.7800.10",
+      });
+
+      const cacheDir = nodePath.join(root, "cache");
+      await using first = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+      await using second = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+
+      await using older = new XrioClient({
+        browserPath: comparisonPath,
+        cacheDir,
+        mode: "headless",
+      });
+
+      const request = {
+        format: "html",
+        mode: "http",
+        url: `${fixture.origin}/pages/document`,
+      } as const;
+
+      const pages = await Promise.all([
+        first.scrape(request),
+        second.scrape(request),
+        older.scrape(request),
+      ]);
+
+      expect(pages.map((page) => page.identity.tells)).toStrictEqual([
+        ["http-profile-skew"],
+        ["http-profile-skew"],
+        [],
+      ]);
+      await expect(dumpsRun(browserPath)).resolves.toBe(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("awaits a slow comparison probe under the http deadline, so timing cannot hide skew", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      await using fixture = await startFixtureServer(routes);
+      const browserPath = await fakeForkPath("kit", { root });
+
+      await hangDumpFor(browserPath, 0.5);
+
+      await using client = new XrioClient({
+        browserPath,
+        cacheDir: nodePath.join(root, "cache"),
+        mode: "headless",
+      });
+
+      const page = await client.scrape({
+        format: "html",
+        mode: "http",
+        timeoutMs: 5000,
+        url: `${fixture.origin}/pages/document`,
+      });
+
+      expect(page.identity).toMatchObject({
+        coverage: { httpProfileSkew: { state: "observed" } },
+        mode: "http",
+        tells: ["http-profile-skew"],
+      });
+      await expect(dumpsRun(browserPath)).resolves.toBe(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("reports the comparison unchecked for an http client without a binary", async () => {
+    await using fixture = await startFixtureServer(routes);
+    await using client = new XrioClient({ mode: "http" });
+    const page = await client.scrape({ format: "html", url: `${fixture.origin}/pages/document` });
+
+    expect(page.identity).toMatchObject({
+      coverage: { httpProfileSkew: { reason: "not-observed", state: "unchecked" } },
+      mode: "http",
+      tells: [],
+    });
+  });
+
+  it("answers at the deadline mid-probe, and closes only once the probe is gone", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      const browserPath = await fakeForkPath("kit", { root });
+      const cacheDir = nodePath.join(root, "cache");
+
+      await hangDumpFor(browserPath, 0.5);
+
+      const client = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+
+      await expect(
+        client.scrape({ format: "html", timeoutMs: 100, url: "http://127.0.0.1:9/" }),
+      ).rejects.toMatchObject({ code: "TIMEOUT" });
+      await expect(storedFactsIn(nodePath.join(cacheDir, "host"))).resolves.toStrictEqual([]);
+
+      await client.close();
+
+      await expect(storedFactsIn(nodePath.join(cacheDir, "host"))).resolves.toHaveLength(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("closes a client that joined no probe at once, and the clients whose scrapes started or joined one once it is gone", async () => {
+    const root = await mkdtemp(nodePath.join(tmpdir(), "xrio-client-fork-"));
+
+    try {
+      const browserPath = await fakeForkPath("kit", { root });
+      const cacheDir = nodePath.join(root, "cache");
+
+      await hangDumpFor(browserPath, 3);
+
+      const starter = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+      const joiner = new XrioClient({ browserPath, cacheDir, mode: "headless" });
+      const idle = new XrioClient({ cacheDir, mode: "http" });
+      const request = { format: "html", timeoutMs: 300, url: "http://127.0.0.1:9/" } as const;
+
+      await Promise.all([
+        expect(starter.scrape(request)).rejects.toMatchObject({ code: "TIMEOUT" }),
+        expect(joiner.scrape(request)).rejects.toMatchObject({ code: "TIMEOUT" }),
+      ]);
+
+      const [idleClose, joinerClose, starterClose] = await Promise.all([
+        closeTimingOf(idle),
+        closeTimingOf(joiner),
+        closeTimingOf(starter),
+      ]);
+
+      expect({
+        dumps: await dumpsRun(browserPath),
+        idle: idleClose,
+        joiner: joinerClose,
+        starter: starterClose,
+      }).toStrictEqual({
+        dumps: 1,
+        idle: "within 100 ms",
+        joiner: "within 1 to 6 s",
+        starter: "within 1 to 6 s",
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 });
