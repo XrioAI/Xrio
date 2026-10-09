@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { renameSync, rmSync } from "node:fs";
+import { readdirSync, renameSync, rmSync } from "node:fs";
 import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
@@ -89,6 +89,20 @@ export const movedProfile = (directory: string) => {
       }
     },
   };
+};
+
+export const tombstonesIn = (root: string): string[] => {
+  try {
+    return readdirSync(profilesRoot(root)).flatMap((name) =>
+      name.includes(TOMBSTONE_MARKER) ? [path.join(profilesRoot(root), name)] : [],
+    );
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
 };
 
 export interface Holder {

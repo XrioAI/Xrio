@@ -7,7 +7,7 @@ import type { Scrapes } from "./coordinator.ts";
 import { startDeadline } from "./deadline.ts";
 import type { ClientDefaults } from "./intent.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
-import type { SessionManager } from "./sessions/session.ts";
+import type { SessionAdmin, SessionManager } from "./sessions/session.ts";
 import { createSessions } from "./sessions/session.ts";
 import { profileUse } from "./sources/browser/browser-process.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
@@ -33,6 +33,8 @@ export type {
 } from "./blocks/classify.ts";
 
 export { isXrioError, XrioError } from "./errors.ts";
+
+export type { SessionAdmin } from "./sessions/session.ts";
 
 export type { XrioConfig } from "./config.ts";
 
@@ -68,6 +70,7 @@ export type {
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
+  SessionInfo,
   SessionSummary,
   StructuredContent,
   WaitFor,
@@ -109,6 +112,27 @@ export class XrioClient {
       sessions: this.#sessions,
       sources: createSources(cdpDriver),
     });
+  }
+
+  get sessions(): SessionAdmin {
+    const { admin } = this.#sessions;
+
+    return {
+      delete: async (name) => {
+        this.#scrapes.assertOpen();
+        await admin.delete(name);
+      },
+      list: async () => {
+        this.#scrapes.assertOpen();
+
+        return await admin.list();
+      },
+      prune: async (options) => {
+        this.#scrapes.assertOpen();
+
+        return await admin.prune(options);
+      },
+    };
   }
 
   scrape<Format extends ScrapeFormat>(

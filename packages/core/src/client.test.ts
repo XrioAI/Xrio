@@ -459,6 +459,40 @@ describe(XrioClient, () => {
   });
 });
 
+describe("captured session admin", () => {
+  it("refuses captured admin calls as soon as close starts while a scrape is active", async () => {
+    await using fixture = await startFixtureServer(routes);
+    const client = new XrioClient({ mode: "http" });
+    const admin = client.sessions;
+    const controller = new AbortController();
+    const requested = Promise.withResolvers<null>();
+    onRequest = () => {
+      requested.resolve(null);
+    };
+
+    const running = client.scrape({
+      format: "html",
+      signal: controller.signal,
+      timeoutMs: 10_000,
+      url: `${fixture.origin}/waiting`,
+    });
+
+    const settled = Promise.allSettled([running]);
+    await requested.promise;
+    const closing = client.close();
+
+    try {
+      await expect(admin.list()).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+      await expect(admin.delete("account")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+      await expect(admin.prune({ idleFor: 0 })).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+    } finally {
+      controller.abort();
+      await settled;
+      await closing;
+    }
+  });
+});
+
 describe("XrioClient errors", () => {
   let server: FixtureServer;
   let origin: string;

@@ -319,6 +319,22 @@ A session scrape resolves with `result.session`, `{ name, created, visits, warmt
 
 Warmth is kept for each session and site, where the site is the host name of the scrape's URL. It is `cold`, `contacted`, `warm` or `cooling`. A scrape whose block verdict is `ok` makes the site `warm`. A `blocked` scrape makes a `warm` or `cooling` site `cooling`, and any other site `contacted`. Other verdicts leave the warmth as it was. A site that the session has not scraped within the last `warmthMaxAgeMs` milliseconds counts as `cold`, and so does a last scrape dated in the future. `warmthMaxAgeMs` is a client option that defaults to 1,800,000, which is 30 minutes. It must be a positive integer, or the client constructor rejects with `INVALID_OPTIONS`. Each scrape also stores the site's block verdict, vendor, challenge outcome and rules, the exit address the proxy lookup observed, and the device digest. A scrape that changes the site's warmth publishes `warmth-changed`.
 
+#### Session administration
+
+`client.sessions` lists, deletes and prunes the sessions in `stateDir`:
+
+```ts
+const sessions = await xrio.sessions.list();
+await xrio.sessions.delete("account");
+const pruned = await xrio.sessions.prune({ idleFor: 7 * 24 * 60 * 60 * 1000 });
+```
+
+- `list()` resolves to every session in name order, each `{ name, state, visits, lastVisitAt }`. `state` is `ready` or `quarantined`. `visits` counts the session's scrapes that captured a browser document. `lastVisitAt` is the time, in milliseconds since the epoch, of the session's last scrape that captured a browser document, or of its creation.
+- `delete(name)` waits until no scrape holds the session, then deletes it with its profile and its history. It takes over a holder that has exited or whose hold expired, as a scrape does. It rejects with `SESSION_UNAVAILABLE` and the reason `quarantined` when Chrome still holds the profile open after 5 seconds, `process-table-unreadable` when the process table cannot be read, and `ownership-lost` when it loses its hold. A name without a session resolves, and a name that is not a non-empty string rejects with `INVALID_OPTIONS`.
+- `prune({ idleFor })` deletes every session whose `lastVisitAt` is more than `idleFor` milliseconds ago, and resolves to the names it deleted. It skips a session that a live scrape holds, and one it cannot delete, such as one whose profile Chrome still holds open. `idleFor` must be a non-negative integer, or the call rejects with `INVALID_OPTIONS`.
+
+Each call has its own 60-second budget and rejects with `TIMEOUT` when the budget runs out. A call made after `close()` starts rejects with `CLIENT_CLOSED`, and `close()` waits for the calls made before it. When a client first opens the session database, Xrio removes the profile directories that an interrupted delete or an interrupted emptying of a profile left behind, and publishes `sweep-incomplete` when it cannot.
+
 ### Identity report
 
 `identity` says what Xrio configured for the scrape and how much of it was observed. It is not evidence that a site accepted the browser. Checking `identity.mode` narrows its type in TypeScript. A scrape that rejects carries no report, and the `identity-chosen` event (see the diagnostics channels above) names the identity its browser was launched with. In headed mode that event's `record` and `digests.device` are `null`, because the record holds what Chrome presented, which only the launch read knows.
@@ -389,7 +405,7 @@ try {
 | `PROXY_CONNECT_FAILED`            | `XrioError` | The proxy refused the tunnel with another non-2xx status. `details.status` holds it.                                                                                              |
 | `BROWSER_LAUNCH_FAILED`           | `XrioError` | Chrome did not start, is older than 150, or failed its version read or identity check. `details.stderr` holds its output tail, `details.mismatches` each fatal mismatch.          |
 | `BROWSER_CRASHED`                 | `XrioError` | The browser or the page's renderer died mid-scrape.                                                                                                                               |
-| `CLIENT_CLOSED`                   | `XrioError` | `scrape()` was called after `close()`, or `close()` rejected a queued browser scrape.                                                                                             |
+| `CLIENT_CLOSED`                   | `XrioError` | `scrape()` or a `client.sessions` method was called after `close()`, or `close()` rejected a queued browser scrape.                                                               |
 | `SESSION_UNAVAILABLE`             | `XrioError` | A session scrape could not claim, keep or use its session. `details.reason` says why, as listed below the table.                                                                  |
 
 `SESSION_UNAVAILABLE` carries one of these reasons in `details.reason`:

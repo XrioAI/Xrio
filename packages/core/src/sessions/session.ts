@@ -1,11 +1,12 @@
 import { mkdirSync } from "node:fs";
-import { lstat } from "node:fs/promises";
+import { lstat, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 
 import { startDeadline, untilDeadline } from "../deadline.ts";
 import type { Clock, Deadline } from "../deadline.ts";
 import { publishInternalEvent } from "../diagnostics.ts";
-import { clientClosed, sessionUnavailable } from "../errors.ts";
+import { clientClosed, invalidOptions, isXrioError, sessionUnavailable } from "../errors.ts";
+import type { XrioError } from "../errors.ts";
 import type { DeviceRecord, HostCapabilities, Seed } from "../humanizer/contracts.ts";
 import type { IdentityContext } from "../humanizer/surfaces.ts";
 import type { ScrapeIntent } from "../intent.ts";
@@ -13,7 +14,7 @@ import { HeldDeadline } from "../lifetime.ts";
 import type { ScrapeOutcome } from "../outcome.ts";
 import type { ProfileUse } from "../sources/browser/browser-process.ts";
 import type { FinishedVisit, Profile, SiteVisit } from "../sources/visit.ts";
-import type { SessionSummary } from "../types.ts";
+import type { SessionInfo, SessionSummary } from "../types.ts";
 import { OwnershipLease, ownershipSchedule } from "./lease.ts";
 import type { LeaseExpiry } from "./lease.ts";
 import {
@@ -23,6 +24,7 @@ import {
   movedProfile,
   processStart,
   profileDirectory,
+  tombstonesIn,
 } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
 import { newHolderToken, openStore, waitForTurn } from "./store.ts";
@@ -45,6 +47,12 @@ export interface ClaimChecks {
   readonly check?: (row: SessionRow) => DeviceRecord | undefined;
 }
 
+export interface SessionAdmin {
+  readonly list: () => Promise<SessionInfo[]>;
+  readonly delete: (name: string) => Promise<void>;
+  readonly prune: (options: { readonly idleFor: number }) => Promise<string[]>;
+}
+
 export interface SessionManager {
   readonly hold: (
     intent: ScrapeIntent["session"],
@@ -52,6 +60,7 @@ export interface SessionManager {
     deadline: Deadline,
   ) => Promise<SessionHold>;
   readonly close: () => Promise<void>;
+  readonly admin: SessionAdmin;
 }
 
 interface SessionOptions {
@@ -68,6 +77,10 @@ interface HeldClaim {
   readonly claim: Claim;
   readonly expiry: LeaseExpiry;
 }
+
+type SessionUnavailable = XrioError<"SESSION_UNAVAILABLE">;
+
+const ADMIN_BUDGET_MS = 60_000;
 
 const STORE_OPEN_BUDGET_MS = 30_000;
 
@@ -145,12 +158,23 @@ const ownStart = async (): Promise<string> => {
   return start;
 };
 
+const sessionInfoOf = (row: SessionRow): SessionInfo => ({
+  lastVisitAt: row.lastVisitAt,
+  name: row.name,
+  state: row.state,
+  visits: row.visits,
+});
+
+const messageOf = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : String(cause);
+
 class Sessions implements SessionManager {
   readonly #root: string;
   readonly #options: SessionOptions;
   readonly #now: () => number;
   readonly #maxAgeMs: number;
   readonly #queues = new Map<string, Promise<void>>();
+  readonly #admins = new Set<Promise<void>>();
   readonly #deadHolders = deadHolderChecks();
   #opening: Promise<SessionStore> | undefined;
   #store: SessionStore | undefined;
@@ -183,7 +207,25 @@ class Sessions implements SessionManager {
       throw error;
     }
 
+    await this.#sweepTombstones(this.#store, deadline);
+
     return this.#store;
+  }
+  async #sweepTombstones(store: SessionStore, deadline: Deadline): Promise<void> {
+    try {
+      const tombstones = await store.exclusively(() => tombstonesIn(this.#root), deadline);
+
+      await Promise.all(
+        tombstones.map(async (tombstone) => {
+          await rm(tombstone, { force: true, recursive: true });
+        }),
+      );
+    } catch (error) {
+      publishInternalEvent({
+        detail: `Removing deleted session profiles failed: ${messageOf(error)}`,
+        event: "sweep-incomplete",
+      });
+    }
   }
   async #holder(): Promise<Holder> {
     this.#holderStart ??= ownStart();
@@ -536,9 +578,160 @@ class Sessions implements SessionManager {
       throw error;
     }
   }
+  async #removalClaim(
+    db: SessionStore,
+    name: string,
+    removal: { readonly eligible: (row: SessionRow) => boolean; readonly waits: boolean },
+    holder: Holder,
+    deadline: Deadline,
+  ): Promise<HeldClaim | undefined> {
+    // oxlint-disable no-await-in-loop -- A waiting delete polls the store until the holder releases or dies.
+    for (;;) {
+      const rows = [db.read(name)].filter((row) => row !== undefined);
+      const dead = await this.#deadHolders(rows, holder.start, deadline.clock);
+      const takeover = this.#takeover(holder, dead);
+      const claimedAt = deadline.clock.now();
+      const result = await db.claimForRemoval(name, takeover, removal.eligible, deadline);
+
+      if (result.kind === "claimed") {
+        return Sessions.#held(result.claim, claimedAt, takeover.length);
+      }
+
+      if (result.kind === "skipped" || !removal.waits) {
+        return undefined;
+      }
+
+      await waitForTurn(deadline);
+    }
+    // oxlint-enable no-await-in-loop
+  }
+  async #removeClaimed(
+    db: SessionStore,
+    held: HeldClaim,
+    holder: Holder,
+    deadline: Deadline,
+  ): Promise<SessionUnavailable | undefined> {
+    const { row } = held.claim;
+    const lease = this.#lease(db, held, holder, deadline.clock);
+    const directory = profileDirectory(this.#root, LOCAL_TENANT, row.name);
+
+    try {
+      await this.#refuseOpenProfile(
+        row,
+        lease,
+        directory,
+        deadline.boundTo(lease.signal, "ownership"),
+      );
+
+      const removed = movedProfile(directory);
+      using persistence = lease.persistence();
+
+      if (!(await db.deleteSession(lease.owner, persistence, removed.move, removed.restore))) {
+        return sessionUnavailable("ownership-lost");
+      }
+
+      await removed.settle();
+
+      return undefined;
+    } catch (error) {
+      if (isXrioError(error, "SESSION_UNAVAILABLE")) {
+        return error;
+      }
+
+      throw error;
+    } finally {
+      await lease.release();
+    }
+  }
+  async #delete(name: string): Promise<void> {
+    using deadline = startDeadline(ADMIN_BUDGET_MS);
+    const db = await this.#openedStore(deadline);
+    const holder = await this.#holder();
+    const removal = { eligible: () => true, waits: true };
+    const held = await this.#removalClaim(db, name, removal, holder, deadline);
+
+    const kept =
+      held === undefined ? undefined : await this.#removeClaimed(db, held, holder, deadline);
+
+    if (kept !== undefined) {
+      throw kept;
+    }
+  }
+  async #pruneRows(eligible: (row: SessionRow) => boolean): Promise<string[]> {
+    using deadline = startDeadline(ADMIN_BUDGET_MS);
+    const db = await this.#openedStore(deadline);
+    const holder = await this.#holder();
+    const removal = { eligible, waits: false };
+    const deleted: string[] = [];
+
+    // oxlint-disable no-await-in-loop -- Each removal claims, checks and deletes one session before the next.
+    for (const row of db.list().filter(eligible)) {
+      const held = await this.#removalClaim(db, row.name, removal, holder, deadline);
+
+      if (
+        held !== undefined &&
+        (await this.#removeClaimed(db, held, holder, deadline)) === undefined
+      ) {
+        deleted.push(row.name);
+      }
+    }
+    // oxlint-enable no-await-in-loop
+
+    return deleted;
+  }
+  async #list(): Promise<SessionInfo[]> {
+    using deadline = startDeadline(ADMIN_BUDGET_MS);
+    const db = await this.#openedStore(deadline);
+
+    return db.list().map(sessionInfoOf);
+  }
+  async #adminRun<Result>(run: () => Promise<Result>): Promise<Result> {
+    if (this.#closed) {
+      throw clientClosed();
+    }
+
+    const result = run();
+
+    const settled = (async () => {
+      await result;
+    })();
+
+    this.#admins.add(settled);
+
+    try {
+      return await result;
+    } finally {
+      this.#admins.delete(settled);
+      void Promise.allSettled([settled]);
+    }
+  }
+  get admin(): SessionAdmin {
+    return {
+      delete: async (name) => {
+        await this.#adminRun(async () => {
+          // oxlint-disable-next-line anti-slop/no-runtime-typeof -- JavaScript callers can pass any value.
+          if (typeof name !== "string" || name.length === 0) {
+            throw invalidOptions("A session name is required.");
+          }
+
+          await this.#delete(name);
+        });
+      },
+      list: async () => await this.#adminRun(async () => await this.#list()),
+      prune: async ({ idleFor }) =>
+        await this.#adminRun(async () => {
+          if (!Number.isSafeInteger(idleFor) || idleFor < 0) {
+            throw invalidOptions("idleFor must be a non-negative integer.");
+          }
+
+          return await this.#pruneRows((row) => this.#now() - row.lastVisitAt > idleFor);
+        }),
+    };
+  }
   async close(): Promise<void> {
     this.#closed = true;
     this.#closing ??= (async () => {
+      await Promise.allSettled(this.#admins);
       await Promise.allSettled([this.#opening]);
       this.#store?.close();
     })();

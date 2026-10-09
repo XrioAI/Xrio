@@ -53,6 +53,11 @@ export interface ClaimRequest extends Takeover {
   readonly check: (row: SessionRow) => void;
 }
 
+export type RemovalClaim =
+  | { readonly kind: "claimed"; readonly claim: Claim }
+  | { readonly kind: "held" }
+  | { readonly kind: "skipped" };
+
 export interface FinishRequest {
   readonly major: number;
   readonly exited: boolean;
@@ -237,6 +242,12 @@ export class SessionStore {
   close(): void {
     this.#db.close();
   }
+  list(): SessionRow[] {
+    return this.#db
+      .prepare("SELECT * FROM sessions WHERE tenant=? ORDER BY name")
+      .all(this.#tenant)
+      .map(rowOf);
+  }
   read(name: string): SessionRow | undefined {
     const row = this.#db
       .prepare("SELECT * FROM sessions WHERE tenant=? AND name=?")
@@ -277,6 +288,9 @@ export class SessionStore {
         await waitForTurn(deadline);
       }
     }
+  }
+  async exclusively<Result>(run: () => Result, deadline: Deadline): Promise<Result> {
+    return await this.#transaction(deadline, run);
   }
   #claimed(name: string): SessionRow {
     const row = this.read(name);
@@ -330,6 +344,24 @@ export class SessionStore {
       request.check(known);
 
       return this.#take(known, request, request.major, false);
+    });
+  }
+  async claimForRemoval(
+    name: string,
+    takeover: Takeover,
+    eligible: (row: SessionRow) => boolean,
+    deadline: Deadline,
+  ): Promise<RemovalClaim> {
+    return await this.#transaction(deadline, (): RemovalClaim => {
+      const known = this.read(name);
+
+      if (known === undefined || !eligible(known)) {
+        return { kind: "skipped" };
+      }
+
+      const claim = this.#take(known, takeover, 0, false);
+
+      return claim === undefined ? { kind: "held" } : { claim, kind: "claimed" };
     });
   }
   async renewOwnership(owner: Ownership, expiresAt: number, deadline: Deadline): Promise<boolean> {
@@ -435,6 +467,34 @@ export class SessionStore {
     }
 
     return { lastVisitAt: numberAt(row, "last_visit_at"), state: row.state };
+  }
+  async deleteSession(
+    owner: Ownership,
+    deadline: Deadline,
+    remove?: () => void,
+    restore?: () => void,
+  ): Promise<boolean> {
+    return await this.#transaction(
+      deadline,
+      () => {
+        const row = this.read(owner.name);
+
+        if (row?.epoch !== owner.epoch || row.holder?.token !== owner.token) {
+          return false;
+        }
+
+        remove?.();
+
+        return (
+          this.#db
+            .prepare(
+              "DELETE FROM sessions WHERE tenant=? AND name=? AND epoch=? AND holder_token=?",
+            )
+            .run(this.#tenant, owner.name, owner.epoch, owner.token).changes === 1
+        );
+      },
+      restore,
+    );
   }
   async resetProfile(
     owner: Ownership,

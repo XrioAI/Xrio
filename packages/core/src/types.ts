@@ -58,6 +58,13 @@ export interface SessionSummary {
   readonly warmth: Warmth;
 }
 
+export interface SessionInfo {
+  readonly name: string;
+  readonly state: "ready" | "quarantined";
+  readonly visits: number;
+  readonly lastVisitAt: number;
+}
+
 export interface StructuredContent {
   metadata: {
     url: string;
