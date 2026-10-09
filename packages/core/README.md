@@ -2,10 +2,29 @@
 
 Fetch an HTML page and return its HTML, Markdown, or structured content. Requires Node.js 24 or newer.
 
+## Install on Linux x64
+
+Download the library `.tgz`, Chromium `.tar.zst`, and `SHA256SUMS` from the same [GitHub release](https://github.com/XrioAI/Xrio/releases). Releases are experimental; there is no npm registry publishing yet. In your project directory, using the downloaded filenames:
+
+```sh
+sha256sum -c SHA256SUMS
+npm install ./xrio-core-<version>.tgz
+mkdir -p xrio-browser
+tar --zstd -xf ./xrio-chrome-<chromium-version>-v<fork-version>-linux.tar.zst -C xrio-browser --strip-components=1
+./xrio-browser/chrome --version
+```
+
+The browser needs Linux runtime libraries; Ubuntu 22.04 x64 was validated. Install `zstd` if your system cannot extract the archive. Generated personas and a custom font stack are not included.
+
+Pass the extracted browser's absolute path to the client. Save the example as `example.mjs` and run `node example.mjs`:
+
 ```ts
 import { XrioClient } from "@xrio/core";
 
-const xrio = new XrioClient({ browserPath: "/usr/bin/google-chrome" });
+await using xrio = new XrioClient({
+  browserPath: "/absolute/path/to/xrio-browser/chrome",
+  mode: "headless",
+});
 
 const result = await xrio.scrape({
   url: "https://example.com",

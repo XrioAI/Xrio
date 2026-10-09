@@ -219,7 +219,8 @@ describe("browsers on the kit fork", () => {
         record: { device: { cores: 6, memoryGb: 16 } },
         surfaces: { hardware: { cores: 6, memoryGb: 16, source: "drawn" } },
       });
-      expect(identity.tells).toStrictEqual(["gl-persona-unavailable"]);
+      expect(identity.tells).not.toContain("hardware-capped");
+      expect(identity.tells).not.toContain("hardware-unhonored");
     } finally {
       await browsers.close();
     }

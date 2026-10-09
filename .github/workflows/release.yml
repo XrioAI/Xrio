@@ -1,0 +1,82 @@
+name: Release Linux x64
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-linux-x64
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'changeset-release/main' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64, xrio-release]
+    timeout-minutes: 1440
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version: "24"
+          cache: false
+          run-install: false
+      - run: vp install
+      - name: Require a versioned, unreleased commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/core/package.json')).version")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$version" != 0.0.0 ]]
+          test -z "$(find .changeset -maxdepth 1 -name '*.md' ! -name README.md -print)"
+          test -z "$(git ls-remote --tags origin "refs/tags/v$version")"
+          echo "XRIO_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Collect the matching browser build
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD:chromium-fork)"
+          build="${XDG_CACHE_HOME:-$HOME/.cache}/xrio-browser-builds/$revision"
+          if [[ ! -d "$build" ]]; then
+            echo "Run Chromium Linux x64 on this main revision first; no matching browser build exists."
+            exit 1
+          fi
+          (cd "$build" && sha256sum -c SHA256SUMS)
+          rm -rf dist/release
+          mkdir -p dist/release
+          cp "$build"/*.tar.zst "$build/BROWSER_VERSIONS" dist/release/
+      - name: Build and pack the library
+        shell: bash
+        run: |
+          set -euo pipefail
+          vp run --filter @xrio/core build
+          cd packages/core
+          vp pm pack --pack-destination "$GITHUB_WORKSPACE/dist/release"
+      - name: Record the downloads and create the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/release
+          sha256sum ./*.tgz ./*.tar.zst > SHA256SUMS
+          printf 'Linux x64, Node.js 24+. Install the library .tgz and extract the Chromium .tar.zst attached to this release.\n\nSee the [installation instructions](https://github.com/%s/blob/%s/packages/core/README.md) and [changelog](https://github.com/%s/blob/%s/packages/core/CHANGELOG.md).\n' \
+            "$GITHUB_REPOSITORY" "$RELEASE_COMMIT" "$GITHUB_REPOSITORY" "$RELEASE_COMMIT" > "$RUNNER_TEMP/xrio-release-notes.md"
+          gh release create "v$XRIO_RELEASE_VERSION" ./*.tgz ./*.tar.zst SHA256SUMS BROWSER_VERSIONS \
+            --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" \
+            --title "Xrio $XRIO_RELEASE_VERSION" --draft --prerelease \
+            --notes-file "$RUNNER_TEMP/xrio-release-notes.md"
+          gh release edit "v$XRIO_RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false
