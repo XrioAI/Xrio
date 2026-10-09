@@ -23,6 +23,7 @@ import type {
   KnobOrigin,
   KnobRegistry,
   NameRow,
+  PresentedUserAgent,
 } from "./contracts.ts";
 import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
@@ -2557,6 +2558,52 @@ describe("the automation surface", () => {
       tells: [],
       value: null,
     });
+  });
+
+  const headedUserAgent: PresentedUserAgent = {
+    metadata: {
+      architecture: "x86",
+      bitness: "64",
+      brands: [{ brand: "Chromium", version: "154" }],
+      formFactors: ["Desktop"],
+      fullVersion: "154.0.8037.57",
+      fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+      mobile: false,
+      model: "",
+      platform: "Linux",
+      platformVersion: "6.8.0",
+      wow64: false,
+    },
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36",
+  };
+
+  const presenting: HostCapabilities = {
+    headlessUserAgent: headedUserAgent,
+    permittedCpus: 32,
+    platform: "darwin",
+  };
+
+  it("presents headed Chrome's user agent on a headless binary that shows the token, and expects no token", () => {
+    expect(resolveSurfaces(contextOf({ capabilities: presenting })).automation).toStrictEqual({
+      expected: [
+        noWebdriver,
+        {
+          compatibility: false,
+          field: "userAgent",
+          matcher: { kind: "no-headless-token" },
+          severity: "fatal",
+        },
+      ],
+      inputs: [{ name: "presented", sink: "user-agent", value: headedUserAgent }],
+      tells: [],
+      value: null,
+    });
+  });
+
+  it("leaves a headed launch's user agent to Chrome", () => {
+    expect(
+      resolveSurfaces(contextOf({ capabilities: presenting, mode: "headed" })).automation,
+    ).toStrictEqual({ expected: [noWebdriver], inputs: [], tells: ["flag-infobar"], value: null });
   });
 
   it("expects no colour scheme on macOS, where it follows the host", () => {

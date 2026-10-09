@@ -59,6 +59,41 @@ describe(mergeBrowserInputs, () => {
     expect(switches).toStrictEqual(["--lang=", "--enable-unsafe-swiftshader"]);
   });
 
+  it("presents a user agent as its switch and hands its client hints to the launch", () => {
+    const presented = {
+      metadata: {
+        architecture: "arm",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        formFactors: ["Desktop"],
+        fullVersion: "154.0.8037.98",
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.98" }],
+        mobile: false,
+        model: "",
+        platform: "macOS",
+        platformVersion: "26.7.0",
+        wow64: false,
+      },
+      userAgent: "Mozilla/5.0 (Macintosh) Chrome/154.0.0.0 Safari/537.36",
+    };
+
+    const inputs = mergeBrowserInputs(
+      resolutionsOf({
+        automation: [{ name: "presented", sink: "user-agent", value: presented }],
+        locale: [{ name: "--lang", sink: "switch", value: "en-US" }],
+      }),
+    );
+
+    expect({ switches: inputs.switches, userAgent: inputs.userAgent }).toStrictEqual({
+      switches: [
+        "--lang=en-US",
+        "--user-agent=Mozilla/5.0 (Macintosh) Chrome/154.0.0.0 Safari/537.36",
+      ],
+      userAgent: presented,
+    });
+    expect(mergeBrowserInputs(resolutionsOf({})).userAgent).toBeUndefined();
+  });
+
   it("keeps each sink apart, nesting dotted names", () => {
     const inputs = mergeBrowserInputs(
       resolutionsOf({

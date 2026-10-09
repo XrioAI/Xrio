@@ -1,3 +1,4 @@
+import type { PresentedUserAgent } from "./contracts.ts";
 import type { LaunchInput, OWNED_FILE_ENVIRONMENT } from "./owned-inputs.ts";
 import { EMISSION_ORDER } from "./surfaces.ts";
 import type { SurfaceName } from "./surfaces.ts";
@@ -23,6 +24,7 @@ export interface BrowserInputs {
   readonly files: readonly InputFile[];
   readonly preferences: Readonly<JsonObject>;
   readonly localState: Readonly<JsonObject>;
+  readonly userAgent: PresentedUserAgent | undefined;
 }
 
 export const isMinted = (inputs: BrowserInputs): boolean => minted.has(inputs);
@@ -64,6 +66,7 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
   const files: InputFile[] = [];
   const preferences: JsonObject = {};
   const localState: JsonObject = {};
+  let userAgent: PresentedUserAgent | undefined;
 
   const place = (input: LaunchInput): void => {
     switch (input.sink) {
@@ -89,6 +92,12 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
 
       case "local-state": {
         placeAt(localState, input.name, input.value);
+        break;
+      }
+
+      case "user-agent": {
+        switches.push(`--user-agent=${input.value.userAgent}`);
+        userAgent = input.value;
         break;
       }
 
@@ -119,6 +128,7 @@ export const mergeBrowserInputs = (resolutions: EmittedInputs): BrowserInputs =>
     localState: freezeJson(localState),
     preferences: freezeJson(preferences),
     switches: Object.freeze(switches),
+    userAgent,
   };
 
   minted.add(Object.freeze(inputs));

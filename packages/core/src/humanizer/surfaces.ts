@@ -875,20 +875,30 @@ const showsFlagInfobar = ({
   knobOf(capabilities, "suppress-startup-infobars") !== "true" &&
   XRIO_SENT_BAD_FLAG_SWITCHES.some((name) => isChromeBadFlag(name, capabilities.platform));
 
+const headedUserAgentFor = ({
+  capabilities,
+  mode,
+}: Pick<IdentityContext, "capabilities" | "mode">): LaunchInput[] =>
+  mode === "headless" && capabilities.headlessUserAgent !== undefined
+    ? [{ name: "presented", sink: "user-agent", value: capabilities.headlessUserAgent }]
+    : [];
+
 const resolveAutomation = (
   context: Pick<IdentityContext, "capabilities" | "mode">,
 ): Resolutions["automation"] => {
   const { capabilities } = context;
+  const inputs = headedUserAgentFor(context);
+  const tokenSuppressed = knobOf(capabilities, "suppress-headless-token") === "true";
 
   return {
     expected: [
       compatible("webdriver", equals(false), "fatal"),
-      ...(knobOf(capabilities, "suppress-headless-token") === "true" ? [NO_HEADLESS_TOKEN] : []),
+      ...(tokenSuppressed || inputs.length > 0 ? [NO_HEADLESS_TOKEN] : []),
       ...(capabilities.platform === "linux"
         ? [compatible("colorScheme", equals("light"), "note")]
         : []),
     ],
-    inputs: [],
+    inputs,
     tells: showsFlagInfobar(context) ? ["flag-infobar"] : [],
     value: null,
   };

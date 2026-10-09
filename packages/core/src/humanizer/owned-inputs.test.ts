@@ -21,6 +21,7 @@ describe(isOwnedSwitch, () => {
     "--window-position",
     "--screen-info",
     "--use-fake-device-for-media-stream",
+    "--user-agent",
   ])("owns %s", (name) => {
     expect(isOwnedSwitch(name)).toBeTruthy();
   });
@@ -31,7 +32,6 @@ describe(isOwnedSwitch, () => {
     "--high-dpi-support",
     "--start-maximized",
     "--start-fullscreen",
-    "--user-agent",
     "--disable-gpu",
     "--disable-software-rasterizer",
     "--disable-webgl",
