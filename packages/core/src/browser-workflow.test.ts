@@ -1891,12 +1891,17 @@ describe("a named session's device record", () => {
           await Promise.resolve();
         },
         bind: (request: Deadline) => new HeldDeadline(request, new AbortController().signal),
+        binding: undefined,
         browserArgs: undefined,
         device: { kind: "record" as const, record },
+        drawStickyId: () => "drawn",
         finish: async () => {
           await Promise.resolve();
         },
         profile: { kind: "scratch" as const },
+        retire: async () => {
+          await Promise.resolve();
+        },
         revisitWanted: () => false,
         // oxlint-disable-next-line unicorn/no-useless-undefined -- The fake hold belongs to no session to summarize.
         summary: () => undefined,

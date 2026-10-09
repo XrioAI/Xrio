@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmod, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
@@ -116,6 +117,7 @@ describe("session administration", () => {
           length: 60_000,
           major: 154,
           now: Date.now() - 1000,
+          stickyId: randomUUID,
         },
         deadline,
       );

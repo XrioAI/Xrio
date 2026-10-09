@@ -6,7 +6,8 @@ import type { Answer } from "./answer.ts";
 import type { ResolvedConfig } from "./config.ts";
 import type { Deadline } from "./deadline.ts";
 import { inScrapeContext, timeStage } from "./diagnostics.ts";
-import { clientClosed } from "./errors.ts";
+import { clientClosed, isXrioError, sessionUnavailable } from "./errors.ts";
+import type { XrioError } from "./errors.ts";
 import { deviceDigest } from "./humanizer/contracts.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
@@ -20,8 +21,10 @@ import { parseProxy } from "./options.ts";
 import { outcomeOf, scrapeError } from "./outcome.ts";
 import type { ScrapeOutcome } from "./outcome.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
+import type { ProxyObservation } from "./proxy/info.ts";
 import { ProxyManager } from "./proxy/manager.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
+import { bindSessionExit } from "./proxy/session-exit.ts";
 import { createRetries } from "./retries.ts";
 import type { Retries } from "./retries.ts";
 import { reportSkippedCookies } from "./seed-cookies.ts";
@@ -53,7 +56,8 @@ interface Dependencies {
   readonly retryRandom: () => number;
   readonly closing: AbortSignal;
   readonly configuredProxy: ProxyEndpoint | undefined;
-  readonly proxyInfo: typeof lookupProxyInfo;
+  readonly managedProxy: ProxyManager | undefined;
+  readonly proxyInfo: (proxy: ProxyEndpoint, deadline: Deadline) => Promise<ProxyObservation>;
 }
 
 interface VisitContext {
@@ -78,6 +82,26 @@ const comparisonFacts = async ({
   }
 };
 
+const sessionExit = async ({ dependencies, held, hold, intent }: VisitContext) => {
+  const exit = await bindSessionExit(
+    {
+      binding: hold.binding,
+      drawStickyId: hold.drawStickyId,
+      manager: intent.route === undefined ? dependencies.managedProxy : undefined,
+      observe: dependencies.proxyInfo,
+      proxy: intent.route ?? dependencies.configuredProxy,
+    },
+    held,
+  );
+
+  if (exit.kind === "changed") {
+    await hold.retire();
+    throw sessionUnavailable("exit-changed", "The session's exit left its region.");
+  }
+
+  return exit;
+};
+
 const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   const { dependencies, held, hold, intent } = context;
   const proxy = intent.route ?? dependencies.configuredProxy;
@@ -94,8 +118,9 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
     };
   }
 
-  const route = routeFor(proxy);
-  const observation = proxy === undefined ? undefined : await dependencies.proxyInfo(proxy, held);
+  const exit = await sessionExit(context);
+  const route = routeFor(exit.proxy);
+  const { observation } = exit;
 
   held.throwIfExpired();
   const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
@@ -134,7 +159,8 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
       identity,
       kind: "browser",
       profile: hold.profile,
-      proxy,
+      proxy: exit.proxy,
+      sessionBinding: exit.binding,
       url: intent.url,
     };
   } catch (error) {
@@ -293,12 +319,15 @@ const visitOnce = async (
       answer.offer(answered, next.kind === "complete");
     }
 
+    const record = recordOf(outcome);
+
     return {
+      binding: record === null || plan.kind !== "browser" ? undefined : plan.sessionBinding,
       browserArgs: plan.kind === "browser" ? plan.browserArgs : [],
       closed: await visit.closed,
       next,
       outcome: answered,
-      record: recordOf(outcome),
+      record,
       siteVisit,
     };
   } finally {
@@ -402,7 +431,10 @@ const sessionBrowser = async (
   return { browserArgs, capabilities: { ...capabilities, chromeMajor }, mode };
 };
 
-const claimChecks = (browser: BrowserScrape | undefined, { random }: Dependencies): ClaimChecks => {
+const claimChecks = (
+  browser: BrowserScrape | undefined,
+  { managedProxy, random }: Dependencies,
+): ClaimChecks => {
   const seed = () => seedOf(random(SEED_BYTES));
 
   if (browser === undefined) {
@@ -419,8 +451,23 @@ const claimChecks = (browser: BrowserScrape | undefined, { random }: Dependencie
             browser,
           ),
     seed,
+    stickyId: managedProxy === undefined ? randomUUID : () => managedProxy.createSessionId(),
   };
 };
+
+type HeldVisit =
+  | { readonly kind: "settled" }
+  | { readonly kind: "member-retired"; readonly error: XrioError<"SESSION_UNAVAILABLE"> };
+
+const SETTLED: HeldVisit = { kind: "settled" };
+
+const retiredMember = (
+  intent: ScrapeIntent,
+  error: unknown,
+): error is XrioError<"SESSION_UNAVAILABLE"> =>
+  intent.session.kind === "pool" &&
+  isXrioError(error, "SESSION_UNAVAILABLE") &&
+  error.details.reason === "exit-changed";
 
 const visitInHold = async (
   intent: ScrapeIntent,
@@ -428,7 +475,7 @@ const visitInHold = async (
   deadline: Deadline,
   dependencies: Dependencies,
   answer: Answer,
-): Promise<void> => {
+): Promise<HeldVisit> => {
   const claimDeadline = deadline.boundTo(dependencies.closing, "client-closed");
 
   await using hold = await timeStage(
@@ -445,9 +492,37 @@ const visitInHold = async (
     const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
     const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
     await completeVisits(context, retries);
+
+    return SETTLED;
   } catch (error) {
+    if (retiredMember(intent, error)) {
+      return { error, kind: "member-retired" };
+    }
+
     answer.fail(scrapeError(error, held));
+
+    return SETTLED;
   }
+};
+
+const visitUntilSettled = async (
+  intent: ScrapeIntent,
+  checks: ClaimChecks,
+  deadline: Deadline,
+  dependencies: Dependencies,
+  answer: Answer,
+): Promise<HeldVisit> => {
+  const members = intent.session.kind === "pool" ? intent.session.size : 1;
+  let visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+
+  // oxlint-disable no-await-in-loop -- A pool claims its next member only after the retired one was released.
+  for (let tried = 1; visit.kind === "member-retired" && tried < members; tried += 1) {
+    deadline.throwIfExpired();
+    visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+  }
+  // oxlint-enable no-await-in-loop
+
+  return visit;
 };
 
 const coordinate = async (
@@ -461,7 +536,11 @@ const coordinate = async (
   try {
     const browser = await sessionBrowser(intent, deadline, dependencies);
     const checks = claimChecks(browser, dependencies);
-    await visitInHold(intent, checks, deadline, dependencies, answer);
+    const visit = await visitUntilSettled(intent, checks, deadline, dependencies, answer);
+
+    if (visit.kind === "member-retired") {
+      answer.fail(visit.error);
+    }
   } catch (error) {
     answer.fail(scrapeError(error, deadline));
   } finally {
@@ -472,7 +551,7 @@ const coordinate = async (
 export const createScrapes = (
   dependencies: Omit<
     Dependencies,
-    "random" | "retryRandom" | "closing" | "configuredProxy" | "proxyInfo"
+    "random" | "retryRandom" | "closing" | "configuredProxy" | "managedProxy" | "proxyInfo"
   > & {
     readonly random?: Dependencies["random"];
     readonly retryRandom?: Dependencies["retryRandom"];
@@ -489,6 +568,7 @@ export const createScrapes = (
     ...dependencies,
     closing: closingSignal.signal,
     configuredProxy: proxy === undefined ? undefined : parseProxy(proxy.getProxyConnectionString()),
+    managedProxy: proxy,
     proxyInfo: dependencies.proxyInfo ?? lookupProxyInfo,
     random: dependencies.random ?? randomBytes,
     retryRandom: dependencies.retryRandom ?? Math.random,

@@ -6,11 +6,14 @@ import type { SQLOutputValue } from "node:sqlite";
 
 import { untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
-import type { SiteVisit } from "../sources/visit.ts";
+import { XrioError } from "../errors.ts";
+import type { SessionBinding, SiteVisit } from "../sources/visit.ts";
 import { LOCAL_TENANT } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
 import { COOLING_RETIREMENT_STREAK, warmthAfter, warmthAt } from "./warmth.ts";
 import type { SiteWarmth } from "./warmth.ts";
+
+export type { SessionBinding } from "../sources/visit.ts";
 
 export type SessionState = "ready" | "quarantined" | "retired";
 
@@ -29,6 +32,7 @@ export interface SessionRow {
   readonly visits: number;
   readonly createdAt: number;
   readonly lastVisitAt: number;
+  readonly binding: SessionBinding;
 }
 
 export interface Ownership {
@@ -52,6 +56,7 @@ export interface Takeover {
 
 export interface ClaimRequest extends Takeover {
   readonly major: number;
+  readonly stickyId: () => string;
   readonly check: (row: SessionRow) => void;
 }
 
@@ -69,6 +74,7 @@ export interface FinishRequest {
     readonly browserArgs: readonly string[];
   };
   readonly siteVisit?: SiteVisit;
+  readonly binding?: SessionBinding;
   readonly now: number;
   readonly maxAgeMs: number;
 }
@@ -80,6 +86,8 @@ const POLL_INTERVAL_MS = 50;
 const SQLITE_BUSY = 5;
 
 const SQLITE_LOCKED = 6;
+
+const STICKY_ID_DRAWS = 100;
 
 export const waitForTurn = async (
   deadline: Deadline,
@@ -169,6 +177,24 @@ const browserArgsOf = (row: SqlRow): readonly string[] | undefined => {
   return browserArgs;
 };
 
+const bindingOf = (row: SqlRow): SessionBinding => {
+  const stickyId = textAt(row, "sticky_id");
+
+  if (row.binding_kind === "unbound" || row.binding_kind === "direct") {
+    return { kind: row.binding_kind, stickyId };
+  }
+
+  if (row.binding_kind !== "proxy") {
+    throw new Error("Unreadable session binding.");
+  }
+
+  return {
+    kind: "proxy",
+    region: { country: textAt(row, "exit_country"), zone: textAt(row, "exit_zone") },
+    stickyId,
+  };
+};
+
 const rowOf = (row: SqlRow): SessionRow => {
   const state = textAt(row, "state");
 
@@ -177,6 +203,7 @@ const rowOf = (row: SqlRow): SessionRow => {
   }
 
   return {
+    binding: bindingOf(row),
     browserArgs: browserArgsOf(row),
     chromeMajor: numberAt(row, "chrome_major"),
     coolingStreak: numberAt(row, "cooling_streak"),
@@ -197,7 +224,8 @@ const rowOf = (row: SqlRow): SessionRow => {
 const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,pool TEXT,state TEXT NOT NULL DEFAULT 'ready',
   epoch INTEGER NOT NULL DEFAULT 0,holder_host TEXT,holder_pid INTEGER,holder_start TEXT,holder_token TEXT,
   expires_at INTEGER NOT NULL DEFAULT 0,record TEXT,platform TEXT,browser_args TEXT,chrome_major INTEGER NOT NULL DEFAULT 0,
-  visits INTEGER NOT NULL DEFAULT 0,cooling_streak INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,
+  visits INTEGER NOT NULL DEFAULT 0,cooling_streak INTEGER NOT NULL DEFAULT 0,sticky_id TEXT NOT NULL,
+  binding_kind TEXT NOT NULL DEFAULT 'unbound',exit_country TEXT,exit_zone TEXT,created_at INTEGER NOT NULL,
   last_visit_at INTEGER NOT NULL,PRIMARY KEY(tenant,name));
 CREATE TABLE warmth(tenant TEXT NOT NULL,name TEXT NOT NULL,site TEXT NOT NULL,state TEXT NOT NULL,
   last_visit_at INTEGER NOT NULL,changed_at INTEGER NOT NULL,verdict TEXT NOT NULL,vendor TEXT,challenge_outcome TEXT,
@@ -351,10 +379,36 @@ export class SessionStore {
   }
   #inserted(name: string, pool: string | undefined, request: ClaimRequest): SessionRow {
     this.#db
-      .prepare("INSERT INTO sessions(tenant,name,pool,created_at,last_visit_at) VALUES(?,?,?,?,?)")
-      .run(this.#tenant, name, pool ?? null, request.now, request.now);
+      .prepare(
+        "INSERT INTO sessions(tenant,name,pool,created_at,last_visit_at,sticky_id) VALUES(?,?,?,?,?,?)",
+      )
+      .run(
+        this.#tenant,
+        name,
+        pool ?? null,
+        request.now,
+        request.now,
+        this.unusedStickyId(request.stickyId),
+      );
 
     return this.#claimed(name);
+  }
+  unusedStickyId(draw: () => string): string {
+    const used = this.#db.prepare("SELECT 1 FROM sessions WHERE sticky_id=? LIMIT 1");
+
+    for (let drawn = 0; drawn < STICKY_ID_DRAWS; drawn += 1) {
+      const stickyId = draw();
+
+      if (used.get(stickyId) === undefined) {
+        return stickyId;
+      }
+    }
+
+    throw new XrioError(
+      "PROXY_SESSION_GENERATION_FAILED",
+      "Could not draw a proxy sticky id that no other session uses; increase proxy.session.length.",
+      { details: undefined },
+    );
   }
   async claimSession(
     name: string,
@@ -535,6 +589,21 @@ export class SessionStore {
 
       if (request.siteVisit !== undefined) {
         this.#saveSiteVisit(owner, request, request.siteVisit);
+      }
+
+      if (request.binding !== undefined) {
+        this.#db
+          .prepare(
+            "UPDATE sessions SET binding_kind=?,sticky_id=?,exit_country=?,exit_zone=? WHERE tenant=? AND name=?",
+          )
+          .run(
+            request.binding.kind,
+            request.binding.stickyId,
+            request.binding.kind === "proxy" ? request.binding.region.country : null,
+            request.binding.kind === "proxy" ? request.binding.region.zone : null,
+            this.#tenant,
+            owner.name,
+          );
       }
 
       return true;

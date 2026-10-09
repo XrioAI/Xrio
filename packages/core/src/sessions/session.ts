@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { lstat, rm } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -29,16 +30,26 @@ import {
 } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
 import { newHolderToken, openStore, waitForTurn } from "./store.ts";
-import type { Claim, ClaimRequest, SessionRow, SessionStore, Takeover } from "./store.ts";
+import type {
+  Claim,
+  ClaimRequest,
+  SessionBinding,
+  SessionRow,
+  SessionStore,
+  Takeover,
+} from "./store.ts";
 import { DEFAULT_WARMTH_MAX_AGE_MS, warmthAfter, warmthAt } from "./warmth.ts";
 
 export interface SessionHold extends AsyncDisposable {
   readonly device: IdentityContext["device"];
   readonly browserArgs: readonly string[] | undefined;
   readonly profile: Profile;
+  readonly binding: SessionBinding | undefined;
+  readonly drawStickyId: () => string;
   readonly summary: (visit: SiteVisit) => SessionSummary | undefined;
   readonly bind: (deadline: Deadline) => HeldDeadline;
   readonly revisitWanted: (outcome: ScrapeOutcome) => boolean;
+  readonly retire: () => Promise<void>;
   readonly finish: (visit: FinishedVisit) => Promise<void>;
 }
 
@@ -46,6 +57,7 @@ export interface ClaimChecks {
   readonly seed: () => Seed;
   readonly capabilities?: HostCapabilities;
   readonly check?: (row: SessionRow) => DeviceRecord | undefined;
+  readonly stickyId?: () => string;
 }
 
 export interface SessionAdmin {
@@ -91,6 +103,8 @@ const POOL_MEMBER_MAX_IDLE_MS = 7 * DAY_MS;
 
 const HOLDER_RECHECK_MS = 1000;
 
+const stickyIdDraw = (checks: ClaimChecks): (() => string) => checks.stickyId ?? randomUUID;
+
 const anonymousHold = (checks: ClaimChecks, deadline: Deadline): SessionHold => {
   deadline.throwIfExpired();
   const ownership = new AbortController();
@@ -101,12 +115,17 @@ const anonymousHold = (checks: ClaimChecks, deadline: Deadline): SessionHold => 
       await Promise.resolve();
     },
     bind: (request) => new HeldDeadline(request, ownership.signal),
+    binding: undefined,
     browserArgs: undefined,
     device: { kind: "fresh", seed: checks.seed() },
+    drawStickyId: stickyIdDraw(checks),
     finish: async () => {
       await Promise.resolve();
     },
     profile: { kind: "scratch" },
+    retire: async () => {
+      await Promise.resolve();
+    },
     revisitWanted: () => false,
     // oxlint-disable-next-line unicorn/no-useless-undefined -- An anonymous visit belongs to no session to summarize.
     summary: () => undefined,
@@ -332,6 +351,7 @@ class Sessions implements SessionManager {
           Sessions.#claimCheck(checks, row);
         },
         major: checks.capabilities?.chromeMajor ?? 0,
+        stickyId: stickyIdDraw(checks),
       };
 
       const claimedAt = deadline.clock.now();
@@ -503,8 +523,10 @@ class Sessions implements SessionManager {
         }
       },
       bind: (request) => new HeldDeadline(request, lease.signal),
+      binding: claim.row.binding,
       browserArgs: claim.row.browserArgs,
       device,
+      drawStickyId: () => db.unusedStickyId(stickyIdDraw(checks)),
       finish: async (visit) => {
         const warmthChanges = this.#warmthChanges(db, name, visit.siteVisit);
         using deadline = lease.persistence();
@@ -512,6 +534,7 @@ class Sessions implements SessionManager {
         const written = await db.finishVisit(
           lease.owner,
           {
+            binding: visit.binding,
             exited: visit.closed.exited,
             major: checks.capabilities?.chromeMajor ?? 0,
             maxAgeMs: this.#maxAgeMs,
@@ -544,6 +567,11 @@ class Sessions implements SessionManager {
         }
       },
       profile: { dir: directory, kind: "persistent" },
+      retire: async () => {
+        if (pool !== undefined) {
+          await lease.state("retired");
+        }
+      },
       revisitWanted: () => false,
       summary: (visit) => {
         const summary: SessionSummary = {

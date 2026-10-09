@@ -9,10 +9,12 @@ import { createScrapes } from "./coordinator.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { XrioError } from "./errors.ts";
 import { httpIdentity } from "./humanizer/humanizer.ts";
+import { canonicalZone } from "./humanizer/zone-name.ts";
 import { HeldDeadline } from "./lifetime.ts";
 import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { outcomeOf } from "./outcome.ts";
-import type { lookupProxyInfo, ProxyObservation } from "./proxy/info.ts";
+import type { ProxyObservation } from "./proxy/info.ts";
+import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
 import { loadHttpDocument } from "./sources/http.ts";
@@ -53,9 +55,10 @@ const firstDocument = documentFor("<p>First</p>");
 const secondDocument = documentFor("<p>Second</p>");
 
 interface HarnessOptions {
+  readonly bindings?: readonly SessionBinding[];
   readonly config?: Pick<ResolvedConfig, "proxy">;
   readonly retryRandom?: () => number;
-  readonly proxyInfo?: typeof lookupProxyInfo;
+  readonly proxyInfo?: Parameters<typeof createScrapes>[0]["proxyInfo"];
   readonly sources?: Sources;
   readonly admission?: Admission;
   readonly visits?: readonly Visit[];
@@ -64,6 +67,7 @@ interface HarnessOptions {
   readonly cleanupFailure?: string;
   readonly throwOnStart?: boolean;
   readonly claimWaits?: boolean;
+  readonly releaseHold?: () => void;
 }
 
 const harness = (options: HarnessOptions = {}) => {
@@ -73,6 +77,7 @@ const harness = (options: HarnessOptions = {}) => {
   const failure = new XrioError("NETWORK_ERROR", "The fake stage failed.", { details: undefined });
   const owner = new AbortController();
   let visitIndex = 0;
+  let holdIndex = 0;
   let warmth = options.revisit ?? false;
 
   const stage = (name: string) => {
@@ -129,6 +134,8 @@ const harness = (options: HarnessOptions = {}) => {
     sessions: {
       hold: async (_intent, checks, claim) => {
         stage("hold");
+        const binding = options.bindings?.[holdIndex];
+        holdIndex += 1;
 
         if (options.claimWaits === true) {
           await untilDeadline(async () => await Promise.withResolvers<never>().promise, claim);
@@ -137,17 +144,24 @@ const harness = (options: HarnessOptions = {}) => {
         return await Promise.resolve({
           [Symbol.asyncDispose]: async () => {
             stage("hold-release");
+            options.releaseHold?.();
             await Promise.resolve();
           },
           bind: (deadline) => new HeldDeadline(deadline, owner.signal),
+          binding,
           browserArgs: undefined,
           device: { kind: "fresh", seed: checks.seed() },
+          drawStickyId: () => checks.stickyId?.() ?? "drawn",
           finish: async () => {
             stage("finish");
             warmth = false;
             await Promise.resolve();
           },
           profile: { kind: "scratch" },
+          retire: async () => {
+            stage("retire");
+            await Promise.resolve();
+          },
           revisitWanted: () => {
             stage("revisit-decision");
 
@@ -1128,5 +1142,239 @@ describe("transport retries", () => {
     await run.settled;
     expect(plans).toHaveLength(1);
     await scrapes.close();
+  });
+});
+
+describe("session exit binding", () => {
+  const binding = {
+    kind: "proxy",
+    region: { country: "US", zone: "America/New_York" },
+    stickyId: "stored-id",
+  } as const;
+
+  const accepted = { ...proxyObservation, country: "US", timezone: "America/New_York" };
+
+  const configured = {
+    proxy: { session: {}, url: "http://account-{session}:secret@proxy.test" },
+  } as const;
+
+  it("accepts a different address and provider with the exact stored country and zone", async () => {
+    const { plans, scrapes } = harness({
+      bindings: [binding],
+      config: configured,
+      proxyInfo: async () =>
+        await Promise.resolve({ ...accepted, exitIp: "203.0.113.9", provider: "ipwho.is" }),
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        { ...browserIntent, session: { kind: "named", name: "account" } },
+        deadline,
+      ).answer;
+      expect(plans[0].proxy?.credentials?.username).toBe("account-stored-id");
+      expect(plans[0].kind === "browser" && plans[0].sessionBinding).toStrictEqual(binding);
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("rejects a different zone name after the stored id and three replacement ids", async () => {
+    const users: (string | undefined)[] = [];
+
+    const { plans, scrapes } = harness({
+      bindings: [binding],
+      config: configured,
+      proxyInfo: async (proxy) => {
+        users.push(proxy.credentials?.username);
+
+        return await Promise.resolve({ ...accepted, timezone: "America/Detroit" });
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await expect(
+        scrapes.start({ ...browserIntent, session: { kind: "named", name: "account" } }, deadline)
+          .answer,
+      ).rejects.toMatchObject({ code: "SESSION_UNAVAILABLE", details: { reason: "exit-changed" } });
+      expect(users).toHaveLength(4);
+      expect(users[0]).toBe("account-stored-id");
+      expect(users.slice(1)).toStrictEqual([
+        expect.stringMatching(/^account-\d{8}$/u),
+        expect.stringMatching(/^account-\d{8}$/u),
+        expect.stringMatching(/^account-\d{8}$/u),
+      ]);
+      expect(plans).toStrictEqual([]);
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("plans the first matching replacement id without retrying the document", async () => {
+    const users: (string | undefined)[] = [];
+
+    const { plans, scrapes } = harness({
+      bindings: [binding],
+      config: configured,
+      proxyInfo: async (proxy) => {
+        users.push(proxy.credentials?.username);
+
+        return await Promise.resolve(
+          users.length === 1 ? { ...accepted, country: "CA" } : accepted,
+        );
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        { ...browserIntent, session: { kind: "named", name: "account" } },
+        deadline,
+      ).answer;
+      expect(users).toHaveLength(2);
+      expect(plans).toHaveLength(1);
+      expect(plans[0].proxy?.credentials?.username).toBe(users[1]);
+      expect(plans[0].kind === "browser" && plans[0].sessionBinding).toMatchObject({
+        kind: "proxy",
+        region: { country: "US", zone: "America/New_York" },
+      });
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it.each([
+    { binding: { kind: "direct", stickyId: "direct" } as const, proxy: "http://proxy.test" },
+    { binding, proxy: undefined },
+  ])("refuses switching an established route kind", async ({ binding: stored, proxy }) => {
+    const { plans, scrapes } = harness({ bindings: [stored] });
+    using deadline = startDeadline(1000);
+
+    try {
+      await expect(
+        scrapes.start(
+          {
+            ...browserIntent,
+            route: proxy === undefined ? undefined : parseProxy(proxy),
+            session: { kind: "named", name: "account" },
+          },
+          deadline,
+        ).answer,
+      ).rejects.toMatchObject({ code: "SESSION_UNAVAILABLE", details: { reason: "exit-changed" } });
+      expect(plans).toStrictEqual([]);
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("retires an exhausted pool member and visits a fresh member under the same deadline", async () => {
+    let observations = 0;
+
+    const { events, plans, scrapes } = harness({
+      bindings: [binding, { kind: "unbound", stickyId: "fresh-id" }],
+      config: configured,
+      proxyInfo: async () => {
+        observations += 1;
+
+        return await Promise.resolve({ ...accepted, country: "CA" });
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        {
+          ...browserIntent,
+          session: { kind: "pool", name: "accounts", site: "https://example.com", size: 2 },
+        },
+        deadline,
+      ).answer;
+      expect(observations).toBe(5);
+      expect(events.filter((event) => event === "hold")).toStrictEqual(["hold", "hold"]);
+      expect(events.filter((event) => event === "retire")).toStrictEqual(["retire"]);
+      expect(plans).toHaveLength(1);
+      expect(plans[0].proxy?.credentials?.username).toBe("account-fresh-id");
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it.each(["Asia/Calcutta", "Asia/Kolkata"])(
+    "keeps a binding when the provider spells its zone %s",
+    async (observed) => {
+      let lookups = 0;
+
+      const stored = {
+        kind: "proxy",
+        region: { country: "IN", zone: canonicalZone("Asia/Kolkata") ?? "" },
+        stickyId: "stored-id",
+      } as const;
+
+      const { plans, scrapes } = harness({
+        bindings: [stored],
+        config: configured,
+        proxyInfo: async () => {
+          lookups += 1;
+
+          return await Promise.resolve({ ...accepted, country: "IN", timezone: observed });
+        },
+      });
+
+      using deadline = startDeadline(1000);
+
+      try {
+        await scrapes.start(
+          { ...browserIntent, session: { kind: "named", name: "account" } },
+          deadline,
+        ).answer;
+        expect({
+          binding: plans[0].kind === "browser" && plans[0].sessionBinding,
+          lookups,
+        }).toStrictEqual({
+          binding: stored,
+          lookups: 1,
+        });
+      } finally {
+        await scrapes.close();
+      }
+    },
+  );
+
+  it("fails a pool scrape with TIMEOUT when its deadline passes while a retired member is released", async () => {
+    const time = manualClock();
+    using deadline = startDeadline(1000, undefined, time.clock);
+
+    const { events, plans, scrapes } = harness({
+      bindings: [binding, { kind: "unbound", stickyId: "fresh-id" }],
+      config: configured,
+      proxyInfo: async () => await Promise.resolve({ ...accepted, country: "CA" }),
+      releaseHold: () => {
+        time.advance(1000);
+      },
+    });
+
+    try {
+      const run = scrapes.start(
+        {
+          ...browserIntent,
+          session: { kind: "pool", name: "accounts", site: "example.com", size: 2 },
+        },
+        deadline,
+      );
+
+      await expect(run.answer).rejects.toMatchObject({ code: "TIMEOUT" });
+      await expect(run.settled).resolves.toBeUndefined();
+      expect({
+        holds: events.filter((event) => event === "hold" || event === "retire"),
+        plans,
+      }).toStrictEqual({ holds: ["hold", "retire"], plans: [] });
+    } finally {
+      await scrapes.close();
+    }
   });
 });

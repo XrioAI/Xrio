@@ -12,6 +12,15 @@ export type Profile =
   | { readonly kind: "scratch" }
   | { readonly kind: "persistent"; readonly dir: string };
 
+export type SessionBinding =
+  | { readonly kind: "unbound"; readonly stickyId: string }
+  | { readonly kind: "direct"; readonly stickyId: string }
+  | {
+      readonly kind: "proxy";
+      readonly stickyId: string;
+      readonly region: { readonly country: string; readonly zone: string };
+    };
+
 export interface Visit {
   readonly document: Promise<SourceDocument>;
   readonly closed: Promise<Closed>;
@@ -28,6 +37,7 @@ export type VisitPlan =
       readonly identity: IdentityPlan;
       readonly fonts: FontClaim;
       readonly profile?: Profile;
+      readonly sessionBinding?: SessionBinding;
       readonly exitAddress?: string;
       readonly proxy: ProxyEndpoint | undefined;
     } & BrowserIntent)
@@ -53,6 +63,7 @@ export interface SiteVisit {
 
 export interface FinishedVisit {
   readonly siteVisit?: SiteVisit;
+  readonly binding?: SessionBinding;
   readonly record: DeviceRecord | null;
   readonly browserArgs: readonly string[];
   readonly closed: Closed;

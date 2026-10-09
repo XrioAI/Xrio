@@ -73,7 +73,13 @@ describe("XrioClient types", () => {
     const manager = new ProxyManager(config.proxy);
 
     expectTypeOf<keyof ProxyManager>().toEqualTypeOf<
-      "getProxyConnectionString" | "getProxyInfo" | "shouldRotateSession" | "changeSession"
+      | "getProxyConnectionString"
+      | "getProxyInfo"
+      | "shouldRotateSession"
+      | "changeSession"
+      | "createSessionId"
+      | "connectionFor"
+      | "managesSessions"
     >();
 
     expectTypeOf(manager.getProxyConnectionString()).toEqualTypeOf<string>();

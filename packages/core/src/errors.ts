@@ -20,6 +20,7 @@ interface XrioErrorDetails {
       | "browser-too-old"
       | "record-refused"
       | "cannot-present"
+      | "exit-changed"
       | "process-table-unreadable";
   };
   TIMEOUT: undefined;

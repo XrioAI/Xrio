@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ const member = (
   lastVisitAt: number,
   state: SessionRow["state"] = "ready",
 ): SessionRow => ({
+  binding: { kind: "unbound", stickyId: "sticky" },
   browserArgs: undefined,
   chromeMajor: 154,
   coolingStreak: 0,
@@ -97,6 +99,7 @@ describe("pools", () => {
     length: 60_000,
     major: 154,
     now: 100,
+    stickyId: randomUUID,
   };
 
   const served: SiteVisit = {

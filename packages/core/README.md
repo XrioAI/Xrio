@@ -96,9 +96,9 @@ export default {
 } satisfies XrioConfig;
 ```
 
-Exactly one literal `{session}` in the username or password signals a managed route. The coordinator creates one internal `ProxyManager`, expands the initial session once, and keeps that connection for the client. `session` options default to eight numeric characters; `alphanumeric` and integer lengths from 1 to 256 are supported. The generated ID is never written back to the config. A URL without the placeholder is preserved unchanged.
+Exactly one literal `{session}` in the username or password signals a managed route. The coordinator creates one internal `ProxyManager` and expands the placeholder once for the client's anonymous scrapes, which keep that connection. Each named session and pool member fills the placeholder with its own sticky id instead, as described under [Exit binding](#exit-binding). `session` options default to eight numeric characters; `alphanumeric` and integer lengths from 1 to 256 are supported. The generated IDs are never written back to the config. A URL without the placeholder is preserved unchanged.
 
-Automatic proxy rotation is deferred. Retries use the same selected route. `shouldRotateSession()` and `changeSession()` remain unchanged on the internal class for later integration; scrape outcomes do not call them. Explicit client/scrape proxies are always unmanaged. The manager, metadata types, and loader are not public package exports.
+Automatic proxy rotation is deferred. Retries use the same selected route. `shouldRotateSession()` and `changeSession()` stay on the internal class, and scrape outcomes do not call them. Explicit client/scrape proxies are always unmanaged. The manager, metadata types, and loader are not public package exports.
 
 `info.ts` owns the metadata HTTP requests, using the existing HTTP client and relay to route through the exact proxy, including DNS. These requests reject redirects and never fall back to a direct connection. The manager does not perform scrape requests.
 
@@ -296,6 +296,7 @@ A session keeps:
 - the `browserArgs` list that scrape launched Chrome with, stored with the device record. Every later scrape launches Chrome with that list.
 - the newest Chrome major that has claimed it.
 - its history for each site it scraped, described under [Session results and warmth](#session-results-and-warmth).
+- its exit region and its proxy sticky id, described under [Exit binding](#exit-binding).
 
 One scrape holds a session at a time, across every process that shares the session database. A scrape of a held session waits until the holder releases it. The wait counts against `timeoutMs` and shows in the `session` stage. Within one process, scrapes of one session claim it in the order they started. A hold lasts 60 seconds, and the scrape that holds it renews it every 20 seconds. The scrape stops and rejects with `SESSION_UNAVAILABLE` and the reason `ownership-lost` when a renewal fails, or when its hold has 10 seconds left without one. A waiting scrape takes the session over once the holder's process has exited on the same host, or 5 seconds after the hold expired.
 
@@ -350,6 +351,12 @@ const pruned = await xrio.sessions.prune({ idleFor: 7 * 24 * 60 * 60 * 1000 });
 - `prune({ idleFor })` deletes every session whose `lastVisitAt` is more than `idleFor` milliseconds ago, and resolves to the names it deleted. It skips a session that a live scrape holds, and one it cannot delete, such as one whose profile Chrome still holds open. `idleFor` must be a non-negative integer, or the call rejects with `INVALID_OPTIONS`.
 
 Each call has its own 60-second budget and rejects with `TIMEOUT` when the budget runs out. A call made after `close()` starts rejects with `CLIENT_CLOSED`, and `close()` waits for the calls made before it. When a client first opens the session database, Xrio removes the profile directories that an interrupted delete or an interrupted emptying of a profile left behind, and publishes `sweep-incomplete` when it cannot.
+
+#### Exit binding
+
+A session is bound to the exit of its first scrape that captured a browser document. A proxied session stores the exit's country and its zone, spelled as Chrome names it, so `Asia/Kolkata` is stored as `Asia/Calcutta`. Every later scrape looks the exit up again and accepts it only with the same country and exactly the same zone name, so `America/Detroit` does not match `America/New_York`. The address and the lookup provider may change. A session bound to a direct connection stays direct, and a proxied session stays proxied. A scrape that would switch rejects with `SESSION_UNAVAILABLE` and the reason `exit-changed`.
+
+When a scrape uses `config.proxy.url` with a `{session}` placeholder, each session gets its own sticky id when it is created, drawn with the config's `session` format and length, and its scrapes fill `{session}` with it. Xrio draws only ids that no session in the session database holds, and rejects the scrape with `PROXY_SESSION_GENERATION_FAILED` when 100 draws find none. When the exit's country or zone differs from the stored ones, Xrio draws a new sticky id and looks the exit up again, up to three times. The scrape uses the first sticky id whose exit matches, and stores it once it captures a browser document. After three new ids the scrape rejects with `exit-changed`. A config URL without the placeholder, and a proxy passed to the client or the scrape, get no new ids, so a different exit rejects at once. A pool retires a member whose exit changed and claims another member, up to `size` members in all, under the same deadline.
 
 ### Identity report
 
@@ -431,6 +438,7 @@ try {
 - `browser-too-old`. A newer Chrome major than `browserPath` claimed the session.
 - `record-refused`. The session's stored device record or `browserArgs` list cannot be read or replayed.
 - `cannot-present`. The host cannot present the stored device, because the record was made on another platform or names a GL persona the fork package lacks.
+- `exit-changed`. The session's exit left its stored country or zone, or the scrape would switch the session between a proxy and a direct connection.
 - `process-table-unreadable`. Xrio could not read the process table to check that no Chrome holds the profile open.
 
 The client's own error is kept as `cause`. Retries default to zero, and `scrape.retries` in `xrio.config` raises them. Messages never include URL or proxy credentials.
