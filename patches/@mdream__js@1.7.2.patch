@@ -1,0 +1,16 @@
+diff --git a/dist/_chunks/markdown-processor.mjs b/dist/_chunks/markdown-processor.mjs
+--- a/dist/_chunks/markdown-processor.mjs
++++ b/dist/_chunks/markdown-processor.mjs
+@@ -1199,7 +1199,11 @@
+ 			});
+ 			break;
+ 		case "CodeFenceEnter": {
+-			const fenceFragment = state.buffer.findIndex((fragment, index) => index >= outputStart && fragment.includes("```"));
++			let fenceFragment = -1;
++			for (let index = outputStart; index < state.buffer.length; index++) if (state.buffer[index].includes("```")) {
++				fenceFragment = index;
++				break;
++			}
+ 			if (fenceFragment < 0) throw new Error("code fence opener missing from output");
+ 			startCodeFence(state, fenceFragment, action.language, state.listIndent);
+ 			break;
