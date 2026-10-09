@@ -18,6 +18,7 @@ import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.
 import {
   createScratchDir,
   ensureScratchRoot,
+  removeScratchDir,
   spawnChrome,
   sweepAbandonedScratch,
 } from "./browser-process.ts";
@@ -467,6 +468,46 @@ describe("the scratch root", () => {
       await expect(ensureScratchRoot(root, uid)).resolves.toBeUndefined();
       await expect(ensureScratchRoot(root, uid + 1)).rejects.toThrow(
         `${root} must belong to this user with mode 0700.`,
+      );
+    });
+  });
+});
+
+describe("the scratch directory's owner file", () => {
+  it("records the pid, creation time and uid of the process that created it", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const scratch = await createScratchDir(1234, path.join(directory, "root"));
+      const uid = process.getuid?.() ?? 0;
+
+      await expect(readFile(path.join(scratch.path, "xrio-owner.json"), "utf-8")).resolves.toBe(
+        `{"createdAt":1234,"pid":${process.pid},"uid":${uid}}`,
+      );
+    });
+  });
+
+  it("is still honoured when written without a uid", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const scratch = await createScratchDir(1234, path.join(directory, "root"));
+
+      await writeFile(
+        path.join(scratch.path, "xrio-owner.json"),
+        JSON.stringify({ createdAt: 1234, pid: process.pid }),
+      );
+      await removeScratchDir(scratch);
+      await expect(stat(scratch.path)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("is refused when its uid is not a number", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const scratch = await createScratchDir(1234, path.join(directory, "root"));
+
+      await writeFile(
+        path.join(scratch.path, "xrio-owner.json"),
+        JSON.stringify({ createdAt: 1234, pid: process.pid, uid: "0" }),
+      );
+      await expect(removeScratchDir(scratch)).rejects.toThrow(
+        `Refusing to delete ${scratch.path}, which this process did not create.`,
       );
     });
   });

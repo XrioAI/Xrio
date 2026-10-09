@@ -35,6 +35,7 @@ const PROCESS_ID = /^\d+$/u;
 interface Owner {
   pid: number;
   createdAt: number;
+  uid?: number;
 }
 
 export interface ScratchDir {
@@ -48,7 +49,8 @@ const isOwner = (value: unknown): value is Owner =>
   "pid" in value &&
   typeof value.pid === "number" &&
   "createdAt" in value &&
-  typeof value.createdAt === "number";
+  typeof value.createdAt === "number" &&
+  (!("uid" in value) || typeof value.uid === "number");
 
 const currentUid = (): number => process.getuid?.() ?? 0;
 
@@ -108,7 +110,7 @@ export const createScratchDir = async (
 ): Promise<ScratchDir> => {
   await ensureScratchRoot(root);
   const directory = await mkdtemp(path.join(root, SCRATCH_PREFIXES[purpose]));
-  const owner: Owner = { createdAt: now, pid: process.pid };
+  const owner: Owner = { createdAt: now, pid: process.pid, uid: currentUid() };
 
   await writeFile(path.join(directory, OWNER_FILE), JSON.stringify(owner), { mode: 0o600 });
 
