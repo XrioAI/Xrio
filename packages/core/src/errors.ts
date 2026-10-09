@@ -13,7 +13,15 @@ interface XrioErrorDetails {
   PROXY_SESSION_GENERATION_FAILED: undefined;
   PROXY_UNREACHABLE: undefined;
   RESPONSE_TOO_LARGE: undefined;
-  SESSION_UNAVAILABLE: { reason: "ownership-lost" };
+  SESSION_UNAVAILABLE: {
+    reason:
+      | "ownership-lost"
+      | "quarantined"
+      | "browser-too-old"
+      | "record-refused"
+      | "cannot-present"
+      | "process-table-unreadable";
+  };
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
   TOO_MANY_REDIRECTS: undefined;
@@ -103,6 +111,15 @@ export const redactUrl = (url: URL | string): string => {
 
   return redacted.href;
 };
+
+type SessionUnavailableReason = XrioErrorDetails["SESSION_UNAVAILABLE"]["reason"];
+
+export const sessionUnavailable = (
+  reason: SessionUnavailableReason,
+  message = `The session is unavailable (${reason}).`,
+  cause?: unknown,
+): XrioError<"SESSION_UNAVAILABLE"> =>
+  new XrioError("SESSION_UNAVAILABLE", message, { cause, details: { reason } });
 
 export const clientClosed = (): XrioError =>
   new XrioError("CLIENT_CLOSED", "The client is closed.", { details: undefined });

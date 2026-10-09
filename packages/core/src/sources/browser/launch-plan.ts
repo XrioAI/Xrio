@@ -10,6 +10,7 @@ export interface LaunchRequest {
   browserArgs: readonly string[];
   headless: boolean;
   scratchDir: string;
+  profileDir?: string;
   display: string | undefined;
   xauthority: string | undefined;
   proxyServer: string | undefined;
@@ -244,6 +245,10 @@ export const planLaunch = (request: LaunchRequest): LaunchPlan => {
   }
 
   const directories = directoriesIn(request.scratchDir);
+
+  if (request.profileDir !== undefined) {
+    directories.profile = request.profileDir;
+  }
 
   return {
     args: [

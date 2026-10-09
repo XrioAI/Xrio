@@ -27,7 +27,7 @@ import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
-import { EMISSION_ORDER, recordOverrides, resolveSurfaces } from "./surfaces.ts";
+import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
@@ -993,9 +993,6 @@ const HIDDEN_GPU = {
   persona: { kind: "hide-only", name: "basharsx4-swiftshader-hidden" },
 } as const;
 
-const scrapePinning = (gpu: readonly NameRow[]) =>
-  ({ mode: "headless", pins: pinningGpu(gpu) }) as const;
-
 describe("a GL persona the caller pins", () => {
   const capabilities = swiftShaderHost(forkWithGl([HIDE_ONLY, SECOND_HIDE_ONLY, RENOIR]));
 
@@ -1164,18 +1161,6 @@ describe("a GL persona the caller pins", () => {
         ),
       ),
     );
-  });
-
-  it("counts a pin that leaves out the record's persona as a hardware override", () => {
-    const hidden = recordPresenting(capabilities, HIDDEN_GPU);
-    const none = recordPresenting(capabilities, { backend: "swiftshader", persona: null });
-
-    expect([
-      recordOverrides(hidden, scrapePinning([{ name: "basharsx4-swiftshader-hidden", weight: 1 }])),
-      recordOverrides(hidden, scrapePinning([{ name: "basharsx4-swiftshader-second", weight: 1 }])),
-      recordOverrides(none, scrapePinning([{ name: "basharsx4-swiftshader-hidden", weight: 1 }])),
-      recordOverrides(hidden, { mode: "headless", pins: noPins }),
-    ]).toStrictEqual([[], ["hardware"], ["hardware"], []]);
   });
 });
 
@@ -1676,11 +1661,9 @@ describe("a replayed announce record", () => {
     );
 
     expect({
-      overrides: recordOverrides(record, { mode: "headless", pins }),
       presented: plan.chosen.surfaces.gpu,
       tells: plan.tells,
     }).toStrictEqual({
-      overrides: [],
       presented: ANNOUNCED_RENOIR,
       tells: ["gpu-announced-over-software", "gpu-fleet-constant", "host-fonts"],
     });
@@ -1739,12 +1722,6 @@ describe("a replayed announce record", () => {
         "replay-host-skew",
       ],
     });
-  });
-
-  it("does not count the policy as an override of the record", () => {
-    const record = recordPresenting(swiftShaderHost(forked), ANNOUNCED_RENOIR);
-
-    expect(recordOverrides(record, { mode: "headless", pins: announcing })).toStrictEqual([]);
   });
 });
 

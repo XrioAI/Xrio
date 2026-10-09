@@ -23,7 +23,6 @@ import { isXrioError } from "./errors.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
 import { HeldDeadline } from "./lifetime.ts";
-import { anonymousSessions } from "./sessions/session.ts";
 import type { SessionManager } from "./sessions/session.ts";
 import { scratchRoot } from "./sources/browser/browser-process.ts";
 import { createCapabilityProbe } from "./sources/browser/capabilities.ts";
@@ -34,6 +33,7 @@ import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import { killProcessGroup, waitForGroupExit } from "./sources/browser/group-lifetime.ts";
 import type { LaunchPlan } from "./sources/browser/launch-plan.ts";
 import type { BrowserDriver } from "./sources/browser/port.ts";
+import { anonymousSessions } from "./testing/anonymous-sessions.ts";
 import { fakeChromePath } from "./testing/fake-chrome-path.ts";
 import { CHECKED_FONT_STACK } from "./testing/fake-font-stack.ts";
 import { fakeForkPath } from "./testing/fake-fork.ts";
@@ -977,10 +977,10 @@ describe("bounded teardown on the fake browser", () => {
       browserPath: await fakeChromePath("ignore-close"),
     }).document;
 
-    const second = browsers.visit(request).document;
-
     try {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
+      const second = browsers.visit(request).document;
+
       await expect(second).resolves.toMatchObject({ status: 200 });
       await browsers.close();
       await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
@@ -1039,10 +1039,10 @@ describe("bounded teardown on the fake browser", () => {
       browserPath: await fakeChromePath("ignore-close"),
     }).document;
 
-    const second = browsers.visit(request).document;
-
     try {
       await expect(first).rejects.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
+      const second = browsers.visit(request).document;
+
       await expect(second).resolves.toMatchObject({ status: 200 });
       await browsers.close();
       const [unconfirmed] = launched;
@@ -1882,7 +1882,7 @@ describe("a named session's device record", () => {
     seed: "00000000000000a1",
   } as const;
 
-  const namedSession: SessionManager = {
+  const namedSession: Pick<SessionManager, "hold"> = {
     hold: async (_intent, _checks, deadline) => {
       deadline.throwIfExpired();
 
@@ -1891,10 +1891,12 @@ describe("a named session's device record", () => {
           await Promise.resolve();
         },
         bind: (request: Deadline) => new HeldDeadline(request, new AbortController().signal),
+        browserArgs: undefined,
         device: { kind: "record" as const, record },
         finish: async () => {
           await Promise.resolve();
         },
+        profile: { kind: "scratch" as const },
         revisitWanted: () => false,
       });
     },
@@ -1924,49 +1926,21 @@ describe("a named session's device record", () => {
     });
   });
 
-  it("refuses a headed scrape of a headless record before Chrome launches", async () => {
+  it("replays the stored zone when later host pins name another zone", async () => {
     const browsers = plannedVisits(cdpDriver, 1, { sessions: namedSession });
     using deadline = startDeadline(10_000);
 
-    const document = await settledValue(
-      browsers.visit({ ...(await normalRequest(deadline)), mode: "headed" }).document,
-    );
+    const document = await browsers.visit({
+      ...(await normalRequest(deadline)),
+      pins: { ...noPins, timezone: "America/New_York" },
+    }).document;
 
     await browsers.close();
-    expect({ document, left: await leftovers() }).toMatchObject({
-      document: {
-        error: {
-          code: "INVALID_OPTIONS",
-          message:
-            "The session's device record fixes its mode; a scrape in that session cannot change it.",
-        },
-      },
-      left: nothingLeft,
+    expect(document.identity).toMatchObject({
+      record,
+      surfaces: { timezone: { source: "pin", zone: "UTC" } },
     });
-  });
-
-  it("refuses a scrape that pins another zone before Chrome launches", async () => {
-    const browsers = plannedVisits(cdpDriver, 1, { sessions: namedSession });
-    using deadline = startDeadline(10_000);
-
-    const document = await settledValue(
-      browsers.visit({
-        ...(await normalRequest(deadline)),
-        pins: { ...noPins, timezone: "America/New_York" },
-      }).document,
-    );
-
-    await browsers.close();
-    expect({ document, left: await leftovers() }).toMatchObject({
-      document: {
-        error: {
-          code: "INVALID_OPTIONS",
-          message:
-            "The session's device record fixes its timezone; a scrape in that session cannot change it.",
-        },
-      },
-      left: nothingLeft,
-    });
+    await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 });
 

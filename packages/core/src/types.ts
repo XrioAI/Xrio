@@ -7,6 +7,7 @@ interface HttpMode {
   mode: "http";
   browserPath?: never;
   waitFor?: never;
+  session?: never;
 }
 
 interface BrowserMode {
@@ -34,6 +35,7 @@ export type ClientOptions = (
   proxy?: string;
   maxBrowsers?: number;
   cacheDir?: string;
+  stateDir?: string;
   configFile?: string;
 };
 
@@ -44,6 +46,7 @@ export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOver
   cookies?: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  session?: string;
 };
 
 export interface StructuredContent {

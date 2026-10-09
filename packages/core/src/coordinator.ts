@@ -11,10 +11,11 @@ import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
 import { httpIdentity, planIdentity } from "./humanizer/humanizer.ts";
+import { presentableRecord } from "./humanizer/read-record.ts";
 import { identityForVisit, presentedLocale } from "./humanizer/surfaces.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import type { HeldDeadline } from "./lifetime.ts";
-import { parseProxy, refuseRecordOverrides } from "./options.ts";
+import { parseProxy } from "./options.ts";
 import { outcomeOf, scrapeError } from "./outcome.ts";
 import type { ScrapeOutcome } from "./outcome.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
@@ -23,7 +24,7 @@ import { exitFactsFor, routeFor } from "./proxy/route.ts";
 import { createRetries } from "./retries.ts";
 import type { Retries } from "./retries.ts";
 import { reportSkippedCookies } from "./seed-cookies.ts";
-import type { SessionHold, SessionManager } from "./sessions/session.ts";
+import type { ClaimChecks, SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
 import type { FinishedVisit, Sources, VisitPlan } from "./sources/visit.ts";
@@ -43,7 +44,7 @@ export interface Scrapes {
 interface Dependencies {
   readonly host: HostFacts;
   readonly comparisonBinary: string | undefined;
-  readonly sessions: SessionManager;
+  readonly sessions: Pick<SessionManager, "hold">;
   readonly admission: Admission;
   readonly sources: Sources;
   readonly fonts: FontEvidenceStore;
@@ -59,6 +60,7 @@ interface VisitContext {
   readonly intent: ScrapeIntent;
   readonly hold: SessionHold;
   readonly held: HeldDeadline;
+  readonly capabilities: HostCapabilities | undefined;
   readonly dependencies: Dependencies;
 }
 
@@ -97,12 +99,8 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
   held.throwIfExpired();
   const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
 
-  const capabilities = await dependencies.host.snapshotFor(intent.source.browserPath, held);
-  const scrape = { mode: intent.source.mode, pins };
-
-  if (hold.device.kind === "record") {
-    refuseRecordOverrides(hold.device.record, { ...scrape, pins: intent.identity });
-  }
+  const capabilities =
+    context.capabilities ?? (await dependencies.host.snapshotFor(intent.source.browserPath, held));
 
   const fonts = await dependencies.fonts.claim(
     intent.source.browserPath,
@@ -113,7 +111,6 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
 
   try {
     const identity = planIdentity({
-      ...scrape,
       capabilities:
         fonts.evidence === undefined
           ? capabilities
@@ -122,15 +119,19 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
       exit: { facts: exitFactsFor(route, observation), route: route.kind },
       followExit: route.kind === "proxy",
       hostZone: readHostZone(),
+      mode: intent.source.mode,
+      pins,
     });
 
     return {
       ...intent.source,
+      browserArgs: hold.browserArgs ?? intent.source.browserArgs,
       capabilities,
       cookies: intent.cookies.seeds,
       fonts,
       identity,
       kind: "browser",
+      profile: hold.profile,
       proxy,
       url: intent.url,
     };
@@ -252,7 +253,13 @@ const visitOnce = async (
       answer.offer(outcome, next.kind === "complete");
     }
 
-    return { closed: await visit.closed, next, outcome, record: recordOf(outcome) };
+    return {
+      browserArgs: plan.kind === "browser" ? plan.browserArgs : [],
+      closed: await visit.closed,
+      next,
+      outcome,
+      record: recordOf(outcome),
+    };
   } finally {
     if (!transferred && plan.kind === "browser") {
       await plan.fonts.settle(null);
@@ -332,6 +339,76 @@ const settleAnswerOnAbort = (answer: Answer, deadline: Deadline): Disposable => 
   };
 };
 
+interface BrowserScrape {
+  readonly mode: "headless" | "headed";
+  readonly capabilities: HostCapabilities;
+  readonly browserArgs: readonly string[];
+}
+
+const sessionBrowser = async (
+  intent: ScrapeIntent,
+  deadline: Deadline,
+  { host }: Dependencies,
+): Promise<BrowserScrape | undefined> => {
+  if (intent.source.mode === "http" || intent.session.kind === "anonymous") {
+    return undefined;
+  }
+
+  const { browserArgs, browserPath, mode } = intent.source;
+  const capabilities = await host.snapshotFor(browserPath, deadline);
+  const chromeMajor = await host.chromeMajorFor(browserPath, capabilities, deadline);
+
+  return { browserArgs, capabilities: { ...capabilities, chromeMajor }, mode };
+};
+
+const claimChecks = (browser: BrowserScrape | undefined, { random }: Dependencies): ClaimChecks => {
+  const seed = () => seedOf(random(SEED_BYTES));
+
+  if (browser === undefined) {
+    return { seed };
+  }
+
+  return {
+    capabilities: browser.capabilities,
+    check: (row) =>
+      row.record === undefined
+        ? undefined
+        : presentableRecord(
+            { browserArgs: row.browserArgs, platform: row.platform, record: row.record },
+            browser,
+          ),
+    seed,
+  };
+};
+
+const visitInHold = async (
+  intent: ScrapeIntent,
+  checks: ClaimChecks,
+  deadline: Deadline,
+  dependencies: Dependencies,
+  answer: Answer,
+): Promise<void> => {
+  const claimDeadline = deadline.boundTo(dependencies.closing, "client-closed");
+
+  await using hold = await timeStage(
+    "session",
+    async () => await dependencies.sessions.hold(intent.session, checks, claimDeadline),
+    claimDeadline,
+  );
+
+  const held = hold.bind(deadline);
+  using _answerLifetime = settleAnswerOnAbort(answer, held);
+
+  try {
+    const context = { answer, capabilities: checks.capabilities, dependencies, held, hold, intent };
+    const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
+    const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
+    await completeVisits(context, retries);
+  } catch (error) {
+    answer.fail(scrapeError(error, held));
+  }
+};
+
 const coordinate = async (
   intent: ScrapeIntent,
   deadline: Deadline,
@@ -341,27 +418,9 @@ const coordinate = async (
   reportSkippedCookies(intent.cookies.skipped);
 
   try {
-    await using hold = await dependencies.sessions.hold(
-      intent.session,
-      {
-        identity: intent.identity,
-        seed: () => seedOf(dependencies.random(SEED_BYTES)),
-        source: intent.source,
-      },
-      deadline,
-    );
-
-    const held = hold.bind(deadline);
-    using _answerLifetime = settleAnswerOnAbort(answer, held);
-
-    try {
-      const context = { answer, dependencies, held, hold, intent };
-      const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
-      const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
-      await completeVisits(context, retries);
-    } catch (error) {
-      answer.fail(scrapeError(error, held));
-    }
+    const browser = await sessionBrowser(intent, deadline, dependencies);
+    const checks = claimChecks(browser, dependencies);
+    await visitInHold(intent, checks, deadline, dependencies, answer);
   } catch (error) {
     answer.fail(scrapeError(error, deadline));
   } finally {

@@ -93,6 +93,7 @@ const startBrowser = async (
   deadline: Deadline,
 ): Promise<DriverBrowser> => {
   await writeProfile(plan);
+  deadline.throwIfExpired();
   slot.assertHeld();
 
   try {
@@ -234,6 +235,7 @@ const renderInScope = async (
       display: process.env.DISPLAY,
       headless: plan.mode === "headless",
       identity: identity.inputs,
+      profileDir: plan.profile?.kind === "persistent" ? plan.profile.dir : undefined,
       proxyServer: relay?.url,
       scratchDir: scope.scratch.path,
       xauthority: process.env.XAUTHORITY,

@@ -5,10 +5,7 @@ import { inspect } from "node:util";
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveHostConfig } from "./host-config.ts";
-import type { DeviceRecord, HardwareTables } from "./humanizer/contracts.ts";
-import type { IdentityIntent } from "./humanizer/intent.ts";
-import { refuseRecordOverrides, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
-import { noPins } from "./testing/no-pins.ts";
+import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 
 const page = { format: "html", url: "https://example.com" } as const;
 
@@ -548,195 +545,6 @@ describe("identity options moved to xrio.config", () => {
   );
 });
 
-const HARDWARE_PINS: readonly HardwareTables[] = [
-  { cores: [{ value: 8, weight: 1 }] },
-  { memoryGb: [{ value: 32, weight: 1 }] },
-  { cores: [{ value: 12, weight: 1 }], memoryGb: [{ value: 8, weight: 1 }] },
-];
-
-const scrapeWith = (
-  choices: Partial<IdentityIntent>,
-  mode: "headless" | "headed" = "headless",
-) => ({ mode, pins: { ...noPins, ...choices } });
-
-describe(refuseRecordOverrides, () => {
-  const record: DeviceRecord = {
-    device: {
-      cores: 0,
-      fonts: { kind: "system" },
-      gpu: { backend: "swiftshader", persona: null },
-      memoryGb: 0,
-      screen: { height: 1080, width: 1920, workArea: { bottom: 0, left: 66, right: 0, top: 32 } },
-      voices: { kind: "system" },
-      window: { height: 900, kind: "floating", width: 1400, x: 200, y: 60 },
-    },
-    policy: { locale: "de-DE", timezone: { kind: "pinned", zone: "Europe/Berlin" } },
-    schema: 1,
-    seed: "9f2c41d07a3be815",
-  };
-
-  it.each([
-    { name: "nothing", options: {} },
-    {
-      name: "the record's own locale and zone",
-      options: { locale: "de-DE", timezone: "Europe/Berlin" },
-    },
-    {
-      name: "a display the record satisfies",
-      options: {
-        display: {
-          screens: [
-            { height: 1080, weight: 1, width: 1920 },
-            { height: 1440, weight: 1, width: 2560 },
-          ],
-          taskbars: [{ bottom: 0, left: 66, right: 0, top: 32, weight: 1 }],
-          windows: [{ height: 900, kind: "sized", weight: 1, width: 1400 }],
-        },
-      },
-    },
-  ] as const)("lets a scrape that pins $name use the session", ({ options }) => {
-    expect(() => {
-      refuseRecordOverrides(record, scrapeWith(options));
-    }).not.toThrow();
-  });
-
-  it.each([
-    { fields: "locale", options: { locale: "fr-FR" } },
-    { fields: "timezone", options: { timezone: "America/New_York" } },
-    {
-      fields: "display",
-      options: { display: { screens: [{ height: 900, weight: 1, width: 1440 }] } },
-    },
-    {
-      fields: "display",
-      options: { display: { taskbars: [{ bottom: 48, left: 0, right: 0, top: 0, weight: 1 }] } },
-    },
-    { fields: "display", options: { display: { windows: [{ kind: "maximized", weight: 1 }] } } },
-    {
-      fields: "display",
-      options: {
-        display: {
-          screens: [{ height: 1080, weight: 1, width: 1920 }],
-          windows: [
-            { height: 900, kind: "sized", position: { x: 300, y: 40 }, weight: 1, width: 1400 },
-          ],
-        },
-      },
-    },
-  ] as const)("refuses a scrape whose $fields conflicts with the record", ({ fields, options }) => {
-    expect(() => {
-      refuseRecordOverrides(record, scrapeWith(options));
-    }).toThrow(
-      expect.objectContaining(
-        refusalFor(
-          `The session's device record fixes its ${fields}; a scrape in that session cannot change it.`,
-        ),
-      ),
-    );
-  });
-
-  it("lets a scrape pin the cores and memory the record presents, and refuses any others", () => {
-    const presenting: DeviceRecord = {
-      ...record,
-      device: { ...record.device, cores: 12, memoryGb: 16 },
-    };
-
-    const fixed = `The session's device record fixes its hardware; a scrape in that session cannot change it.`;
-
-    expect(() => {
-      refuseRecordOverrides(
-        presenting,
-        scrapeWith({
-          hardware: {
-            cores: [
-              { value: 8, weight: 1 },
-              { value: 12, weight: 1 },
-            ],
-            memoryGb: [{ value: 16, weight: 1 }],
-          },
-        }),
-      );
-    }).not.toThrow();
-
-    for (const hardware of HARDWARE_PINS) {
-      expect(() => {
-        refuseRecordOverrides(presenting, scrapeWith({ hardware }));
-      }).toThrow(expect.objectContaining(refusalFor(fixed)));
-    }
-  });
-
-  it("lets a scrape pin any hardware on a record made where the host's own values showed", () => {
-    for (const hardware of HARDWARE_PINS) {
-      expect(() => {
-        refuseRecordOverrides(record, scrapeWith({ hardware }));
-      }).not.toThrow();
-    }
-  });
-
-  it("names every field a scrape would change, the mode included", () => {
-    expect(() => {
-      refuseRecordOverrides(
-        record,
-        scrapeWith(
-          {
-            display: { windows: [{ kind: "maximized", weight: 1 }] },
-            locale: "fr-FR",
-            timezone: "UTC",
-          },
-          "headed",
-        ),
-      );
-    }).toThrow(
-      expect.objectContaining(
-        refusalFor(
-          "The session's device record fixes its mode, display, locale, and timezone; a scrape in that session cannot change them.",
-        ),
-      ),
-    );
-  });
-
-  it("refuses a headed scrape of a headless record, and a headless scrape of a headed one", () => {
-    const headed: DeviceRecord = {
-      ...record,
-      device: { ...record.device, window: { kind: "chrome-default" } },
-    };
-
-    expect(() => {
-      refuseRecordOverrides(record, scrapeWith({}, "headed"));
-    }).toThrow(
-      expect.objectContaining(
-        refusalFor(
-          "The session's device record fixes its mode; a scrape in that session cannot change it.",
-        ),
-      ),
-    );
-    expect(() => {
-      refuseRecordOverrides(headed, scrapeWith({}, "headless"));
-    }).toThrow(
-      expect.objectContaining(
-        refusalFor(
-          "The session's device record fixes its mode; a scrape in that session cannot change it.",
-        ),
-      ),
-    );
-    expect(() => {
-      refuseRecordOverrides(headed, scrapeWith({}, "headed"));
-    }).not.toThrow();
-  });
-
-  it("refuses any pinned zone when the record follows the host's zone", () => {
-    expect(() => {
-      refuseRecordOverrides(
-        {
-          ...record,
-          policy: { locale: "de-DE", timezone: { kind: "host", zone: "Europe/Berlin" } },
-        },
-        { mode: "headless", pins: { ...noPins, timezone: "Europe/Berlin" } },
-      );
-    }).toThrow(expect.objectContaining({ code: "INVALID_OPTIONS" }));
-  });
-});
-
 describe("the cache directory", () => {
   it("defaults to the platform's per-user cache directory", () => {
     const xdg = process.env.XDG_CACHE_HOME;
@@ -763,5 +571,47 @@ describe("the cache directory", () => {
         message: "cacheDir must be a non-empty directory path.",
       }),
     );
+  });
+});
+
+const directoriesFor = (stateDir?: string) => {
+  const defaults = resolveClientOptions({ mode: "http", stateDir });
+
+  return { databaseDir: defaults.databaseDir, stateDir: defaults.stateDir };
+};
+
+describe("the session directories", () => {
+  const xdg = process.env.XDG_STATE_HOME;
+  const stateHome = xdg === undefined || xdg === "" ? path.join(homedir(), ".local", "state") : xdg;
+
+  const defaults = {
+    databaseDir: path.join(homedir(), ".xrio"),
+    stateDir:
+      process.platform === "darwin"
+        ? path.join(homedir(), "Library", "Application Support", "xrio")
+        : path.join(stateHome, "xrio"),
+  };
+
+  it("keep the database in .xrio and the profiles in the per-user state directory by default", () => {
+    expect(directoriesFor()).toStrictEqual(defaults);
+  });
+
+  it("keep both in a stateDir the client sets", () => {
+    expect(directoriesFor("relative/state")).toStrictEqual({
+      databaseDir: path.resolve("relative/state"),
+      stateDir: path.resolve("relative/state"),
+    });
+  });
+
+  it("refuse a stateDir set to either default directory", () => {
+    for (const directory of [defaults.stateDir, defaults.databaseDir]) {
+      expect(() => directoriesFor(directory)).toThrow(
+        expect.objectContaining(
+          refusalFor(
+            `stateDir must not be ${directory}, which Xrio uses when stateDir is unset. Leave stateDir unset or choose another directory.`,
+          ),
+        ),
+      );
+    }
   });
 });

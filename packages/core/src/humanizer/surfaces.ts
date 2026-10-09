@@ -3,7 +3,6 @@ import type { ResolvedMode } from "../types.ts";
 import { DEFAULT_GPU_POLICY, knobOf, headlessWindowOf, withoutPersona } from "./contracts.ts";
 import type {
   DeviceRecord,
-  DisplayTables,
   ExitFacts,
   GlPersona,
   GpuChoice,
@@ -14,8 +13,6 @@ import type {
   NameRow,
   PersonaClaims,
   Seed,
-  WindowPin,
-  WindowState,
 } from "./contracts.ts";
 import { drawDisplay, drawGlPersona, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
@@ -186,63 +183,6 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
   };
 };
 
-const RECORD_OVERRIDES = ["mode", "display", "hardware", "locale", "timezone"] as const;
-
-export type RecordOverride = (typeof RECORD_OVERRIDES)[number];
-
-const sameInsets = (left: Insets, right: Insets): boolean =>
-  left.top === right.top &&
-  left.right === right.right &&
-  left.bottom === right.bottom &&
-  left.left === right.left;
-
-const keepsWindow = (window: WindowState, pin: WindowPin): boolean => {
-  if (pin.kind === "maximized" || window.kind !== "floating") {
-    return pin.kind === window.kind;
-  }
-
-  const placed =
-    pin.position === undefined || (pin.position.x === window.x && pin.position.y === window.y);
-
-  return placed && pin.width === window.width && pin.height === window.height;
-};
-
-const keepsDisplay = ({ device }: DeviceRecord, display: DisplayTables): boolean =>
-  device.window.kind === "chrome-default" ||
-  ((display.screens?.some(
-    ({ height, width }) => height === device.screen.height && width === device.screen.width,
-  ) ??
-    true) &&
-    (display.taskbars?.some((insets) => sameInsets(insets, device.screen.workArea)) ?? true) &&
-    (display.windows?.some((pin) => keepsWindow(device.window, pin)) ?? true));
-
-const keepsHardware = ({ device }: DeviceRecord, hardware: HardwareTables): boolean =>
-  (holdsHostHardware(device) ||
-    ((hardware.cores?.some(({ value }) => value === device.cores) ?? true) &&
-      (hardware.memoryGb?.some(({ value }) => value === device.memoryGb) ?? true))) &&
-  (hardware.gpu?.some(({ name }) => name === device.gpu.persona?.name) ?? true);
-
-const keepsZone = ({ timezone }: DeviceRecord["policy"], zone: string): boolean =>
-  timezone.kind === "pinned" && timezone.zone === canonicalZone(zone);
-
-const keepsMode = ({ device }: DeviceRecord, mode: IdentityContext["mode"]): boolean =>
-  (device.window.kind === "chrome-default") === (mode === "headed");
-
-export const recordOverrides = (
-  record: DeviceRecord,
-  { mode, pins }: Pick<IdentityContext, "mode" | "pins">,
-): RecordOverride[] => {
-  const kept = {
-    display: pins.display === undefined || keepsDisplay(record, pins.display),
-    hardware: pins.hardware === undefined || keepsHardware(record, pins.hardware),
-    locale: pins.locale === undefined || pins.locale === record.policy.locale,
-    mode: keepsMode(record, mode),
-    timezone: pins.timezone === undefined || keepsZone(record.policy, pins.timezone),
-  } satisfies Record<RecordOverride, boolean>;
-
-  return RECORD_OVERRIDES.filter((field) => !kept[field]);
-};
-
 const sourceOf = ({ source }: Device, pinned: boolean): DeviceSource => {
   if (source === "record") {
     return "record";
@@ -294,7 +234,12 @@ export const identityForVisit = (
   inferredLocale?: string,
 ): IdentityIntent => {
   if (device.kind === "record") {
-    return { ...pins, locale: device.record.policy.locale };
+    return {
+      display: undefined,
+      hardware: undefined,
+      locale: device.record.policy.locale,
+      timezone: undefined,
+    };
   }
 
   const supported =

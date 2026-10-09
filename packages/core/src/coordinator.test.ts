@@ -63,6 +63,7 @@ interface HarnessOptions {
   readonly revisit?: boolean;
   readonly cleanupFailure?: string;
   readonly throwOnStart?: boolean;
+  readonly claimWaits?: boolean;
 }
 
 const harness = (options: HarnessOptions = {}) => {
@@ -126,8 +127,12 @@ const harness = (options: HarnessOptions = {}) => {
     random: fixedRandom,
     retryRandom: options.retryRandom ?? (() => 0),
     sessions: {
-      hold: async (_intent, checks) => {
+      hold: async (_intent, checks, claim) => {
         stage("hold");
+
+        if (options.claimWaits === true) {
+          await untilDeadline(async () => await Promise.withResolvers<never>().promise, claim);
+        }
 
         return await Promise.resolve({
           [Symbol.asyncDispose]: async () => {
@@ -135,12 +140,14 @@ const harness = (options: HarnessOptions = {}) => {
             await Promise.resolve();
           },
           bind: (deadline) => new HeldDeadline(deadline, owner.signal),
+          browserArgs: undefined,
           device: { kind: "fresh", seed: checks.seed() },
           finish: async () => {
             stage("finish");
             warmth = false;
             await Promise.resolve();
           },
+          profile: { kind: "scratch" },
           revisitWanted: () => {
             stage("revisit-decision");
 
@@ -523,6 +530,29 @@ describe(createScrapes, () => {
       });
     },
   );
+
+  it("rejects a scrape still waiting for its session claim with CLIENT_CLOSED on close", async () => {
+    const { clock } = manualClock();
+    using deadline = startDeadline(60_000, undefined, clock);
+    const { events, scrapes } = harness({ claimWaits: true });
+
+    const waiting = scrapes.start(
+      { ...browserIntent, session: { kind: "named", name: "account" } },
+      deadline,
+    );
+
+    await expect.poll(() => events.includes("hold")).toBeTruthy();
+    const closing = scrapes.close();
+
+    await expect(waiting.answer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+    await closing;
+    expect(relevantEvents(events)).toStrictEqual([
+      "host",
+      "hold",
+      "admission-close",
+      "sources-close",
+    ]);
+  });
 
   it("keeps the first document without launching a revisit after close", async () => {
     const retired = Promise.withResolvers<Closed>();

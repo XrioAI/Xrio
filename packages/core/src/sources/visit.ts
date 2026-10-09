@@ -8,6 +8,10 @@ import type { ProxyEndpoint, SourceDocument } from "../types.ts";
 import type { Closed } from "./browser/chrome-scope.ts";
 import type { FontClaim } from "./browser/font-evidence.ts";
 
+export type Profile =
+  | { readonly kind: "scratch" }
+  | { readonly kind: "persistent"; readonly dir: string };
+
 export interface Visit {
   readonly document: Promise<SourceDocument>;
   readonly closed: Promise<Closed>;
@@ -23,6 +27,7 @@ export type VisitPlan =
       readonly capabilities: HostCapabilities;
       readonly identity: IdentityPlan;
       readonly fonts: FontClaim;
+      readonly profile?: Profile;
       readonly proxy: ProxyEndpoint | undefined;
     } & BrowserIntent)
   | {
@@ -37,6 +42,7 @@ export type VisitPlan =
 
 export interface FinishedVisit {
   readonly record: DeviceRecord | null;
+  readonly browserArgs: readonly string[];
   readonly closed: Closed;
 }
 

@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import type { Dirent } from "node:fs";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { text } from "node:stream/consumers";
 
+import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent } from "../../diagnostics.ts";
 import { killProcessGroup, waitForGroupExit } from "./group-lifetime.ts";
 import { directoriesIn } from "./launch-plan.ts";
@@ -21,6 +21,8 @@ const ABANDONED_AFTER_MS = 60 * 60 * 1000;
 const EXIT_WAIT_MS = 5000;
 
 const PROCESS_SCAN_BUDGET_MS = 1000;
+
+const PROFILE_RESCAN_MS = 50;
 
 const STDERR_TAIL_BYTES = 8192;
 
@@ -355,10 +357,18 @@ const psBrowserPid = async (marker: string, signal: AbortSignal): Promise<number
   signal.addEventListener("abort", kill, { once: true });
 
   try {
-    const [listing] = await withinSignal(
-      async () => await Promise.all([text(ps.stdout), once(ps, "close")]),
+    const closed = Promise.withResolvers<number | null>();
+    ps.once("close", closed.resolve);
+    ps.once("error", closed.reject);
+
+    const [listing, exitCode] = await withinSignal(
+      async () => await Promise.all([text(ps.stdout), closed.promise]),
       signal,
     );
+
+    if (exitCode !== 0) {
+      throw new Error("The process table could not be read.");
+    }
 
     const line = listing
       .split("\n")
@@ -406,6 +416,65 @@ const scanBrowserPid = async (
 
     throw error;
   }
+};
+
+export type ProfileUse = "clear" | "in-use" | "unknown";
+
+const waitBeforeRescan = async (deadline: Deadline, endsAt: number): Promise<void> => {
+  const waiting = Promise.withResolvers<null>();
+
+  const wake = () => {
+    waiting.resolve(null);
+  };
+
+  const cancel = deadline.clock.setTimer(
+    Math.min(PROFILE_RESCAN_MS, endsAt - deadline.clock.now()),
+    wake,
+  );
+
+  deadline.signal.addEventListener("abort", wake, { once: true });
+
+  try {
+    await waiting.promise;
+    deadline.throwIfExpired();
+  } finally {
+    cancel();
+    deadline.signal.removeEventListener("abort", wake);
+  }
+};
+
+export const profileUse = async (directory: string, deadline: Deadline): Promise<ProfileUse> => {
+  const endsAt = deadline.clock.now() + EXIT_WAIT_MS;
+
+  const scanAgain = async (): Promise<ProfileUse> => {
+    let scan: ProcessScan;
+
+    try {
+      scan = await scanBrowserPid(directory, PROCESS_SCAN_BUDGET_MS, deadline.signal);
+    } catch {
+      deadline.throwIfExpired();
+
+      return "unknown";
+    }
+
+    if (!scan.completed) {
+      return "unknown";
+    }
+
+    if (scan.pid === undefined) {
+      return "clear";
+    }
+
+    if (deadline.clock.now() >= endsAt) {
+      return "in-use";
+    }
+
+    await waitBeforeRescan(deadline, endsAt);
+
+    return await scanAgain();
+  };
+
+  return await scanAgain();
 };
 
 const isProbeScratch = (directory: string): boolean =>

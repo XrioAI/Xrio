@@ -7,7 +7,9 @@ import type { Scrapes } from "./coordinator.ts";
 import { startDeadline } from "./deadline.ts";
 import type { ClientDefaults } from "./intent.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
-import { anonymousSessions } from "./sessions/session.ts";
+import type { SessionManager } from "./sessions/session.ts";
+import { createSessions } from "./sessions/session.ts";
+import { profileUse } from "./sources/browser/browser-process.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
 import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import { hostFactsFor } from "./sources/browser/host-facts.ts";
@@ -84,6 +86,7 @@ export class XrioClient {
   readonly #defaults: ClientDefaults;
   readonly #hostFacts: ClientHostFacts;
   readonly #scrapes: Scrapes;
+  readonly #sessions: SessionManager;
 
   constructor(options: ClientOptions) {
     const config = loadXrioConfig(options?.configFile);
@@ -91,13 +94,17 @@ export class XrioClient {
     this.#defaults = resolveClientOptions(options, config.host, config.scrape);
     this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
 
+    this.#sessions = createSessions(this.#defaults.stateDir, {
+      databaseDir: this.#defaults.databaseDir,
+      profileUse,
+    });
     this.#scrapes = createScrapes({
       admission: createAdmission(this.#defaults.maxBrowsers),
       comparisonBinary: this.#defaults.browser.browserPath,
       config,
       fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
       host: this.#hostFacts,
-      sessions: anonymousSessions(),
+      sessions: this.#sessions,
       sources: createSources(cdpDriver),
     });
   }
@@ -128,6 +135,7 @@ export class XrioClient {
 
   async close(): Promise<void> {
     await this.#scrapes.close();
+    await this.#sessions.close();
     await this.#hostFacts.settle();
   }
 

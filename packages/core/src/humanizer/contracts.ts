@@ -314,7 +314,7 @@ interface DeviceRecordRefusal {
 const describeRefusal = (refusal: DeviceRecordRefusal): string =>
   `Device record cannot replay: ${refusal.reason}.`;
 
-class DeviceRecordRefusedError extends Error {
+export class DeviceRecordRefusedError extends Error {
   override readonly name = "DeviceRecordRefusedError";
   readonly refusal: DeviceRecordRefusal;
 
