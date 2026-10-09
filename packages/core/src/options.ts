@@ -11,6 +11,7 @@ import { resolveScrapeConfig } from "./scrape-config.ts";
 import type { ScrapeSettings } from "./scrape-config.ts";
 import { parseSeedCookies } from "./seed-cookies.ts";
 import { defaultDatabaseDir, defaultStateDir } from "./sessions/profiles.ts";
+import { DEFAULT_WARMTH_MAX_AGE_MS } from "./sessions/warmth.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientOptions,
@@ -178,6 +179,14 @@ const explicitProxy = (value: string): ProxyEndpoint => {
   return proxy;
 };
 
+const positiveDuration = (value: number, field: string): number => {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw invalidOptions(`${field} must be a positive integer.`);
+  }
+
+  return value;
+};
+
 const resolveStateDir = (directory: string): string => {
   if (typeof directory !== "string" || directory.trim() === "") {
     throw invalidOptions("stateDir must be a non-empty path.");
@@ -235,6 +244,10 @@ export const resolveClientOptions = (
     route: proxy,
     session: { kind: "anonymous" },
     ...sessionDirectories(options.stateDir),
+    warmthMaxAgeMs: positiveDuration(
+      options.warmthMaxAgeMs ?? DEFAULT_WARMTH_MAX_AGE_MS,
+      "warmthMaxAgeMs",
+    ),
   };
 };
 

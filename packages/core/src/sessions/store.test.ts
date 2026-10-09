@@ -57,7 +57,7 @@ describe("session ownership", () => {
         state: "quarantined",
         waiting: undefined,
       });
-      const finish = { exited: true, major: 155, now: 68_000 };
+      const finish = { exited: true, major: 155, maxAgeMs: 1_800_000, now: 68_000 };
       const renewal = await db.renewOwnership(stale, 90_000, deadline);
       const written = await db.finishVisit(stale, finish, deadline);
       const released = await db.releaseSession(stale, deadline);

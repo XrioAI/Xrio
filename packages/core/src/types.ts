@@ -1,5 +1,6 @@
 import type { BlockReport } from "./blocks/classify.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
+import type { Warmth } from "./sessions/warmth.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
 
@@ -36,6 +37,7 @@ export type ClientOptions = (
   maxBrowsers?: number;
   cacheDir?: string;
   stateDir?: string;
+  warmthMaxAgeMs?: number;
   configFile?: string;
 };
 
@@ -48,6 +50,13 @@ export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOver
   signal?: AbortSignal;
   session?: string;
 };
+
+export interface SessionSummary {
+  readonly name: string;
+  readonly created: boolean;
+  readonly visits: number;
+  readonly warmth: Warmth;
+}
 
 export interface StructuredContent {
   metadata: {
@@ -77,6 +86,7 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
     format: Selected;
     block: BlockReport;
     identity: IdentityReport;
+    session?: SessionSummary;
   };
 }[Format];
 
@@ -86,6 +96,7 @@ export interface SourceDocument extends ResponseDetails {
   block: BlockReport;
   requestUrls: readonly string[];
   identity: IdentityReport;
+  session?: SessionSummary;
 }
 
 export type RenderedDocument = Pick<SourceDocument, "html" | "url"> &

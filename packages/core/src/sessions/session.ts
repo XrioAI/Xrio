@@ -12,7 +12,8 @@ import type { ScrapeIntent } from "../intent.ts";
 import { HeldDeadline } from "../lifetime.ts";
 import type { ScrapeOutcome } from "../outcome.ts";
 import type { ProfileUse } from "../sources/browser/browser-process.ts";
-import type { FinishedVisit, Profile } from "../sources/visit.ts";
+import type { FinishedVisit, Profile, SiteVisit } from "../sources/visit.ts";
+import type { SessionSummary } from "../types.ts";
 import { OwnershipLease, ownershipSchedule } from "./lease.ts";
 import type { LeaseExpiry } from "./lease.ts";
 import {
@@ -26,11 +27,13 @@ import {
 import type { Holder } from "./profiles.ts";
 import { newHolderToken, openStore, waitForTurn } from "./store.ts";
 import type { Claim, ClaimRequest, SessionRow, SessionStore, Takeover } from "./store.ts";
+import { DEFAULT_WARMTH_MAX_AGE_MS, warmthAfter, warmthAt } from "./warmth.ts";
 
 export interface SessionHold extends AsyncDisposable {
   readonly device: IdentityContext["device"];
   readonly browserArgs: readonly string[] | undefined;
   readonly profile: Profile;
+  readonly summary: (visit: SiteVisit) => SessionSummary | undefined;
   readonly bind: (deadline: Deadline) => HeldDeadline;
   readonly revisitWanted: (outcome: ScrapeOutcome) => boolean;
   readonly finish: (visit: FinishedVisit) => Promise<void>;
@@ -56,6 +59,7 @@ interface SessionOptions {
   readonly profileUse: (directory: string, deadline: Deadline) => Promise<ProfileUse>;
   readonly holdMs?: number;
   readonly wallNow?: () => number;
+  readonly warmthMaxAgeMs?: number;
 }
 
 type PersistentIntent = Exclude<ScrapeIntent["session"], { kind: "anonymous" }>;
@@ -86,6 +90,8 @@ const anonymousHold = (checks: ClaimChecks, deadline: Deadline): SessionHold => 
     },
     profile: { kind: "scratch" },
     revisitWanted: () => false,
+    // oxlint-disable-next-line unicorn/no-useless-undefined -- An anonymous visit belongs to no session to summarize.
+    summary: () => undefined,
   };
 };
 
@@ -143,6 +149,7 @@ class Sessions implements SessionManager {
   readonly #root: string;
   readonly #options: SessionOptions;
   readonly #now: () => number;
+  readonly #maxAgeMs: number;
   readonly #queues = new Map<string, Promise<void>>();
   readonly #deadHolders = deadHolderChecks();
   #opening: Promise<SessionStore> | undefined;
@@ -154,6 +161,7 @@ class Sessions implements SessionManager {
     this.#root = root;
     this.#options = options;
     this.#now = options.wallNow ?? Date.now;
+    this.#maxAgeMs = options.warmthMaxAgeMs ?? DEFAULT_WARMTH_MAX_AGE_MS;
   }
   async #openedStore(deadline: Deadline): Promise<SessionStore> {
     deadline.throwIfExpired();
@@ -245,6 +253,9 @@ class Sessions implements SessionManager {
     }
 
     checks.check?.(row);
+  }
+  #warmth(db: SessionStore, name: string, site: string) {
+    return warmthAt(db.siteWarmth(name, site), this.#now(), this.#maxAgeMs);
   }
   async #claim(
     intent: PersistentIntent,
@@ -399,6 +410,15 @@ class Sessions implements SessionManager {
       throw error;
     }
   }
+  #warmthChanges(db: SessionStore, name: string, visit: SiteVisit | undefined): boolean {
+    if (visit === undefined) {
+      return false;
+    }
+
+    const before = this.#warmth(db, name, visit.site);
+
+    return before !== warmthAfter(before, visit.verdict);
+  }
   #heldVisit(context: {
     readonly claim: Claim;
     readonly checks: ClaimChecks;
@@ -420,6 +440,7 @@ class Sessions implements SessionManager {
       browserArgs: claim.row.browserArgs,
       device,
       finish: async (visit) => {
+        const warmthChanges = this.#warmthChanges(db, name, visit.siteVisit);
         using deadline = lease.persistence();
 
         const written = await db.finishVisit(
@@ -427,6 +448,7 @@ class Sessions implements SessionManager {
           {
             exited: visit.closed.exited,
             major: checks.capabilities?.chromeMajor ?? 0,
+            maxAgeMs: this.#maxAgeMs,
             now: this.#now(),
             record:
               visit.record === null
@@ -436,6 +458,7 @@ class Sessions implements SessionManager {
                     json: JSON.stringify(visit.record),
                     platform: checks.capabilities?.platform ?? process.platform,
                   },
+            siteVisit: visit.siteVisit,
           },
           deadline,
         );
@@ -449,9 +472,19 @@ class Sessions implements SessionManager {
         if (!visit.closed.exited) {
           publishInternalEvent({ detail: name, event: "session-quarantined" });
         }
+
+        if (warmthChanges) {
+          publishInternalEvent({ detail: name, event: "warmth-changed" });
+        }
       },
       profile: { dir: directory, kind: "persistent" },
       revisitWanted: () => false,
+      summary: (visit) => ({
+        created: claim.created,
+        name,
+        visits: claim.row.visits + 1,
+        warmth: warmthAfter(this.#warmth(db, name, visit.site), visit.verdict),
+      }),
     };
   }
   static #checkBeforeWaiting(

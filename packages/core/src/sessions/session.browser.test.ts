@@ -88,6 +88,12 @@ describe("persistent sessions through the public API", () => {
       }
 
       expect(second.identity.record).toStrictEqual(first.identity.record);
+      expect(second.session).toMatchObject({
+        created: false,
+        name: "cookies",
+        visits: 2,
+        warmth: "warm",
+      });
       await nextClient.close();
       await expect(leftovers(stateDir)).resolves.toStrictEqual(nothingLeft);
     } finally {
@@ -112,7 +118,11 @@ describe("persistent sessions through the public API", () => {
         url: `${fixture.origin}/blocked`,
       });
 
-      expect(first).toMatchObject({ block: { verdict: "blocked" }, status: 403 });
+      expect(first).toMatchObject({
+        block: { verdict: "blocked" },
+        session: { visits: 1, warmth: "contacted" },
+        status: 403,
+      });
       await firstClient.close();
       await using nextClient = new XrioClient(options);
 
@@ -129,6 +139,7 @@ describe("persistent sessions through the public API", () => {
       }
 
       expect(second.identity.record).toStrictEqual(first.identity.record);
+      expect(second.session).toMatchObject({ visits: 2, warmth: "warm" });
       await nextClient.close();
       await expect(leftovers(stateDir)).resolves.toStrictEqual(nothingLeft);
     } finally {

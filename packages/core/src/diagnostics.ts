@@ -27,6 +27,7 @@ export interface InternalEvent {
     | "session-released"
     | "session-quarantined"
     | "ownership-lost"
+    | "warmth-changed"
     | "fork-probed"
     | "host-renderer-probed"
     | "font-stack-checked"

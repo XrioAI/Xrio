@@ -1898,6 +1898,8 @@ describe("a named session's device record", () => {
         },
         profile: { kind: "scratch" as const },
         revisitWanted: () => false,
+        // oxlint-disable-next-line unicorn/no-useless-undefined -- The fake hold belongs to no session to summarize.
+        summary: () => undefined,
       });
     },
   };

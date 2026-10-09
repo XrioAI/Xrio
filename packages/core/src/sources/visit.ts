@@ -28,6 +28,7 @@ export type VisitPlan =
       readonly identity: IdentityPlan;
       readonly fonts: FontClaim;
       readonly profile?: Profile;
+      readonly exitAddress?: string;
       readonly proxy: ProxyEndpoint | undefined;
     } & BrowserIntent)
   | {
@@ -40,7 +41,18 @@ export type VisitPlan =
       readonly proxy: ProxyEndpoint | undefined;
     };
 
+export interface SiteVisit {
+  readonly site: string;
+  readonly verdict: SourceDocument["block"]["verdict"];
+  readonly vendor: SourceDocument["block"]["vendor"];
+  readonly challengeOutcome: string | null;
+  readonly challengeRules: readonly string[];
+  readonly exitAddress: string | null;
+  readonly deviceDigest: string;
+}
+
 export interface FinishedVisit {
+  readonly siteVisit?: SiteVisit;
   readonly record: DeviceRecord | null;
   readonly browserArgs: readonly string[];
   readonly closed: Closed;

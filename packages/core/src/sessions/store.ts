@@ -6,8 +6,11 @@ import type { SQLOutputValue } from "node:sqlite";
 
 import { untilDeadline } from "../deadline.ts";
 import type { Deadline } from "../deadline.ts";
+import type { SiteVisit } from "../sources/visit.ts";
 import { LOCAL_TENANT } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
+import { warmthAfter, warmthAt } from "./warmth.ts";
+import type { SiteWarmth } from "./warmth.ts";
 
 export type SessionState = "ready" | "quarantined";
 
@@ -58,7 +61,9 @@ export interface FinishRequest {
     readonly platform: string;
     readonly browserArgs: readonly string[];
   };
+  readonly siteVisit?: SiteVisit;
   readonly now: number;
+  readonly maxAgeMs: number;
 }
 
 const SCHEMA_VERSION = 1;
@@ -184,7 +189,11 @@ const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,st
   epoch INTEGER NOT NULL DEFAULT 0,holder_host TEXT,holder_pid INTEGER,holder_start TEXT,holder_token TEXT,
   expires_at INTEGER NOT NULL DEFAULT 0,record TEXT,platform TEXT,browser_args TEXT,chrome_major INTEGER NOT NULL DEFAULT 0,
   visits INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,
-  last_visit_at INTEGER NOT NULL,PRIMARY KEY(tenant,name));`;
+  last_visit_at INTEGER NOT NULL,PRIMARY KEY(tenant,name));
+CREATE TABLE warmth(tenant TEXT NOT NULL,name TEXT NOT NULL,site TEXT NOT NULL,state TEXT NOT NULL,
+  last_visit_at INTEGER NOT NULL,changed_at INTEGER NOT NULL,verdict TEXT NOT NULL,vendor TEXT,challenge_outcome TEXT,
+  challenge_rules TEXT NOT NULL,exit_address TEXT,device_digest TEXT NOT NULL,PRIMARY KEY(tenant,name,site),
+  FOREIGN KEY(tenant,name) REFERENCES sessions(tenant,name) ON DELETE CASCADE);`;
 
 const migrate = (db: DatabaseSync): void => {
   db.exec("BEGIN IMMEDIATE");
@@ -218,7 +227,7 @@ export class SessionStore {
     this.#db = new DatabaseSync(path.join(root, "xrio.db"));
 
     try {
-      this.#db.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL;");
+      this.#db.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
       migrate(this.#db);
     } catch (error) {
       this.#db.close();
@@ -345,15 +354,38 @@ export class SessionStore {
           .run(state, this.#tenant, owner.name, owner.epoch, owner.token).changes === 1,
     );
   }
+  #saveSiteVisit(owner: Ownership, request: FinishRequest, visit: SiteVisit): void {
+    const before = warmthAt(this.siteWarmth(owner.name, visit.site), request.now, request.maxAgeMs);
+    const state = warmthAfter(before, visit.verdict);
+
+    this.#db
+      .prepare(`INSERT INTO warmth(tenant,name,site,state,last_visit_at,changed_at,verdict,vendor,challenge_outcome,challenge_rules,exit_address,device_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(tenant,name,site) DO UPDATE SET state=excluded.state,last_visit_at=excluded.last_visit_at,changed_at=CASE WHEN warmth.state=excluded.state THEN warmth.changed_at ELSE excluded.changed_at END,
+      verdict=excluded.verdict,vendor=excluded.vendor,challenge_outcome=excluded.challenge_outcome,challenge_rules=excluded.challenge_rules,exit_address=excluded.exit_address,device_digest=excluded.device_digest`)
+      .run(
+        this.#tenant,
+        owner.name,
+        visit.site,
+        state,
+        request.now,
+        request.now,
+        visit.verdict,
+        visit.vendor,
+        visit.challengeOutcome,
+        JSON.stringify(visit.challengeRules),
+        visit.exitAddress,
+        visit.deviceDigest,
+      );
+  }
   async finishVisit(
     owner: Ownership,
     request: FinishRequest,
     deadline: Deadline,
   ): Promise<boolean> {
     return await this.#transaction(deadline, () => {
-      const visited = request.record === undefined ? 0 : 1;
+      const visited = request.siteVisit === undefined ? 0 : 1;
 
-      return (
+      const updated =
         this.#db
           .prepare(
             "UPDATE sessions SET chrome_major=MAX(chrome_major,?),state=?,record=COALESCE(record,?),platform=COALESCE(platform,?),browser_args=COALESCE(browser_args,?),visits=visits+?,last_visit_at=CASE WHEN ? THEN ? ELSE last_visit_at END WHERE tenant=? AND name=? AND epoch=? AND holder_token=?",
@@ -371,9 +403,38 @@ export class SessionStore {
             owner.name,
             owner.epoch,
             owner.token,
-          ).changes === 1
-      );
+          ).changes === 1;
+
+      if (!updated) {
+        return false;
+      }
+
+      if (request.siteVisit !== undefined) {
+        this.#saveSiteVisit(owner, request, request.siteVisit);
+      }
+
+      return true;
     });
+  }
+  siteWarmth(name: string, site: string): SiteWarmth | undefined {
+    const row = this.#db
+      .prepare("SELECT state,last_visit_at FROM warmth WHERE tenant=? AND name=? AND site=?")
+      .get(this.#tenant, name, site);
+
+    if (row === undefined) {
+      return undefined;
+    }
+
+    if (
+      row.state !== "cold" &&
+      row.state !== "contacted" &&
+      row.state !== "warm" &&
+      row.state !== "cooling"
+    ) {
+      throw new Error("Unreadable warmth row.");
+    }
+
+    return { lastVisitAt: numberAt(row, "last_visit_at"), state: row.state };
   }
   async resetProfile(
     owner: Ownership,

@@ -21,7 +21,7 @@ result.cookies;
 result.url;
 ```
 
-`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format, block, identity }`:
+`format` is required. Every call returns a `ScrapeResult` with `{ data, url, status, headers, cookies, format, block, identity }`, and a session scrape adds `session`:
 
 - `data`: an HTML or Markdown string, or `StructuredContent` for `json`.
 - `url`: the final response URL after redirects.
@@ -31,6 +31,7 @@ result.url;
 - `format`: the requested format. Checking this field narrows the type of `data` in TypeScript.
 - `block`: the block report described below. Detection never throws, and a challenge served as a 200 still reports a block.
 - `identity`: the identity report described below. It says what Xrio configured and how much of it was observed.
+- `session`: the session summary described under [Sessions](#sessions). An anonymous scrape has none.
 
 For `json`, `data` retains the existing `StructuredContent` fields:
 
@@ -228,7 +229,7 @@ await using xrio = new XrioClient({ mode: "headless", browserPath, maxBrowsers: 
 
 `await xrio.close()`, or leaving an `await using` block, rejects queued browser scrapes with `CLIENT_CLOSED` without launching Chrome. Running scrapes, and http scrapes, which never queue, finish under their own deadlines, and close resolves once every scrape has settled and every browser has been torn down. A revisit wanted after close launches no browser and returns the first document. If a Chrome outlives its teardown budget, a `teardown-incomplete` event says so and its profile is left for the startup sweep. A scrape started after `close()` rejects with `CLIENT_CLOSED`. Teardown always runs, even after a timeout: Chrome gets 2 seconds to close, then its process group is killed and its profile is deleted, unless the profile belongs to a session. Xrio installs no process signal handlers. If Node dies without closing, Chrome exits when its end of the debugging pipe closes, and the next process to launch a browser deletes profiles left behind for more than an hour, and the scratch directory of a fork probe as soon as the process that started it is gone, stopping the probe if it still runs.
 
-Stage timings (`scratch-sweep`, `session`, `queue`, `identity`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (the identity chosen for each browser, published as JSON before it launches so a failed scrape can still be attributed, fork probes, host renderer reads in `host-renderer-probed`, font stack checks, the Chrome argv of each browser a scrape launches as a JSON array in `browser-argv`, published before `browser-launched` and also when the launch then fails, which the fork probe's and the host renderer read's own launches do not publish, browser launches, document rebinds, raw-header fallbacks, dropped request URLs, skipped seed cookies in `cookie-skipped`, and an incomplete teardown or startup sweep) on `xrio:event`. Sessions publish internal events too: `session-claimed`, `session-released` and `session-quarantined` when a scrape claims, releases or quarantines a session, and `ownership-lost` when a scrape loses its hold. Each carries the session name as `detail`. Each stage timing names its `outcome`, `ok`, `failed` or `aborted`, and the `scrapeId` of the scrape it belongs to, teardown included, and an event published during a scrape carries that `scrapeId` too. Nothing is printed by default.
+Stage timings (`scratch-sweep`, `session`, `queue`, `identity`, `launch`, `verify`, `navigation`, `capture`, `teardown`) are published on the `node:diagnostics_channel` channel `xrio:stage`, and internal events (the identity chosen for each browser, published as JSON before it launches so a failed scrape can still be attributed, fork probes, host renderer reads in `host-renderer-probed`, font stack checks, the Chrome argv of each browser a scrape launches as a JSON array in `browser-argv`, published before `browser-launched` and also when the launch then fails, which the fork probe's and the host renderer read's own launches do not publish, browser launches, document rebinds, raw-header fallbacks, dropped request URLs, skipped seed cookies in `cookie-skipped`, and an incomplete teardown or startup sweep) on `xrio:event`. Sessions publish internal events too: `session-claimed`, `session-released` and `session-quarantined` when a scrape claims, releases or quarantines a session, `ownership-lost` when a scrape loses its hold, and `warmth-changed` when a scrape changes a site's warmth. Each carries the session name as `detail`. Each stage timing names its `outcome`, `ok`, `failed` or `aborted`, and the `scrapeId` of the scrape it belongs to, teardown included, and an event published during a scrape carries that `scrapeId` too. Nothing is printed by default.
 
 `timeoutMs` is one deadline for the whole scrape, covering queueing and launching a browser, connecting, redirects, reading the body or capturing the page, and building the result. It defaults to 60,000 and must be a positive integer no greater than 2,147,483,647. When it passes, the scrape rejects with an `XrioError` whose `code` is `TIMEOUT`. To cancel from an SDK or CLI, pass an `AbortController`'s signal:
 
@@ -294,6 +295,7 @@ A session keeps:
 - its device record, the `identity.record` of its first scrape that captured a browser document. Every later scrape replays it. Until a session has a record, Xrio empties its profile before each scrape, so a first scrape that failed leaves no cookies behind.
 - the `browserArgs` list that scrape launched Chrome with, stored with the device record. Every later scrape launches Chrome with that list.
 - the newest Chrome major that has claimed it.
+- its history for each site it scraped, described under [Session results and warmth](#session-results-and-warmth).
 
 One scrape holds a session at a time, across every process that shares the session database. A scrape of a held session waits until the holder releases it. The wait counts against `timeoutMs` and shows in the `session` stage. Within one process, scrapes of one session claim it in the order they started. A hold lasts 60 seconds, and the scrape that holds it renews it every 20 seconds. The scrape stops and rejects with `SESSION_UNAVAILABLE` and the reason `ownership-lost` when a renewal fails, or when its hold has 10 seconds left without one. A waiting scrape takes the session over once the holder's process has exited on the same host, or 5 seconds after the hold expired.
 
@@ -310,6 +312,12 @@ Before a scrape claims a session, Xrio reads the Chrome major of `browserPath`. 
 The stored record wins over the `host` section of `xrio.config`. A replay presents the record's locale, zone, screen, window and hardware whatever `host` pins, and only a scrape in the other mode or with other `browserArgs` is refused.
 
 A session scrape rejects `cookies` with `INVALID_OPTIONS`, because the profile holds the session's cookies. It rejects `mode: "http"` too, because an http scrape has no profile, and TypeScript rejects `session` on a scrape that sets `mode: "http"`.
+
+#### Session results and warmth
+
+A session scrape resolves with `result.session`, `{ name, created, visits, warmth }`. `created` is `true` when this scrape created the session. `visits` counts the session's scrapes that captured a browser document, this one included. `warmth` is the session's warmth for the scrape's site after this scrape.
+
+Warmth is kept for each session and site, where the site is the host name of the scrape's URL. It is `cold`, `contacted`, `warm` or `cooling`. A scrape whose block verdict is `ok` makes the site `warm`. A `blocked` scrape makes a `warm` or `cooling` site `cooling`, and any other site `contacted`. Other verdicts leave the warmth as it was. A site that the session has not scraped within the last `warmthMaxAgeMs` milliseconds counts as `cold`, and so does a last scrape dated in the future. `warmthMaxAgeMs` is a client option that defaults to 1,800,000, which is 30 minutes. It must be a positive integer, or the client constructor rejects with `INVALID_OPTIONS`. Each scrape also stores the site's block verdict, vendor, challenge outcome and rules, the exit address the proxy lookup observed, and the device digest. A scrape that changes the site's warmth publishes `warmth-changed`.
 
 ### Identity report
 

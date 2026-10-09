@@ -35,6 +35,7 @@ export type ClientDefaults = Pick<ScrapeIntent, "identity" | "session" | "route"
   readonly cacheDir: CacheDir;
   readonly stateDir: string;
   readonly databaseDir: string;
+  readonly warmthMaxAgeMs: number;
   readonly maxBrowsers: number | undefined;
   readonly mode: SourceIntent["mode"];
   readonly browser: Pick<BrowserIntent, "browserArgs"> & {

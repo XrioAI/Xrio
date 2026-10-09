@@ -153,6 +153,8 @@ const harness = (options: HarnessOptions = {}) => {
 
             return warmth;
           },
+          // oxlint-disable-next-line unicorn/no-useless-undefined -- The fake hold belongs to no session to summarize.
+          summary: () => undefined,
         });
       },
     },

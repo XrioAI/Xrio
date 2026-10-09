@@ -7,6 +7,7 @@ import type { ResolvedConfig } from "./config.ts";
 import type { Deadline } from "./deadline.ts";
 import { inScrapeContext, timeStage } from "./diagnostics.ts";
 import { clientClosed } from "./errors.ts";
+import { deviceDigest } from "./humanizer/contracts.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
@@ -27,8 +28,8 @@ import { reportSkippedCookies } from "./seed-cookies.ts";
 import type { ClaimChecks, SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
-import type { FinishedVisit, Sources, VisitPlan } from "./sources/visit.ts";
-import type { ProxyEndpoint, SourceDocument } from "./types.ts";
+import type { FinishedVisit, SiteVisit, Sources, VisitPlan } from "./sources/visit.ts";
+import type { ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
   readonly answer: Promise<SourceDocument>;
@@ -128,6 +129,7 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
       browserArgs: hold.browserArgs ?? intent.source.browserArgs,
       capabilities,
       cookies: intent.cookies.seeds,
+      exitAddress: observation?.exitIp,
       fonts,
       identity,
       kind: "browser",
@@ -194,6 +196,33 @@ const continuationFor = (
     : { kind: "complete" };
 };
 
+const siteVisitOf = (
+  outcome: ScrapeOutcome,
+  site: string,
+  exitAddress: string | null,
+): SiteVisit | undefined => {
+  if (outcome.kind !== "document" || outcome.document.identity.mode === "http") {
+    return undefined;
+  }
+
+  const { block, identity } = outcome.document;
+
+  return {
+    challengeOutcome: block.challenge?.outcome ?? null,
+    challengeRules: block.challenge?.rounds.map((round) => round.rule) ?? [],
+    deviceDigest: deviceDigest(identity.record),
+    exitAddress,
+    site,
+    vendor: block.vendor,
+    verdict: block.verdict,
+  };
+};
+
+const withSession = (outcome: ScrapeOutcome, session: SessionSummary | undefined): ScrapeOutcome =>
+  outcome.kind === "document" && session !== undefined
+    ? { ...outcome, document: { ...outcome.document, session } }
+    : outcome;
+
 const recordOf = (outcome: ScrapeOutcome): FinishedVisit["record"] =>
   outcome.kind === "document" && outcome.document.identity.mode !== "http"
     ? outcome.document.identity.record
@@ -226,7 +255,7 @@ const visitOnce = async (
   retries: Retries,
   planVisit: () => Promise<VisitPlan>,
 ): Promise<VisitResult> => {
-  const { answer, dependencies, held, intent } = context;
+  const { answer, dependencies, held, hold, intent } = context;
 
   await using slot = await startAttempt(
     async () =>
@@ -249,16 +278,28 @@ const visitOnce = async (
     const outcome = await outcomeOf(visit.document, held);
     const next = continuationFor(outcome, context, terminal, retries);
 
+    const siteVisit = siteVisitOf(
+      outcome,
+      intent.url.hostname,
+      plan.kind === "browser" ? (plan.exitAddress ?? null) : null,
+    );
+
+    const answered = withSession(
+      outcome,
+      siteVisit === undefined ? undefined : hold.summary(siteVisit),
+    );
+
     if (next.kind !== "retry") {
-      answer.offer(outcome, next.kind === "complete");
+      answer.offer(answered, next.kind === "complete");
     }
 
     return {
       browserArgs: plan.kind === "browser" ? plan.browserArgs : [],
       closed: await visit.closed,
       next,
-      outcome,
+      outcome: answered,
       record: recordOf(outcome),
+      siteVisit,
     };
   } finally {
     if (!transferred && plan.kind === "browser") {

@@ -68,6 +68,7 @@ export type {
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
+  SessionSummary,
   StructuredContent,
   WaitFor,
 } from "./types.ts";
@@ -97,6 +98,7 @@ export class XrioClient {
     this.#sessions = createSessions(this.#defaults.stateDir, {
       databaseDir: this.#defaults.databaseDir,
       profileUse,
+      warmthMaxAgeMs: this.#defaults.warmthMaxAgeMs,
     });
     this.#scrapes = createScrapes({
       admission: createAdmission(this.#defaults.maxBrowsers),
@@ -122,7 +124,7 @@ export class XrioClient {
     const content = formats[intent.format](document);
     deadline.throwIfExpired();
 
-    return {
+    const result = {
       ...content,
       block: document.block,
       cookies: document.cookies,
@@ -131,6 +133,8 @@ export class XrioClient {
       status: document.status,
       url: document.url,
     };
+
+    return document.session === undefined ? result : { ...result, session: document.session };
   }
 
   async close(): Promise<void> {
