@@ -14,6 +14,10 @@ Name operations after what they produce or make true, rather than the low-level 
 
 <!-- DEEP MODULES END -->
 
+# Client release notes
+
+When changing `packages/core`, follow [.agents/skills/changeset/SKILL.md](.agents/skills/changeset/SKILL.md) before finishing the task.
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web

@@ -4,17 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "changeset": "vp exec changeset",
     "check": "vp check && vp run -r typecheck && vp run knip",
     "fix": "vp check --fix",
     "format": "vp fmt",
     "format:check": "vp fmt --check",
     "knip": "vp exec knip --production",
     "ready": "vp run check && vp run test",
+    "release:version": "vp exec changeset version && vp install --lockfile-only && vp fmt packages/core/package.json packages/core/CHANGELOG.md pnpm-lock.yaml",
     "test": "vp test",
     "typecheck": "vp exec tsc --noEmit",
     "web:dev": "vp run --filter @xrio/landing dev"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@types/node": "26.6.3",
     "@xrio/typescript-config": "workspace:*",
     "knip": "6.38.0",

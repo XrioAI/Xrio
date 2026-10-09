@@ -1,0 +1,29 @@
+name: Chromium Linux x64
+
+on:
+  push:
+    branches: [main]
+    paths: ["chromium-fork/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-linux-x64
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, xrio-release]
+    timeout-minutes: 1440
+    env:
+      XRIO_CHROMIUM_SRC: ${{ vars.XRIO_CHROMIUM_SRC }}
+      JOBS: ${{ vars.XRIO_BUILD_JOBS || '8' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and retain the browser
+        run: nice -n 10 ionice -c 2 -n 7 bash scripts/build-chromium.sh
