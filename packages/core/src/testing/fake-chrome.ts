@@ -118,6 +118,11 @@ const FRAME_NOT_IN_TARGET = {
   message: "Frame with the given id does not belong to the target.",
 };
 
+if (process.argv.includes("--version")) {
+  process.stdout.write(`${PRODUCT}\n`);
+  process.exit(0);
+}
+
 const output = new Socket({ fd: 4, readable: false });
 
 const input = new Socket({ fd: 3, writable: false }).setEncoding("utf-8");

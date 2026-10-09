@@ -114,6 +114,7 @@ const harness = (options: HarnessOptions = {}) => {
       },
     },
     host: {
+      chromeMajorFor: async () => await Promise.resolve(154),
       snapshotFor: async (binary) => {
         stage("host");
         events.push(`binary:${binary ?? "none"}`);

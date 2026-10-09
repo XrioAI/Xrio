@@ -77,7 +77,11 @@ export const plannedScrapes = (
     host:
       overrides.host === undefined
         ? hostFactsFor(defaultCacheDir())
-        : { snapshotFor: overrides.host },
+        : {
+            chromeMajorFor: async () =>
+              await Promise.reject(new Error("Planned scrapes claim no session.")),
+            snapshotFor: overrides.host,
+          },
     proxyInfo: overrides.proxyInfo,
     random: overrides.random,
     sessions: {

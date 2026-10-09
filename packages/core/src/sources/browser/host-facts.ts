@@ -4,7 +4,13 @@ import { untilDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import type { HostCapabilities } from "../../humanizer/contracts.ts";
 import { scratchRoot } from "./browser-process.ts";
-import { createCapabilityProbe, createProbeWork, PROBE_SETTLE_BUDGET_MS } from "./capabilities.ts";
+import {
+  chromeMajorOf,
+  createCapabilityProbe,
+  createProbeWork,
+  PROBE_SETTLE_BUDGET_MS,
+  readChromeVersion,
+} from "./capabilities.ts";
 import type { HostCapabilityProbe } from "./capabilities.ts";
 import { settleWithin } from "./lifetime.ts";
 
@@ -13,6 +19,11 @@ export interface HostFacts {
     binary: string | undefined,
     deadline: Deadline,
   ) => Promise<HostCapabilities>;
+  readonly chromeMajorFor: (
+    binary: string,
+    capabilities: HostCapabilities,
+    deadline: Deadline,
+  ) => Promise<number>;
 }
 
 export interface ClientHostFacts extends HostFacts {
@@ -48,10 +59,43 @@ const processProbeFor = (root: string): HostCapabilityProbe => {
 export const hostFactsFor = (cacheDir: CacheDir): ClientHostFacts => {
   const probe = processProbeFor(hostCacheRoot(cacheDir));
   const work = createProbeWork();
+  const versions = new Map<string, Promise<string>>();
+  const versionWork = new AbortController();
+
+  const versionFor = async (binary: string): Promise<string> => {
+    const known = versions.get(binary);
+
+    if (known !== undefined) {
+      return await known;
+    }
+
+    const reading = readChromeVersion(binary, versionWork.signal);
+
+    versions.set(binary, reading);
+
+    try {
+      return await reading;
+    } catch (error) {
+      if (versions.get(binary) === reading) {
+        versions.delete(binary);
+      }
+
+      throw error;
+    }
+  };
 
   return {
+    chromeMajorFor: async (binary, capabilities, deadline) =>
+      chromeMajorOf(
+        capabilities.fork?.version ??
+          (await untilDeadline(async () => await versionFor(binary), deadline)),
+      ),
     settle: async () => {
-      await settleWithin(work.settled(), PROBE_SETTLE_BUDGET_MS);
+      versionWork.abort();
+      await settleWithin(
+        Promise.allSettled([work.settled(), ...versions.values()]),
+        PROBE_SETTLE_BUDGET_MS,
+      );
     },
     snapshotFor: async (binary, deadline) => {
       deadline.throwIfExpired();

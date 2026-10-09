@@ -207,6 +207,7 @@ export interface HostRenderer {
 }
 
 export interface HostCapabilities {
+  readonly chromeMajor?: number;
   readonly platform: NodeJS.Platform;
   readonly permittedCpus: number;
   readonly readableRenderNode?: true;
