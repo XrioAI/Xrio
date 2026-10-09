@@ -115,7 +115,7 @@ export interface PresentedDevice {
 
 export type TimezonePolicy =
   | { readonly kind: "pinned"; readonly zone: string }
-  | { readonly kind: "exit" }
+  | { readonly kind: "exit"; readonly zone: string }
   | { readonly kind: "host"; readonly zone: string };
 
 const DEVICE_SCHEMA = 1;
@@ -389,9 +389,9 @@ const policyProblem = ({ locale, timezone }: DeviceRecord["policy"]) => {
     return `Xrio has not measured Chrome's language list for its locale ${locale}`;
   }
 
-  return timezone.kind === "exit" || canonicalZone(timezone.zone) !== undefined
-    ? undefined
-    : `its zone ${timezone.zone} is not one Chrome names`;
+  return canonicalZone(timezone.zone) === undefined
+    ? `its zone ${timezone.zone} is not one Chrome names`
+    : undefined;
 };
 
 const unreplayable = (field: "device" | "policy", reason: string): DeviceRecordRefusedError =>

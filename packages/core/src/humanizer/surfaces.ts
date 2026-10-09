@@ -175,8 +175,8 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
 
   return {
     ...context,
-    followExit: timezone.kind === "exit",
-    hostZone: timezone.kind === "host" ? timezone.zone : context.hostZone,
+    followExit: false,
+    hostZone: timezone.zone,
     pins: {
       display: context.pins.display,
       hardware: context.pins.hardware,
