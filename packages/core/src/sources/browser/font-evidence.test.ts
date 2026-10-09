@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -18,6 +18,15 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 const UNPROVEN_TTL_MS = 60_000;
+
+const QUEUED_OBSERVED_TURNS = 20;
+
+const eventLoopTurns = async (turns: number): Promise<void> => {
+  if (turns > 0) {
+    await nextTurn();
+    await eventLoopTurns(turns - 1);
+  }
+};
 
 const GATHERED: FontEvidenceOutcome = {
   digest: "384a83ee",
@@ -304,12 +313,27 @@ describe("the fonts evidence store, concurrent launches", () => {
     clock.advance(1);
 
     const owner = await claimOn(store);
-    const queued = claimOn(store);
-    const early = await Promise.race([queued.then(() => "claimed"), delay(50, "waiting")]);
+    let queuedSettled = false;
+
+    const queued = claimOn(store).then((claim) => {
+      queuedSettled = true;
+
+      return claim;
+    });
+
+    await eventLoopTurns(QUEUED_OBSERVED_TURNS);
+
+    const settledBehindOwner = queuedSettled;
 
     await owner.settle(GATHERED);
-    await queued;
-    expect([quiet.evidence, early]).toStrictEqual([undefined, "waiting"]);
+
+    const claimed = await queued;
+
+    expect([quiet.evidence, settledBehindOwner, claimed.evidence?.digest]).toStrictEqual([
+      undefined,
+      false,
+      "384a83ee",
+    ]);
   });
 
   it("shares one gatherer among concurrent claims, which then get its evidence", async () => {
