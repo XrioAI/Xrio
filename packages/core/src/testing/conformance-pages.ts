@@ -884,6 +884,44 @@ const challengeScript = (name: string, step: number): string => {
   return script;
 };
 
+const TURNSTILE_WIDGET = `const host = document.createElement("div");
+const field = document.createElement("input");
+host.attachShadow({ mode: "closed" }).innerHTML =
+  '<div style="box-sizing: border-box; width: 300px; height: 65px; padding-left: 16px; display: flex; align-items: center; border: 1px solid #ccc"><span style="width: 20px; height: 20px; border: 2px solid #666"></span><span style="margin-left: 12px">Verify you are human</span></div>';
+field.type = "hidden";
+field.name = "cf-turnstile-response";
+field.id = "cf-chl-widget-fx1_response";
+host.append(field);
+host.style.margin = "120px auto";
+host.style.width = "300px";
+const pass = () => {
+  field.value = "fixture-token";
+  setTimeout(() => { location.href = "/challenge/content"; }, 300);
+};`;
+
+const TURNSTILE_ANSWERS = new Map([
+  [
+    "turnstile",
+    `host.addEventListener("click", (event) => {
+  const box = host.getBoundingClientRect();
+  const onCheckbox =
+    Math.abs(event.clientX - (box.left + 28)) <= 12 &&
+    Math.abs(event.clientY - (box.top + box.height / 2)) <= 12;
+  if (event.isTrusted && onCheckbox) {
+    pass();
+  }
+});`,
+  ],
+  ["turnstile-solves-itself", "setTimeout(pass, 1000);"],
+]);
+
+const turnstilePage = (answer: string): string =>
+  `<html><head><title>Just a moment...</title></head><body><script>document.addEventListener("DOMContentLoaded", () => {
+${TURNSTILE_WIDGET}
+${answer}
+document.body.append(host);
+});</script></body></html>`;
+
 const challengePage = (
   request: IncomingMessage,
   response: ServerResponse,
@@ -901,8 +939,13 @@ const challengePage = (
 
   setChallengeHeader(response, name, step);
   response.setHeader("content-type", "text/html");
+
+  const turnstileAnswer = TURNSTILE_ANSWERS.get(name);
+
   response.end(
-    `<html><head><title>Just a moment...</title></head><body><script>${challengeScript(name, step)}</script></body></html>`,
+    turnstileAnswer === undefined
+      ? `<html><head><title>Just a moment...</title></head><body><script>${challengeScript(name, step)}</script></body></html>`
+      : turnstilePage(turnstileAnswer),
   );
 };
 

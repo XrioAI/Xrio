@@ -1,16 +1,27 @@
 import { challengeCandidate } from "../../blocks/classify.ts";
-import type { BlockInput, ChallengeOutcome, ChallengeReport } from "../../blocks/classify.ts";
+import type {
+  BlockEvidence,
+  BlockInput,
+  ChallengeOutcome,
+  ChallengeReport,
+} from "../../blocks/classify.ts";
 import type { Deadline } from "../../deadline.ts";
 import { pollAfter } from "../../poll.ts";
 import type { ResponseDetails } from "../../types.ts";
 import { documentKey } from "./documents.ts";
-import type { DocumentHop } from "./port.ts";
+import type { DocumentHop, PageArea } from "./port.ts";
 
 const POLL_MS = 250;
 
 const ROUND_BUDGET_MS = 20_000;
 
 const MAX_ROUNDS = 3;
+
+const CHECKBOX_GRACE_MS = 6000;
+
+const CHECKBOX_HANDOVER_MS = 3000;
+
+const CHECKBOX_VENDOR = "cloudflare";
 
 export const CAPTURE_RESERVE_MS = 1000;
 
@@ -33,6 +44,11 @@ const escalatedIn = (urls: readonly string[]): boolean =>
     return checked !== -1 && urls.slice(checked + 1).some((url) => captcha.test(url));
   });
 
+export interface ChallengeCheckbox {
+  readonly widget: string;
+  readonly area: PageArea;
+}
+
 export interface ChallengeDocuments {
   readonly documentLoaded: (deadline: Deadline) => Promise<DocumentHop>;
   readonly loadedDocument: () => DocumentHop | undefined;
@@ -40,6 +56,15 @@ export interface ChallengeDocuments {
   readonly requestUrls: (document: DocumentHop) => readonly string[];
   readonly isCurrent: (document: DocumentHop) => boolean;
   readonly currentHtml: (document: DocumentHop, deadline: Deadline) => Promise<string | undefined>;
+  readonly currentCheckbox: (
+    document: DocumentHop,
+    deadline: Deadline,
+  ) => Promise<ChallengeCheckbox | undefined>;
+  readonly clickCheckbox: (
+    document: DocumentHop,
+    checkbox: ChallengeCheckbox,
+    deadline: Deadline,
+  ) => Promise<boolean>;
 }
 
 const inputOf = (
@@ -60,6 +85,60 @@ export interface ChallengeWait {
 interface RoundResult {
   readonly document: DocumentHop;
   readonly outcome: ChallengeOutcome | "next";
+  readonly clicks: number;
+}
+
+interface RoundWindow {
+  readonly start: number;
+  readonly end: number;
+}
+
+class CheckboxClicks {
+  readonly #documents: ChallengeDocuments;
+  readonly #document: DocumentHop;
+  readonly #roundEnd: number;
+  readonly #clicked = new Set<string>();
+  #dueAt: number;
+
+  constructor(
+    documents: ChallengeDocuments,
+    document: DocumentHop,
+    candidate: BlockEvidence,
+    round: RoundWindow,
+  ) {
+    this.#documents = documents;
+    this.#document = document;
+    this.#roundEnd = round.end;
+    this.#dueAt =
+      candidate.vendor === CHECKBOX_VENDOR
+        ? round.start + CHECKBOX_GRACE_MS
+        : Number.POSITIVE_INFINITY;
+  }
+
+  get count(): number {
+    return this.#clicked.size;
+  }
+
+  async clickWhenDue(deadline: Deadline): Promise<void> {
+    if (!this.#isDue(deadline.clock.now())) {
+      return;
+    }
+
+    const checkbox = await this.#documents.currentCheckbox(this.#document, deadline);
+
+    if (checkbox === undefined || this.#clicked.has(checkbox.widget)) {
+      return;
+    }
+
+    if (await this.#documents.clickCheckbox(this.#document, checkbox, deadline)) {
+      this.#clicked.add(checkbox.widget);
+      this.#dueAt = deadline.clock.now() + CHECKBOX_GRACE_MS;
+    }
+  }
+
+  #isDue(now: number): boolean {
+    return now >= this.#dueAt && this.#roundEnd - now >= CHECKBOX_HANDOVER_MS;
+  }
 }
 
 type PageRead = "challenge" | "clear" | "unreadable";
@@ -88,6 +167,7 @@ const readAtRoundStart = async (
 const waitForReplacement = async (
   documents: ChallengeDocuments,
   document: DocumentHop,
+  candidate: BlockEvidence,
   deadline: Deadline,
   initial?: BlockInput,
 ): Promise<RoundResult> => {
@@ -96,7 +176,9 @@ const waitForReplacement = async (
     Math.min(ROUND_BUDGET_MS, deadline.remainingMs() - CAPTURE_RESERVE_MS),
   );
 
-  const end = deadline.clock.now() + budget;
+  const start = deadline.clock.now();
+  const end = start + budget;
+  const clicks = new CheckboxClicks(documents, document, candidate, { end, start });
 
   const watchesPage =
     (await readAtRoundStart(documents, document, deadline, initial)) === "challenge";
@@ -107,20 +189,25 @@ const waitForReplacement = async (
     const next = documents.loadedDocument();
 
     if (next !== undefined && documentKey(next) !== documentKey(document)) {
-      return { document: next, outcome: "next" };
+      return { clicks: clicks.count, document: next, outcome: "next" };
     }
 
     if (escalatedIn(documents.requestUrls(document))) {
-      return { document, outcome: "escalated" };
+      return { clicks: clicks.count, document, outcome: "escalated" };
     }
 
     // oxlint-disable-next-line eslint/no-await-in-loop -- each tick judges the page after the previous read finishes.
     if (watchesPage && (await readPage(documents, document, deadline)) === "clear") {
-      return { document, outcome: "passed_in_place" };
+      return { clicks: clicks.count, document, outcome: "passed_in_place" };
     }
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- a click waits for the page the tick just judged.
+    await clicks.clickWhenDue(deadline);
   }
 
-  return { document, outcome: budget < ROUND_BUDGET_MS ? "deadline" : "budget_exhausted" };
+  const outcome = budget < ROUND_BUDGET_MS ? "deadline" : "budget_exhausted";
+
+  return { clicks: clicks.count, document, outcome };
 };
 
 export const waitForChallenge = async (
@@ -140,6 +227,7 @@ export const waitForChallenge = async (
   }
 
   const report: ChallengeReport = {
+    clicks: previous?.clicks ?? 0,
     outcome: "rounds_exhausted",
     reloads: previous?.reloads ?? 0,
     rounds: [...(previous?.rounds ?? [])],
@@ -150,8 +238,9 @@ export const waitForChallenge = async (
   while (candidate !== undefined && report.rounds.length < MAX_ROUNDS) {
     const started = deadline.clock.now();
     // oxlint-disable-next-line eslint/no-await-in-loop -- each vendor challenge depends on the preceding document.
-    const result = await waitForReplacement(documents, document, deadline, evidence);
+    const result = await waitForReplacement(documents, document, candidate, deadline, evidence);
     evidence = undefined;
+    report.clicks += result.clicks;
     report.rounds.push({
       rule: candidate.rule,
       vendor: candidate.vendor,

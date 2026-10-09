@@ -10,7 +10,7 @@ import type { ResponseDetails, SourceDocument, WaitFor } from "../../types.ts";
 import { isHtmlContentType, unsupportedContentType } from "../content-type.ts";
 import { networkFailure } from "../net-error.ts";
 import { waitForChallenge } from "./challenge.ts";
-import type { ChallengeWait } from "./challenge.ts";
+import type { ChallengeCheckbox, ChallengeWait } from "./challenge.ts";
 import {
   currentDocument,
   documentKey,
@@ -24,6 +24,7 @@ import {
 } from "./documents.ts";
 import { DriverError } from "./port.ts";
 import type { DocumentHop, DriverBrowser, DriverErrorReason } from "./port.ts";
+import { turnstileCheckbox } from "./turnstile.ts";
 import { waitForSelector } from "./wait-for.ts";
 
 const SLICE_CODE_UNITS = 4 * 1024 * 1024;
@@ -267,14 +268,56 @@ class PageTracker {
   }
 
   async currentHtml(document: DocumentHop, deadline: Deadline): Promise<string | undefined> {
+    return await this.#readCurrent(
+      document,
+      async () => await captureHtml(this.#browser, deadline),
+    );
+  }
+
+  async currentCheckbox(
+    document: DocumentHop,
+    deadline: Deadline,
+  ): Promise<ChallengeCheckbox | undefined> {
+    return await this.#readCurrent(
+      document,
+      async () => await turnstileCheckbox(this.#browser, deadline),
+    );
+  }
+
+  async clickCheckbox(
+    document: DocumentHop,
+    { area }: ChallengeCheckbox,
+    deadline: Deadline,
+  ): Promise<boolean> {
+    if (!this.isCurrent(document)) {
+      return false;
+    }
+
+    try {
+      await this.#browser.clickWithin(area, deadline);
+
+      return true;
+    } catch (error) {
+      if (isDriverFailure(error, "document-replaced")) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
+  async #readCurrent<Reading>(
+    document: DocumentHop,
+    read: () => Promise<Reading | undefined>,
+  ): Promise<Reading | undefined> {
     if (!this.isCurrent(document)) {
       return undefined;
     }
 
     try {
-      const html = await captureHtml(this.#browser, deadline);
+      const reading = await read();
 
-      return this.isCurrent(document) ? html : undefined;
+      return this.isCurrent(document) ? reading : undefined;
     } catch (error) {
       if (isDriverFailure(error, "document-replaced")) {
         return undefined;

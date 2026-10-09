@@ -1311,7 +1311,42 @@ describe.each(MODES)("challenge waits, %s", (mode) => {
     const source = await load(mode, `/challenge/${route}`, timeoutMs);
     expect(source.block.challenge?.outcome).toBe(outcome);
     expect(source.block.challenge?.rounds).toHaveLength(rounds);
+    expect(source.block.challenge?.clicks).toBe(0);
     expect(source.scriptsRan).toBeTruthy();
+  });
+
+  it("clicks the checkbox a Cloudflare challenge still shows after 6 s with trusted main-page input", async () => {
+    const input = new Set<string>();
+
+    const record: ChannelListener = (message) => {
+      if (isSentCommand(message) && message.method.startsWith("Input.")) {
+        input.add(`${message.scope} ${message.method}`);
+      }
+    };
+
+    subscribe("xrio:cdp-command", record);
+
+    try {
+      const source = await load(mode, "/challenge/turnstile", 30_000);
+      const waitedMs = source.block.challenge?.rounds[0]?.waitedMs ?? 0;
+
+      expect(source.block.challenge).toMatchObject({
+        clicks: 1,
+        outcome: "passed",
+        rounds: [{ rule: "cf_mitigated_challenge", vendor: "cloudflare" }],
+      });
+      expect(waitedMs).toBeGreaterThanOrEqual(6000);
+      expect(markerOf(source.html)).toBe("content");
+      expect([...input]).toStrictEqual(["main Input.dispatchMouseEvent"]);
+    } finally {
+      unsubscribe("xrio:cdp-command", record);
+    }
+  });
+
+  it("leaves the checkbox of a Cloudflare challenge that passes by itself untouched", async () => {
+    const source = await load(mode, "/challenge/turnstile-solves-itself", 20_000);
+    expect(source.block.challenge).toMatchObject({ clicks: 0, outcome: "passed" });
+    expect(source.block.challenge?.rounds[0]?.waitedMs).toBeLessThan(6000);
   });
 
   it("ends an in-place pass at the first poll after the page clears", async () => {

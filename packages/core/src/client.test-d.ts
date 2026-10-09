@@ -315,6 +315,7 @@ describe("XrioClient types", () => {
     expectTypeOf<BlockEvidence["tier"]>().toEqualTypeOf<"E0" | "E1" | "E2" | "E3">();
     expectTypeOf<BlockReport["challenge"]>().toEqualTypeOf<ChallengeReport | null>();
     expectTypeOf<ChallengeReport["rounds"]>().toEqualTypeOf<ChallengeRound[]>();
+    expectTypeOf<ChallengeReport["clicks"]>().toEqualTypeOf<number>();
     expectTypeOf<ChallengeOutcome>().toEqualTypeOf<
       | "passed"
       | "passed_in_place"
