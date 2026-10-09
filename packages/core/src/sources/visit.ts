@@ -53,6 +53,7 @@ export type VisitPlan =
       readonly capabilities: HostCapabilities | null;
       readonly identity: HttpPlan;
       readonly proxy: ProxyEndpoint | undefined;
+      readonly pinnedExit: boolean;
     };
 
 export interface SiteVisit {

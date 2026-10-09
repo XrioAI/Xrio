@@ -57,4 +57,31 @@ describe(proxyExits, () => {
     expect(exits.freshExitAfter(explicit)).toBeUndefined();
     expect(exits.current()).toBe(current);
   });
+
+  it("pins a direct exit and every session exit it issued, never one it did not issue", () => {
+    const exits = proxyExits(managed());
+    const first = exits.current();
+    const fresh = exits.freshExitAfter(first);
+    const explicit = parseProxy("http://user-12345678:secret@proxy.test");
+
+    expect([undefined, first, fresh, explicit].map((proxy) => exits.pinsExit(proxy))).toStrictEqual(
+      [true, true, true, false],
+    );
+  });
+
+  it.each([
+    {
+      current: false,
+      label: "a configured URL without {session}",
+      manager: new ProxyManager({ url: "http://user:secret@proxy.test" }),
+    },
+    { current: true, label: "no configured proxy", manager: undefined },
+  ])("pins only a direct exit with $label", ({ current, manager }) => {
+    const exits = proxyExits(manager);
+    const explicit = parseProxy("http://user:secret@proxy.test");
+
+    expect(
+      [undefined, exits.current(), explicit].map((proxy) => exits.pinsExit(proxy)),
+    ).toStrictEqual([true, current, false]);
+  });
 });

@@ -24,6 +24,7 @@ import type { SessionHold } from "./sessions/session.ts";
 import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
+import { createHttpConnections } from "./sources/http-connections.ts";
 import { loadHttpDocument } from "./sources/http.ts";
 import type { AttemptLog, FinishedVisit, Sources, Visit, VisitPlan } from "./sources/visit.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
@@ -461,6 +462,7 @@ describe("proxy and identity integration", () => {
     });
 
     await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+    const connections = createHttpConnections();
 
     const { plans, scrapes } = harness({
       config: { proxy: { url: proxy.url.replace("://", "://user-{session}:secret@") } },
@@ -468,15 +470,13 @@ describe("proxy and identity integration", () => {
         throw new Error("HTTP scrapes must not call geolocation.");
       },
       sources: {
-        close: async () => {
-          await Promise.resolve();
-        },
+        close: connections.close,
         start: (plan, _slot, deadline) => {
           if (plan.kind !== "http") {
             throw new Error("Expected an HTTP plan.");
           }
 
-          const document = loadHttpDocument(plan, deadline);
+          const document = loadHttpDocument(plan, deadline, connections);
 
           return { closed: document.then(() => ({ exited: true })), document };
         },

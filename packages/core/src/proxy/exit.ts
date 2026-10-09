@@ -5,11 +5,13 @@ import type { ProxyManager } from "./manager.ts";
 export interface ProxyExits {
   readonly current: () => ProxyEndpoint | undefined;
   readonly freshExitAfter: (blocked: ProxyEndpoint | undefined) => ProxyEndpoint | undefined;
+  readonly pinsExit: (proxy: ProxyEndpoint | undefined) => boolean;
 }
 
 const NO_CONFIGURED_PROXY: ProxyExits = {
   current: (): undefined => undefined,
   freshExitAfter: (): undefined => undefined,
+  pinsExit: (proxy) => proxy === undefined,
 };
 
 export const proxyExits = (manager: ProxyManager | undefined): ProxyExits => {
@@ -50,5 +52,6 @@ export const proxyExits = (manager: ProxyManager | undefined): ProxyExits => {
 
       return next === connection ? undefined : endpointOf(next);
     },
+    pinsExit: (proxy) => proxy === undefined || (manager.managesSessions && connections.has(proxy)),
   };
 };

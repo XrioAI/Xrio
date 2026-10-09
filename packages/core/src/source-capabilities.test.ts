@@ -42,6 +42,7 @@ const httpPlan: VisitPlan = {
   headers: {},
   identity: httpIdentity(noPins),
   kind: "http",
+  pinnedExit: true,
   proxy: undefined,
   url: new URL("https://example.com"),
 };

@@ -1,4 +1,6 @@
 import { once } from "node:events";
+import { Agent, createServer as createHttpServer, request as httpRequest } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -624,7 +626,24 @@ describe("a relay told its first URL", () => {
   });
 });
 
+const listeningServers = () =>
+  process.getActiveResourcesInfo().filter((resource) => resource === "TCPServerWrap").length;
+
 describe("a relay lent to a later scrape", () => {
+  it("stops holding the process open while it rests and holds it again once lent", async () => {
+    using firstScrape = startDeadline(10_000);
+    using laterScrape = startDeadline(10_000);
+    await using relay = await startRelay(undefined, firstScrape, "token");
+    const whileLent = listeningServers();
+
+    relay.rest();
+    const whileResting = listeningServers();
+
+    relay.lendTo(laterScrape);
+
+    expect([whileLent - whileResting, listeningServers() - whileResting]).toStrictEqual([1, 1]);
+  });
+
   it("reports to the scrape it is lent to only the failures of the tunnels it opens", async () => {
     const { advance, clock } = manualClock();
 
@@ -659,4 +678,57 @@ describe("a relay lent to a later scrape", () => {
       "NETWORK_ERROR",
     ]);
   });
+});
+
+const PAST_NODE_KEEP_ALIVE_MS = 6500;
+
+const getThroughRelay = async (relayUrl: string, target: string, agent: Agent) => {
+  const { password, port, username } = new URL(relayUrl);
+  const answered = Promise.withResolvers<IncomingMessage>();
+
+  const request = httpRequest(
+    {
+      agent,
+      headers: { "proxy-authorization": `Basic ${btoa(`${username}:${password}`)}` },
+      host: "127.0.0.1",
+      path: target,
+      port: Number(port),
+    },
+    answered.resolve,
+  );
+
+  request.once("error", answered.reject);
+  request.end();
+  const response = await answered.promise;
+
+  response.resume();
+  await once(response, "end");
+
+  return { reusedSocket: request.reusedSocket, status: response.statusCode };
+};
+
+describe("a relay's idle client connection", () => {
+  it("stays open for as long as its client keeps it", async () => {
+    const origin = createHttpServer((_request, response) => {
+      response.end("ok");
+    });
+
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const target = `http://127.0.0.1:${await listenOnLoopback(origin)}/`;
+
+    try {
+      await using relay = await startRelay(undefined, startDeadline(30_000), "token");
+      const first = await getThroughRelay(relay.url, target, agent);
+
+      await delay(PAST_NODE_KEEP_ALIVE_MS);
+
+      expect([first, await getThroughRelay(relay.url, target, agent)]).toStrictEqual([
+        { reusedSocket: false, status: 200 },
+        { reusedSocket: true, status: 200 },
+      ]);
+    } finally {
+      agent.destroy();
+      origin.close();
+    }
+  }, 15_000);
 });

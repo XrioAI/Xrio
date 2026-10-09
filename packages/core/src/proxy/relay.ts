@@ -95,6 +95,7 @@ export interface Relay extends AsyncDisposable {
   readonly url: string;
   readonly failureFor: (hostname: string) => XrioError | undefined;
   readonly lendTo: (deadline: Deadline) => void;
+  readonly rest: () => void;
 }
 
 const unbracketed = (hostname: string): string => hostname.replaceAll(IPV6_BRACKETS, "");
@@ -918,10 +919,28 @@ export const startRelay = async (
   const { authorization, userinfo } = clientAdmissionFor(admission);
   const sockets = new Set<Duplex>();
   let relay = new ProxyRelay(upstream, deadline, authorization, sockets);
+  let holdsProcess = true;
   const server = createServer();
+
+  server.keepAliveTimeout = 0;
+
+  const holdProcess = (hold: boolean) => {
+    holdsProcess = hold;
+    server[hold ? "ref" : "unref"]();
+
+    for (const socket of sockets) {
+      if (socket instanceof Socket) {
+        socket[hold ? "ref" : "unref"]();
+      }
+    }
+  };
 
   server.on("connection", (socket: Socket) => {
     relay.track(socket);
+
+    if (!holdsProcess) {
+      socket.unref();
+    }
   });
   server.on("connect", (request: IncomingMessage, client: Duplex, head: Buffer) => {
     if (!relay.admits(request)) {
@@ -959,6 +978,10 @@ export const startRelay = async (
     failureFor: (hostname) => relay.failureFor(hostname),
     lendTo: (next) => {
       relay = new ProxyRelay(upstream, next, authorization, sockets);
+      holdProcess(true);
+    },
+    rest: () => {
+      holdProcess(false);
     },
     url: `http://${userinfo}127.0.0.1:${port}`,
   };
