@@ -115,6 +115,40 @@ subscribe("xrio:event", (message) => {
   }
 });
 
+interface SentCommand {
+  method: string;
+  scope: string;
+}
+
+const isSentCommand = (message: unknown): message is SentCommand =>
+  typeof message === "object" &&
+  message !== null &&
+  "method" in message &&
+  typeof message.method === "string" &&
+  "scope" in message &&
+  typeof message.scope === "string";
+
+const commandSent = async (command: SentCommand): Promise<void> => {
+  const sent = Promise.withResolvers<true>();
+
+  const listener: ChannelListener = (message) => {
+    if (
+      isSentCommand(message) &&
+      message.method === command.method &&
+      message.scope === command.scope
+    ) {
+      sent.resolve(true);
+    }
+  };
+
+  subscribe("xrio:cdp-command", listener);
+  onTestFinished(() => {
+    unsubscribe("xrio:cdp-command", listener);
+  });
+
+  await sent.promise;
+};
+
 const settlesWithinTeardownBudget = async (closing: Promise<void>): Promise<boolean> =>
   await Promise.race([
     (async () => {
@@ -583,12 +617,21 @@ describe("browser lifecycle on the fake browser", () => {
   });
 
   it.each([
-    { scenario: "slow-start", stage: "launch" },
-    { scenario: "hang-on-navigate", stage: "navigation" },
+    {
+      blockedOn: { method: "Target.setAutoAttach", scope: "browser" },
+      scenario: "slow-start",
+      stage: "launch",
+    },
+    {
+      blockedOn: { method: "Page.navigate", scope: "main" },
+      scenario: "hang-on-navigate",
+      stage: "navigation",
+    },
   ])(
     "rejects with TIMEOUT when the deadline ends a $stage that outlasts it",
-    async ({ scenario }) => {
+    async ({ blockedOn, scenario }) => {
       const { advance, clock } = manualClock();
+      const blocked = commandSent(blockedOn);
       const browsers = plannedVisits(cdpDriver, 1);
       using deadline = startDeadline(LAUNCH_DEADLINE_MS, undefined, clock);
 
@@ -604,7 +647,7 @@ describe("browser lifecycle on the fake browser", () => {
         }).document,
       ]);
 
-      await delay(4 * LAUNCH_DEADLINE_MS);
+      await blocked;
       advance(LAUNCH_DEADLINE_MS);
 
       await expect(settled).resolves.toMatchObject([
