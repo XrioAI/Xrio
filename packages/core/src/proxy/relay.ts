@@ -67,6 +67,23 @@ interface ForwardingConnection {
   absoluteForm: boolean;
 }
 
+type Unpark = () => Duplex | undefined;
+
+interface OpeningTunnel {
+  readonly state: "opening";
+  readonly target: Target;
+  readonly parked: Promise<Unpark | undefined>;
+}
+
+type HeldTunnel =
+  | OpeningTunnel
+  | { readonly state: "landed"; readonly target: Target; readonly unpark: Unpark | undefined };
+
+interface ClientTunnel {
+  readonly tunnel: Duplex;
+  readonly held: boolean;
+}
+
 type RelayAdmission = "token" | "loopback";
 
 interface ClientAdmission {
@@ -227,6 +244,87 @@ const splice = (client: Duplex, upstream: Duplex, clientHead: Buffer) => {
   upstream.pipe(client);
 };
 
+const tlsTargetOf = (url: URL): Target | undefined =>
+  url.protocol === "https:" && !isLocalTarget(url.hostname)
+    ? { hostname: url.hostname, port: url.port === "" ? 443 : Number(url.port) }
+    : undefined;
+
+const park = (tunnel: Duplex, signal: AbortSignal): Unpark => {
+  const drop = () => {
+    tunnel.destroy();
+  };
+
+  tunnel.on("data", drop);
+  tunnel.once("end", drop);
+  signal.addEventListener("abort", drop, { once: true });
+  tunnel.once("close", () => {
+    signal.removeEventListener("abort", drop);
+  });
+  tunnel.resume();
+
+  return () => {
+    tunnel.off("data", drop);
+    tunnel.off("end", drop);
+    signal.removeEventListener("abort", drop);
+    tunnel.pause();
+
+    return tunnel.destroyed ? undefined : tunnel;
+  };
+};
+
+const unparked = async (parked: Promise<Unpark | undefined>): Promise<Duplex | undefined> =>
+  (await parked)?.();
+
+const destroyUnlessWinner = async (
+  candidate: Promise<Duplex | undefined>,
+  winner: Duplex,
+): Promise<void> => {
+  let tunnel: Duplex | undefined;
+
+  try {
+    tunnel = await candidate;
+  } catch {
+    return;
+  }
+
+  if (tunnel !== winner) {
+    tunnel?.destroy();
+  }
+};
+
+const heldOpened = async (held: Promise<Duplex | undefined>): Promise<ClientTunnel> => {
+  const tunnel = await held;
+
+  if (tunnel === undefined) {
+    throw new Error("The held tunnel did not open.");
+  }
+
+  return { held: true, tunnel };
+};
+
+const freshOpened = async (fresh: Promise<Duplex>): Promise<ClientTunnel> => ({
+  held: false,
+  tunnel: await fresh,
+});
+
+const firstOpen = async (
+  held: Promise<Duplex | undefined>,
+  fresh: Promise<Duplex>,
+): Promise<ClientTunnel> => {
+  let winner: ClientTunnel;
+
+  try {
+    winner = await Promise.any([heldOpened(held), freshOpened(fresh)]);
+  } catch {
+    return await freshOpened(fresh);
+  }
+
+  void destroyUnlessWinner(held, winner.tunnel);
+  void destroyUnlessWinner(fresh, winner.tunnel);
+
+  return winner;
+};
+
 const replyTimedOut = (proxy: ProxyEndpoint, authority: string, cause: unknown): XrioError =>
   networkError(
     `The proxy ${proxy.redactedUrl} did not open a tunnel to ${authority} in time.`,
@@ -283,6 +381,7 @@ class ProxyRelay {
   readonly #sockets = new Set<Duplex>();
   readonly #hostFailures = new Map<string, XrioError>();
   #proxyFailure: XrioError | undefined;
+  #held: HeldTunnel | undefined;
 
   constructor(
     upstream: ProxyEndpoint | undefined,
@@ -339,6 +438,152 @@ class ProxyRelay {
     }
   }
 
+  holdTunnelFor(url: URL): void {
+    const target = tlsTargetOf(url);
+
+    if (target === undefined) {
+      return;
+    }
+
+    const opening: OpeningTunnel = { parked: this.#parkTunnel(target), state: "opening", target };
+
+    this.#held = opening;
+    void this.#land(opening);
+  }
+
+  async #land(opening: OpeningTunnel): Promise<void> {
+    const unpark = await opening.parked;
+
+    if (this.#held === opening) {
+      this.#held = { state: "landed", target: opening.target, unpark };
+    }
+  }
+
+  async #parkTunnel(target: Target): Promise<Unpark | undefined> {
+    try {
+      return park(await this.#openTunnel(target), this.#deadline.signal);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #openClientTunnel(target: Target): Promise<ClientTunnel> {
+    const held = this.#held;
+
+    if (held?.target.hostname !== target.hostname || held.target.port !== target.port) {
+      return await freshOpened(this.#openTunnel(target));
+    }
+
+    this.#held = undefined;
+
+    if (held.state === "opening") {
+      return await firstOpen(unparked(held.parked), this.#openTunnel(target));
+    }
+
+    const tunnel = held.unpark?.();
+
+    return tunnel === undefined
+      ? await freshOpened(this.#openTunnel(target))
+      : { held: true, tunnel };
+  }
+
+  #spliceHeld(client: Duplex, held: Duplex, clientHead: Buffer, target: Target): void {
+    const clientHungUp = client.destroyed || client.readableEnded;
+
+    if (clientHungUp) {
+      held.destroy();
+      client.destroy();
+
+      return;
+    }
+
+    const sent: Buffer[] = [];
+    let clientEnded = false;
+    let settled = false;
+
+    const forward = (chunk: Buffer) => {
+      sent.push(chunk);
+      held.write(chunk);
+    };
+
+    const endHeld = () => {
+      clientEnded = true;
+      held.end();
+    };
+
+    const dropHeld = () => {
+      held.destroy();
+    };
+
+    const release = () => {
+      settled = true;
+      client.off("data", forward);
+      client.off("end", endHeld);
+      client.off("close", dropHeld);
+    };
+
+    const commit = (chunk: Buffer) => {
+      if (settled) {
+        return;
+      }
+
+      release();
+      client.write(chunk);
+      splice(client, held, Buffer.alloc(0));
+    };
+
+    const reopen = () => {
+      if (settled) {
+        return;
+      }
+
+      release();
+      held.destroy();
+      client.pause();
+
+      if (!client.destroyed) {
+        void this.#replayOnFreshTunnel(client, Buffer.concat(sent), clientEnded, target);
+      }
+    };
+
+    client.on("data", forward);
+    client.once("end", endHeld);
+    client.once("close", dropHeld);
+    held.once("data", commit);
+    held.once("end", reopen);
+    held.once("close", reopen);
+
+    if (clientHead.byteLength > 0) {
+      forward(clientHead);
+    }
+
+    held.resume();
+  }
+
+  async #replayOnFreshTunnel(
+    client: Duplex,
+    sent: Buffer,
+    clientEnded: boolean,
+    target: Target,
+  ): Promise<void> {
+    let fresh: Duplex;
+
+    try {
+      fresh = await this.#openTunnel(target);
+    } catch (error) {
+      this.#recordFailure(target, error instanceof XrioError ? error : undefined);
+      client.destroy();
+
+      return;
+    }
+
+    splice(client, fresh, sent);
+
+    if (clientEnded) {
+      fresh.end();
+    }
+  }
+
   async relayConnect(client: Duplex, authority: string | undefined, clientHead: Buffer) {
     const target = parseAuthority(authority);
 
@@ -354,10 +599,10 @@ class ProxyRelay {
       return;
     }
 
-    let tunnel: Duplex;
+    let opened: ClientTunnel;
 
     try {
-      tunnel = await this.#openTunnel(target);
+      opened = await this.#openClientTunnel(target);
     } catch (error) {
       this.#recordFailure(target, error instanceof XrioError ? error : undefined);
       client.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
@@ -366,7 +611,12 @@ class ProxyRelay {
     }
 
     client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-    splice(client, tunnel, clientHead);
+
+    if (opened.held) {
+      this.#spliceHeld(client, opened.tunnel, clientHead, target);
+    } else {
+      splice(client, opened.tunnel, clientHead);
+    }
   }
 
   async relayRequest(request: IncomingMessage, response: ServerResponse) {
@@ -494,8 +744,16 @@ class ProxyRelay {
         : connectTcp({ allowHalfOpen: true, host, port }),
     );
 
+    const destroyed = new AbortController();
+
+    socket.once("close", () => {
+      destroyed.abort(new Error("The socket closed before it connected."));
+    });
+
     try {
-      await once(socket, useTls ? "secureConnect" : "connect", { signal: stage.signal });
+      await once(socket, useTls ? "secureConnect" : "connect", {
+        signal: AbortSignal.any([stage.signal, destroyed.signal]),
+      });
     } catch (error) {
       socket.destroy();
       throw error;
@@ -652,6 +910,7 @@ export const startRelay = async (
   upstream: ProxyEndpoint | undefined,
   deadline: Deadline,
   admission: RelayAdmission,
+  firstUrl?: URL,
 ): Promise<Relay> => {
   const { authorization, userinfo } = clientAdmissionFor(admission);
   const relay = new ProxyRelay(upstream, deadline, authorization);
@@ -680,6 +939,10 @@ export const startRelay = async (
   });
 
   const port = await listen(server);
+
+  if (firstUrl !== undefined) {
+    relay.holdTunnelFor(firstUrl);
+  }
 
   return {
     [Symbol.asyncDispose]: async () => {
