@@ -71,6 +71,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # setup-vp resets PATH; prefer the runner's current CLI over Ubuntu's old gh.
+          export PATH="$HOME/.local/bin:$PATH"
+          gh release edit --help > /dev/null
           cd dist/release
           sha256sum ./*.tgz ./*.tar.zst > SHA256SUMS
           printf 'Linux x64, Node.js 24+. Install the library .tgz and extract the Chromium .tar.zst attached to this release.\n\nSee the [installation instructions](https://github.com/%s/blob/%s/packages/core/README.md) and [changelog](https://github.com/%s/blob/%s/packages/core/CHANGELOG.md).\n' \
