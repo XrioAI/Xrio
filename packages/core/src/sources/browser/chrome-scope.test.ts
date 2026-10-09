@@ -88,6 +88,10 @@ const setup = async () => {
 };
 
 const fakeBrowser = (): DriverBrowser => ({
+  clickWithin: async () => {
+    await Promise.resolve();
+    throw new Error("unused");
+  },
   close: async () => {
     await Promise.resolve();
   },

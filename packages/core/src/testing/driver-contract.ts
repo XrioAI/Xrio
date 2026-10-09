@@ -29,6 +29,7 @@ export const DRIVER_GUARANTEES = [
   "owned-before-launch-settles",
   "close-bounded",
   "parsed-product",
+  "trusted-click-within-area",
 ] as const;
 
 type DriverGuarantee = (typeof DRIVER_GUARANTEES)[number];
@@ -50,6 +51,47 @@ const SCHEDULER_ALLOWANCE_MS = 150;
 const EARLY_EXIT_MARGIN_MS = 10;
 
 const STARTUP_SETTLE_MS = 100;
+
+const CONTRACT_PAGE = "<script>globalThis.pageOnly = 88</script><p>Driver contract</p>";
+
+const CLICK_TARGET_PAGE = `<!doctype html><html><body style="margin: 0">
+<div id="target" style="position: absolute; left: 100px; top: 120px; width: 40px; height: 30px"></div>
+<script>
+const target = document.getElementById("target");
+const seen = { clicks: [], moves: 0, offsets: new Set(), untrusted: 0 };
+const publish = () => {
+  document.body.dataset.pointer = JSON.stringify({
+    clicks: seen.clicks,
+    moved: seen.moves > 0,
+    screenOffsets: seen.offsets.size,
+    untrusted: seen.untrusted,
+  });
+};
+const note = (event) => {
+  seen.untrusted += event.isTrusted ? 0 : 1;
+  seen.offsets.add(String([event.screenX - event.clientX, event.screenY - event.clientY]));
+};
+addEventListener("mousemove", (event) => {
+  note(event);
+  seen.moves += 1;
+  publish();
+});
+addEventListener("click", (event) => {
+  note(event);
+  seen.clicks.push({
+    button: event.button,
+    detail: event.detail,
+    movedFirst: seen.moves > 0,
+    onTarget: event.target === target,
+    pointerType: event.pointerType,
+    trusted: event.isTrusted,
+  });
+  publish();
+});
+</script>
+</body></html>`;
+
+const INSIDE_TARGET = { height: 10, width: 20, x: 110, y: 130 } as const;
 
 const isText = (value: unknown): value is string => typeof value === "string";
 
@@ -76,7 +118,7 @@ const withDriver = async (
       started.resolve(true);
     }
 
-    response.end("<script>globalThis.pageOnly = 88</script><p>Driver contract</p>");
+    response.end(request.url === "/click-target" ? CLICK_TARGET_PAGE : CONTRACT_PAGE);
   });
 
   using deadline = startDeadline(TEST_BUDGET_MS);
@@ -241,6 +283,30 @@ const checks: Record<DriverGuarantee, (visit: ContractVisit) => void | Promise<v
     expect(browser.product.version).toMatch(VERSION);
     expect(Number(browser.product.version.split(".")[0])).toBe(browser.product.major);
     expect([true, false]).toContain(browser.product.headless);
+  },
+  "trusted-click-within-area": async ({ browser, deadline, origin }) => {
+    await browser.navigate(`${origin}/click-target`, deadline);
+    await browser.clickWithin(INSIDE_TARGET, deadline);
+
+    const seen: unknown = JSON.parse(
+      await browser.evaluateIsolated('document.body.dataset.pointer ?? "{}"', isText, deadline),
+    );
+
+    expect(seen).toStrictEqual({
+      clicks: [
+        {
+          button: 0,
+          detail: 1,
+          movedFirst: true,
+          onTarget: true,
+          pointerType: "mouse",
+          trusted: true,
+        },
+      ],
+      moved: true,
+      screenOffsets: 1,
+      untrusted: 0,
+    });
   },
 };
 

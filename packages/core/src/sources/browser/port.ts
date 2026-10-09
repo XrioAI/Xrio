@@ -42,6 +42,16 @@ export type DriverListener = (event: DriverEvent) => void;
 
 export type ResultGuard<Result> = (value: unknown) => value is Result;
 
+export interface PagePoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface PageArea extends PagePoint {
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface ChromeProduct {
   readonly major: number;
   readonly version: string;
@@ -61,6 +71,7 @@ export interface DriverBrowser {
     isResult: ResultGuard<Result>,
     deadline: Deadline,
   ) => Promise<Result>;
+  readonly clickWithin: (area: PageArea, deadline: Deadline) => Promise<void>;
   readonly close: (budgetMs: number) => Promise<void>;
   readonly responseBody: (requestId: string, deadline: Deadline) => Promise<string>;
 }

@@ -13,11 +13,14 @@ import type {
   DriverBrowser,
   DriverEvent,
   DriverListener,
+  PageArea,
+  PagePoint,
   ResultGuard,
 } from "../port.ts";
 import { connectOverPipe } from "./connection.ts";
 import type { ConnectionEvent } from "./connection.ts";
 import { MainFrameEvents } from "./page-events.ts";
+import { planClick } from "./pointer.ts";
 import { BROWSER } from "./protocol.ts";
 import type {
   AnyTargetSession,
@@ -73,6 +76,10 @@ interface Connected extends Connection {
   readonly opened: Promise<DriverBrowser>;
 }
 
+const LEFT_BUTTON = { button: "left", clickCount: 1, pointerType: "mouse" } as const;
+
+const drawBetween = (lowest: number, highest: number): number => randomInt(lowest, highest + 1);
+
 const settle = async (operation: Promise<unknown>): Promise<void> => {
   await Promise.allSettled([operation]);
 };
@@ -97,6 +104,15 @@ const untilAborted = async <Result>(
     return await Promise.race([operation, aborted.promise]);
   } finally {
     signal.removeEventListener("abort", abort);
+  }
+};
+
+const pauseFor = async (ms: number, signal: AbortSignal): Promise<void> => {
+  try {
+    await delay(ms, undefined, { signal });
+  } catch (error) {
+    signal.throwIfAborted();
+    throw error;
   }
 };
 
@@ -172,6 +188,7 @@ class Tab {
   #navigated = false;
   #navigationUrl: string | undefined;
   #document: CommittedDocument | undefined;
+  #pointer: PagePoint | undefined;
   readonly #commits = new Set<string>();
   #nextCommit = Promise.withResolvers<"committed">();
 
@@ -310,6 +327,26 @@ class Tab {
     return value;
   };
 
+  readonly clickWithin = async (area: PageArea, deadline: Deadline): Promise<void> => {
+    deadline.throwIfExpired();
+    const document = this.#document ?? (await this.#startupDocument(deadline));
+    const live = AbortSignal.any([deadline.signal, this.#alive]);
+    const onDocument = AbortSignal.any([live, document.replaced.signal]);
+    const gesture = planClick(this.#pointer, area, drawBetween);
+
+    for (const { at, pauseMs } of gesture.approach) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each move starts where the previous one ended.
+      await this.#movePointer(at, onDocument);
+      // oxlint-disable-next-line eslint/no-await-in-loop -- the pause between moves is part of the motion.
+      await pauseFor(pauseMs, onDocument);
+    }
+
+    await pauseFor(gesture.hoverMs, onDocument);
+    await this.#pressLeft(gesture.target, onDocument);
+    await pauseFor(gesture.holdMs, live);
+    await this.#releaseLeft(gesture.target, live);
+  };
+
   readonly end = (): void => {
     this.#ended.abort(new DriverError({ kind: "browser-gone" }));
   };
@@ -324,6 +361,25 @@ class Tab {
       this.end();
       this.#emit({ type: event.crashed ? "crash" : "disconnect" });
     }
+  }
+
+  async #movePointer({ x, y }: PagePoint, signal: AbortSignal): Promise<void> {
+    const moved = { button: "none", buttons: 0, pointerType: "mouse", type: "mouseMoved" } as const;
+
+    await this.#send(this.#main, "Input.dispatchMouseEvent", { ...moved, x, y }, signal);
+    this.#pointer = { x, y };
+  }
+
+  async #pressLeft({ x, y }: PagePoint, signal: AbortSignal): Promise<void> {
+    const pressed = { ...LEFT_BUTTON, buttons: 1, type: "mousePressed" } as const;
+
+    await this.#send(this.#main, "Input.dispatchMouseEvent", { ...pressed, x, y }, signal);
+  }
+
+  async #releaseLeft({ x, y }: PagePoint, signal: AbortSignal): Promise<void> {
+    const released = { ...LEFT_BUTTON, buttons: 0, type: "mouseReleased" } as const;
+
+    await this.#send(this.#main, "Input.dispatchMouseEvent", { ...released, x, y }, signal);
   }
 
   async #evaluate(
@@ -572,6 +628,7 @@ const connect = (chrome: SpawnedChrome, lifetime: AbortSignal): Connected => {
     ]);
 
     return {
+      clickWithin: opener.clickWithin,
       close: async (budgetMs) => {
         const budget = AbortSignal.timeout(budgetMs);
 

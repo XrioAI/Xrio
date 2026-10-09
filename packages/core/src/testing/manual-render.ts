@@ -6,6 +6,7 @@ import type {
   DriverBrowser,
   DriverEvent,
   DriverListener,
+  PageArea,
   RawHeaders,
   ResultGuard,
 } from "../sources/browser/port.ts";
@@ -55,6 +56,7 @@ const controlledBrowser = (first: DocumentHop) => {
   let captures = 0;
   let navigated = first;
   let navigations = 0;
+  const clicks: PageArea[] = [];
 
   const emit = (event: DriverEvent) => {
     for (const listener of listeners) {
@@ -70,6 +72,10 @@ const controlledBrowser = (first: DocumentHop) => {
   };
 
   const browser: DriverBrowser = {
+    clickWithin: async (area) => {
+      clicks.push(area);
+      await Promise.resolve();
+    },
     close: async () => {
       await Promise.resolve();
     },
@@ -113,6 +119,7 @@ const controlledBrowser = (first: DocumentHop) => {
   return {
     browser,
     captures: () => captures,
+    clicks: () => clicks,
     commit,
     emit,
     listeners: () => listeners.size,

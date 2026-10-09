@@ -1235,6 +1235,10 @@ describe("process ownership reported by the driver", () => {
         await nextTurn();
 
         return {
+          clickWithin: async () => {
+            await nextTurn();
+            throw new Error("unused");
+          },
           close: async () => {
             closes += 1;
             await nextTurn();
