@@ -14,7 +14,8 @@ type SourceIntent =
 
 type SessionIntent =
   | { readonly kind: "anonymous" }
-  | { readonly kind: "named"; readonly name: string };
+  | { readonly kind: "named"; readonly name: string }
+  | { readonly kind: "pool"; readonly name: string; readonly size: number; readonly site: string };
 
 export interface ScrapeIntent {
   readonly url: URL;

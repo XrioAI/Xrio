@@ -17,6 +17,7 @@ import type { FinishedVisit, Profile, SiteVisit } from "../sources/visit.ts";
 import type { SessionInfo, SessionSummary } from "../types.ts";
 import { OwnershipLease, ownershipSchedule } from "./lease.ts";
 import type { LeaseExpiry } from "./lease.ts";
+import { choosePoolMember } from "./pools.ts";
 import {
   ensurePrivateDirectory,
   holderIsGone,
@@ -83,6 +84,10 @@ type SessionUnavailable = XrioError<"SESSION_UNAVAILABLE">;
 const ADMIN_BUDGET_MS = 60_000;
 
 const STORE_OPEN_BUDGET_MS = 30_000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const POOL_MEMBER_MAX_IDLE_MS = 7 * DAY_MS;
 
 const HOLDER_RECHECK_MS = 1000;
 
@@ -158,12 +163,16 @@ const ownStart = async (): Promise<string> => {
   return start;
 };
 
-const sessionInfoOf = (row: SessionRow): SessionInfo => ({
-  lastVisitAt: row.lastVisitAt,
-  name: row.name,
-  state: row.state,
-  visits: row.visits,
-});
+const sessionInfoOf = (row: SessionRow): SessionInfo => {
+  const info: SessionInfo = {
+    lastVisitAt: row.lastVisitAt,
+    name: row.name,
+    state: row.state,
+    visits: row.visits,
+  };
+
+  return row.pool === undefined ? info : { ...info, pool: row.pool };
+};
 
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
@@ -299,6 +308,10 @@ class Sessions implements SessionManager {
   #warmth(db: SessionStore, name: string, site: string) {
     return warmthAt(db.siteWarmth(name, site), this.#now(), this.#maxAgeMs);
   }
+  #chooser(db: SessionStore, site: string) {
+    return (members: readonly SessionRow[]) =>
+      choosePoolMember(members, (name) => this.#warmth(db, name, site));
+  }
   async #claim(
     intent: PersistentIntent,
     checks: ClaimChecks,
@@ -308,7 +321,10 @@ class Sessions implements SessionManager {
   ): Promise<HeldClaim> {
     // oxlint-disable no-await-in-loop -- A waiting claim polls the store until its holder releases or dies.
     for (;;) {
-      const rows = [db.read(intent.name)].filter((row) => row !== undefined);
+      const rows =
+        intent.kind === "pool"
+          ? db.poolMembers(intent.name)
+          : [db.read(intent.name)].filter((row) => row !== undefined);
 
       const request: ClaimRequest = {
         ...this.#takeover(holder, await this.#deadHolders(rows, holder.start, deadline.clock)),
@@ -319,7 +335,11 @@ class Sessions implements SessionManager {
       };
 
       const claimedAt = deadline.clock.now();
-      const claim = await db.claimSession(intent.name, request, deadline);
+
+      const claim =
+        intent.kind === "pool"
+          ? await db.claimPool(intent, request, this.#chooser(db, intent.site), deadline)
+          : await db.claimSession(intent.name, request, deadline);
 
       if (claim !== undefined) {
         return Sessions.#held(claim, claimedAt, request.length);
@@ -345,7 +365,7 @@ class Sessions implements SessionManager {
         throw error;
       }
 
-      await lease.state("quarantined");
+      await lease.state(row.pool === undefined ? "quarantined" : "retired");
       throw sessionUnavailable("quarantined");
     }
   }
@@ -365,7 +385,7 @@ class Sessions implements SessionManager {
     }
 
     if (use === "in-use") {
-      await lease.state("quarantined");
+      await lease.state(row.pool === undefined ? "quarantined" : "retired");
       publishInternalEvent({ detail: row.name, event: "session-quarantined" });
       throw sessionUnavailable("quarantined");
     }
@@ -471,12 +491,16 @@ class Sessions implements SessionManager {
     readonly directory: string;
   }): SessionHold {
     const { claim, checks, db, lease, device, directory, releaseTurn } = context;
-    const { name } = claim.row;
+    const { name, pool } = claim.row;
 
     return {
       [Symbol.asyncDispose]: async () => {
         await lease.release();
         releaseTurn();
+
+        if (pool !== undefined) {
+          await this.#prunePool(pool);
+        }
       },
       bind: (request) => new HeldDeadline(request, lease.signal),
       browserArgs: claim.row.browserArgs,
@@ -521,12 +545,16 @@ class Sessions implements SessionManager {
       },
       profile: { dir: directory, kind: "persistent" },
       revisitWanted: () => false,
-      summary: (visit) => ({
-        created: claim.created,
-        name,
-        visits: claim.row.visits + 1,
-        warmth: warmthAfter(this.#warmth(db, name, visit.site), visit.verdict),
-      }),
+      summary: (visit) => {
+        const summary: SessionSummary = {
+          created: claim.created,
+          name,
+          visits: claim.row.visits + 1,
+          warmth: warmthAfter(this.#warmth(db, name, visit.site), visit.verdict),
+        };
+
+        return pool === undefined ? summary : { ...summary, pool };
+      },
     };
   }
   static #checkBeforeWaiting(
@@ -534,7 +562,7 @@ class Sessions implements SessionManager {
     checks: ClaimChecks,
     db: SessionStore,
   ): void {
-    const existing = db.read(intent.name);
+    const existing = intent.kind === "named" ? db.read(intent.name) : undefined;
 
     if (existing !== undefined) {
       Sessions.#claimCheck(checks, existing);
@@ -548,9 +576,30 @@ class Sessions implements SessionManager {
     releaseTurn: () => void,
   ): Promise<SessionHold> {
     const holder = await this.#holder();
-    const held = await this.#claim(intent, checks, db, holder, deadline);
 
-    return await this.#persistentHold(held, holder, checks, db, deadline, releaseTurn);
+    // oxlint-disable no-await-in-loop -- A pool claims its next member only after the previous one was retired.
+    for (;;) {
+      const held = await this.#claim(intent, checks, db, holder, deadline);
+
+      try {
+        const owned = await this.#persistentHold(held, holder, checks, db, deadline, releaseTurn);
+
+        if (intent.kind === "pool") {
+          releaseTurn();
+        }
+
+        return owned;
+      } catch (error) {
+        if (
+          intent.kind !== "pool" ||
+          !isXrioError(error, "SESSION_UNAVAILABLE") ||
+          error.details.reason !== "quarantined"
+        ) {
+          throw error;
+        }
+      }
+    }
+    // oxlint-enable no-await-in-loop
   }
   async hold(
     intent: ScrapeIntent["session"],
@@ -678,6 +727,20 @@ class Sessions implements SessionManager {
     // oxlint-enable no-await-in-loop
 
     return deleted;
+  }
+  async #prunePool(pool: string): Promise<void> {
+    try {
+      await this.#pruneRows(
+        (row) =>
+          row.pool === pool &&
+          (row.state === "retired" || this.#now() - row.lastVisitAt > POOL_MEMBER_MAX_IDLE_MS),
+      );
+    } catch (error) {
+      publishInternalEvent({
+        detail: `Pruning pool ${pool} failed: ${messageOf(error)}`,
+        event: "pool-prune-failed",
+      });
+    }
   }
   async #list(): Promise<SessionInfo[]> {
     using deadline = startDeadline(ADMIN_BUDGET_MS);

@@ -153,4 +153,20 @@ describe("a session's browserArgs", () => {
     ).resolves.toMatchObject({ url: PAGE });
     expect(shared.launches).toStrictEqual([["--no-sandbox"], ["--enable-logging"]]);
   });
+
+  it("move a pool claim to another member when they differ from the client's", async () => {
+    await using shared = await sharedStateDir();
+    const sandboxed = await shared.client(["--no-sandbox"]);
+    const logging = await shared.client(["--enable-logging"]);
+    const session = { pool: "catalog", size: 2 };
+
+    await expect(sandboxed.scrape({ format: "html", session, url: PAGE })).resolves.toMatchObject({
+      session: { created: true, name: "catalog/1" },
+    });
+    await sandboxed.close();
+    await expect(logging.scrape({ format: "html", session, url: PAGE })).resolves.toMatchObject({
+      session: { created: true, name: "catalog/2" },
+    });
+    expect(shared.launches).toStrictEqual([["--no-sandbox"], ["--enable-logging"]]);
+  });
 });

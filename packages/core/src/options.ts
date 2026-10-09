@@ -281,7 +281,25 @@ const resolveSession = (options: ScrapeOptions, mode: string): ScrapeIntent["ses
     throw invalidOptions("cookies cannot be supplied to a session.");
   }
 
-  return { kind: "named", name: sessionName(options.session) };
+  if (typeof options.session === "string") {
+    return { kind: "named", name: sessionName(options.session) };
+  }
+
+  if (
+    typeof options.session !== "object" ||
+    options.session === null ||
+    !Number.isSafeInteger(options.session.size) ||
+    options.session.size < 1
+  ) {
+    throw invalidOptions("A session pool needs a positive integer size.");
+  }
+
+  return {
+    kind: "pool",
+    name: sessionName(options.session.pool),
+    site: parseTargetUrl(options.url).hostname,
+    size: options.session.size,
+  };
 };
 
 const sourceIntent = (

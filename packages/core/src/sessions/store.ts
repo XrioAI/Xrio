@@ -9,13 +9,15 @@ import type { Deadline } from "../deadline.ts";
 import type { SiteVisit } from "../sources/visit.ts";
 import { LOCAL_TENANT } from "./profiles.ts";
 import type { Holder } from "./profiles.ts";
-import { warmthAfter, warmthAt } from "./warmth.ts";
+import { COOLING_RETIREMENT_STREAK, warmthAfter, warmthAt } from "./warmth.ts";
 import type { SiteWarmth } from "./warmth.ts";
 
-export type SessionState = "ready" | "quarantined";
+export type SessionState = "ready" | "quarantined" | "retired";
 
 export interface SessionRow {
   readonly name: string;
+  readonly pool: string | undefined;
+  readonly coolingStreak: number;
   readonly state: SessionState;
   readonly epoch: number;
   readonly holder: Holder | undefined;
@@ -170,13 +172,14 @@ const browserArgsOf = (row: SqlRow): readonly string[] | undefined => {
 const rowOf = (row: SqlRow): SessionRow => {
   const state = textAt(row, "state");
 
-  if (state !== "ready" && state !== "quarantined") {
+  if (state !== "ready" && state !== "quarantined" && state !== "retired") {
     throw new Error("Unreadable session state.");
   }
 
   return {
     browserArgs: browserArgsOf(row),
     chromeMajor: numberAt(row, "chrome_major"),
+    coolingStreak: numberAt(row, "cooling_streak"),
     createdAt: numberAt(row, "created_at"),
     epoch: numberAt(row, "epoch"),
     expiresAt: numberAt(row, "expires_at"),
@@ -184,21 +187,23 @@ const rowOf = (row: SqlRow): SessionRow => {
     lastVisitAt: numberAt(row, "last_visit_at"),
     name: textAt(row, "name"),
     platform: optionalTextAt(row, "platform"),
+    pool: optionalTextAt(row, "pool"),
     record: optionalTextAt(row, "record"),
     state,
     visits: numberAt(row, "visits"),
   };
 };
 
-const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'ready',
+const SCHEMA = `CREATE TABLE sessions(tenant TEXT NOT NULL,name TEXT NOT NULL,pool TEXT,state TEXT NOT NULL DEFAULT 'ready',
   epoch INTEGER NOT NULL DEFAULT 0,holder_host TEXT,holder_pid INTEGER,holder_start TEXT,holder_token TEXT,
   expires_at INTEGER NOT NULL DEFAULT 0,record TEXT,platform TEXT,browser_args TEXT,chrome_major INTEGER NOT NULL DEFAULT 0,
-  visits INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,
+  visits INTEGER NOT NULL DEFAULT 0,cooling_streak INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,
   last_visit_at INTEGER NOT NULL,PRIMARY KEY(tenant,name));
 CREATE TABLE warmth(tenant TEXT NOT NULL,name TEXT NOT NULL,site TEXT NOT NULL,state TEXT NOT NULL,
   last_visit_at INTEGER NOT NULL,changed_at INTEGER NOT NULL,verdict TEXT NOT NULL,vendor TEXT,challenge_outcome TEXT,
   challenge_rules TEXT NOT NULL,exit_address TEXT,device_digest TEXT NOT NULL,PRIMARY KEY(tenant,name,site),
-  FOREIGN KEY(tenant,name) REFERENCES sessions(tenant,name) ON DELETE CASCADE);`;
+  FOREIGN KEY(tenant,name) REFERENCES sessions(tenant,name) ON DELETE CASCADE);
+CREATE TABLE pools(tenant TEXT NOT NULL,name TEXT NOT NULL,next_member INTEGER NOT NULL,PRIMARY KEY(tenant,name));`;
 
 const migrate = (db: DatabaseSync): void => {
   db.exec("BEGIN IMMEDIATE");
@@ -224,6 +229,22 @@ const isFree = (row: SessionRow, takeover: Takeover): boolean =>
   takeover.dead.has(row.holder.token) ||
   takeover.now > row.expiresAt + takeover.grace;
 
+const presentableMembers = (members: readonly SessionRow[], check: ClaimRequest["check"]) => {
+  const presentable: SessionRow[] = [];
+  const refusals: unknown[] = [];
+
+  for (const member of members) {
+    try {
+      check(member);
+      presentable.push(member);
+    } catch (error) {
+      refusals.push(error);
+    }
+  }
+
+  return { presentable, refusals };
+};
+
 export class SessionStore {
   readonly #db: DatabaseSync;
   readonly #tenant: string;
@@ -246,6 +267,12 @@ export class SessionStore {
     return this.#db
       .prepare("SELECT * FROM sessions WHERE tenant=? ORDER BY name")
       .all(this.#tenant)
+      .map(rowOf);
+  }
+  poolMembers(pool: string): SessionRow[] {
+    return this.#db
+      .prepare("SELECT * FROM sessions WHERE tenant=? AND pool=? ORDER BY name")
+      .all(this.#tenant, pool)
       .map(rowOf);
   }
   read(name: string): SessionRow | undefined {
@@ -308,7 +335,7 @@ export class SessionStore {
 
     this.#db
       .prepare(`UPDATE sessions SET epoch=epoch+1,holder_host=?,holder_pid=?,holder_start=?,holder_token=?,expires_at=?,chrome_major=MAX(chrome_major,?),
-      state=CASE WHEN holder_token IS NOT NULL THEN 'quarantined' ELSE state END WHERE tenant=? AND name=?`)
+      state=CASE WHEN holder_token IS NOT NULL AND state<>'retired' THEN 'quarantined' ELSE state END WHERE tenant=? AND name=?`)
       .run(
         takeover.holder.host,
         takeover.holder.pid,
@@ -322,10 +349,10 @@ export class SessionStore {
 
     return { created, row: this.#claimed(row.name) };
   }
-  #inserted(name: string, request: ClaimRequest): SessionRow {
+  #inserted(name: string, pool: string | undefined, request: ClaimRequest): SessionRow {
     this.#db
-      .prepare("INSERT INTO sessions(tenant,name,created_at,last_visit_at) VALUES(?,?,?,?)")
-      .run(this.#tenant, name, request.now, request.now);
+      .prepare("INSERT INTO sessions(tenant,name,pool,created_at,last_visit_at) VALUES(?,?,?,?,?)")
+      .run(this.#tenant, name, pool ?? null, request.now, request.now);
 
     return this.#claimed(name);
   }
@@ -338,12 +365,67 @@ export class SessionStore {
       const known = this.read(name);
 
       if (known === undefined) {
-        return this.#take(this.#inserted(name, request), request, request.major, true);
+        return this.#take(this.#inserted(name, undefined, request), request, request.major, true);
       }
 
       request.check(known);
 
       return this.#take(known, request, request.major, false);
+    });
+  }
+  #nextMemberName(pool: string): string {
+    this.#db
+      .prepare(
+        "INSERT INTO pools(tenant,name,next_member) VALUES(?,?,1) ON CONFLICT(tenant,name) DO NOTHING",
+      )
+      .run(this.#tenant, pool);
+
+    const number = this.#db
+      .prepare("SELECT next_member FROM pools WHERE tenant=? AND name=?")
+      .get(this.#tenant, pool);
+
+    if (number === undefined) {
+      throw new Error("Pool counter disappeared.");
+    }
+
+    this.#db
+      .prepare("UPDATE pools SET next_member=next_member+1 WHERE tenant=? AND name=?")
+      .run(this.#tenant, pool);
+
+    return `${pool}/${numberAt(number, "next_member")}`;
+  }
+  async claimPool(
+    pool: { readonly name: string; readonly size: number },
+    request: ClaimRequest,
+    choose: (members: readonly SessionRow[]) => SessionRow | undefined,
+    deadline: Deadline,
+  ): Promise<Claim | undefined> {
+    return await this.#transaction(deadline, () => {
+      const live = this.poolMembers(pool.name).filter((member) => member.state !== "retired");
+      const { presentable, refusals } = presentableMembers(live, request.check);
+
+      const free = presentable.flatMap((member) =>
+        isFree(member, request) ? [{ ...member, holder: undefined }] : [],
+      );
+
+      const chosen = choose(free) ?? free.find((member) => member.state === "quarantined");
+
+      if (chosen !== undefined) {
+        return this.#take(chosen, request, request.major, false);
+      }
+
+      if (live.length < pool.size) {
+        const member = this.#inserted(this.#nextMemberName(pool.name), pool.name, request);
+
+        return this.#take(member, request, request.major, true);
+      }
+
+      if (presentable.length === 0 && refusals.length > 0) {
+        throw refusals[0];
+      }
+
+      // oxlint-disable-next-line unicorn/no-useless-undefined -- A full pool has no claim to return.
+      return undefined;
     });
   }
   async claimForRemoval(
@@ -390,6 +472,16 @@ export class SessionStore {
     const before = warmthAt(this.siteWarmth(owner.name, visit.site), request.now, request.maxAgeMs);
     const state = warmthAfter(before, visit.verdict);
 
+    this.#db
+      .prepare(
+        "UPDATE sessions SET cooling_streak=CASE WHEN ?='cooling' AND ?='blocked' THEN cooling_streak+1 ELSE 0 END WHERE tenant=? AND name=?",
+      )
+      .run(state, visit.verdict, this.#tenant, owner.name);
+    this.#db
+      .prepare(
+        "UPDATE sessions SET state='retired' WHERE tenant=? AND name=? AND pool IS NOT NULL AND cooling_streak>=?",
+      )
+      .run(this.#tenant, owner.name, COOLING_RETIREMENT_STREAK);
     this.#db
       .prepare(`INSERT INTO warmth(tenant,name,site,state,last_visit_at,changed_at,verdict,vendor,challenge_outcome,challenge_rules,exit_address,device_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(tenant,name,site) DO UPDATE SET state=excluded.state,last_visit_at=excluded.last_visit_at,changed_at=CASE WHEN warmth.state=excluded.state THEN warmth.changed_at ELSE excluded.changed_at END,

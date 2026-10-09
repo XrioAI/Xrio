@@ -9,6 +9,8 @@ export interface SiteWarmth {
 
 export const DEFAULT_WARMTH_MAX_AGE_MS = 30 * 60 * 1000;
 
+export const COOLING_RETIREMENT_STREAK = 3;
+
 export const warmthAt = (history: SiteWarmth | undefined, now: number, maxAgeMs: number): Warmth =>
   history === undefined || history.lastVisitAt > now || now - history.lastVisitAt > maxAgeMs
     ? "cold"

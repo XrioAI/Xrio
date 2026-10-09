@@ -48,11 +48,12 @@ export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOver
   cookies?: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
-  session?: string;
+  session?: string | { readonly pool: string; readonly size: number };
 };
 
 export interface SessionSummary {
   readonly name: string;
+  readonly pool?: string;
   readonly created: boolean;
   readonly visits: number;
   readonly warmth: Warmth;
@@ -60,7 +61,8 @@ export interface SessionSummary {
 
 export interface SessionInfo {
   readonly name: string;
-  readonly state: "ready" | "quarantined";
+  readonly pool?: string;
+  readonly state: "ready" | "quarantined" | "retired";
   readonly visits: number;
   readonly lastVisitAt: number;
 }
