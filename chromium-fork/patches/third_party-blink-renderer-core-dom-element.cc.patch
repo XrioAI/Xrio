@@ -1,0 +1,29 @@
+diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
+index 7c2ade99a8a435aa1ad609139993997b36791c50..fb3fc297a6d8aebce7b501109df4021f454354ad 100644
+--- a/third_party/blink/renderer/core/dom/element.cc
++++ b/third_party/blink/renderer/core/dom/element.cc
+@@ -26,6 +26,8 @@
+ 
+ #include "third_party/blink/renderer/core/dom/element.h"
+ 
++#include "third_party/blink/renderer/core/dom/xrio_geometry.h"
++
+ #include <algorithm>
+ #include <bitset>
+ #include <limits>
+@@ -3450,6 +3452,7 @@ Vector<gfx::RectF> Element::GetClientRectsNoAdjustment() {
+   Vector<gfx::RectF> result;
+   for (auto& quad : quads) {
+     result.emplace_back(quad.BoundingBox());
++    xrio::JitterRectSize(&result.back());
+   }
+   return result;
+ }
+@@ -3465,6 +3468,7 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdateNoAdjustment() const {
+   for (auto& quad : quads) {
+     result.Union(quad.BoundingBox());
+   }
++  xrio::JitterRectSize(&result);
+   return result;
+ }
+ 

@@ -1,0 +1,35 @@
+diff --git a/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc b/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
+index f2a10504550ef67a73d1dc863a61352ba9cd2142..6c915da3cff46c2de84b37d1199823486a067ef6 100644
+--- a/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
++++ b/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
+@@ -19,6 +19,7 @@
+ #include "base/notreached.h"
+ #include "base/observer_list.h"
+ #include "base/path_service.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/string_util.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/task/thread_pool.h"
+@@ -288,6 +289,22 @@ void SpellcheckHunspellDictionary::DownloadDictionary(GURL url) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   DCHECK(browser_context_);
+ 
++  // redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic plus its
++  // r4---sn-*.gvt1.com CDN redirect: 4 requests and two extra HTTP/2 sessions
++  // out of the proxy connection budget, on a browser that renders pages and
++  // never types into them. This is the only chokepoint -- both the initial
++  // attempt (InitializeDictionaryLocationComplete) and RetryDownloadDictionary
++  // arrive here.
++  //
++  // The FEATURE is untouched, only the fetch: the `spellcheck` content
++  // attribute and its IDL property are Blink-side, so a page sees exactly what
++  // stock shows it. The failure state below is the one a real browser reaches
++  // whenever the dictionary host is unreachable.
++  if (::base::xrio::SuppressDictionaryDownload()) {
++    InformListenersOfDownloadFailure();
++    return;
++  }
++
+   download_status_ = DOWNLOAD_IN_PROGRESS;
+   for (Observer& observer : observers_)
+     observer.OnHunspellDictionaryDownloadBegin(language_);

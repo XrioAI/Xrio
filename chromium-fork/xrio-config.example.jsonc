@@ -1,0 +1,298 @@
+// Xrio knob file template. JSON, with // comments and trailing commas allowed.
+// Copy it beside the browser binary as xrio-config.json, or pass
+// --xrio-config-file=PATH. Every row is commented out, so the compiled default
+// applies. To override a knob, uncomment its row and edit the value.
+// A --xrio-* flag beats this file, and this file beats the compiled default.
+// Every key is validated at startup: a typo or bad value refuses the launch.
+// --xrio-dump-config prints every knob's effective value and exits.
+
+{
+  // --- WebRTC ---
+
+  // Default of the WebRTC IP-handling pref. A wrong value can put the host's
+  // real IP in an ICE candidate.
+  // "webrtc-ip-handling-policy": "disable_non_proxied_udp",
+
+  // --- user agent and automation tells ---
+
+  // Expose hrefTranslate even when upstream says the translate service is
+  // unavailable. Default true; false restores upstream.
+  // "href-translate": false,
+
+  // Remove the "Headless" prefix from the UA product token. Default true.
+  // "suppress-headless-token": false,
+
+  // Brand reported in Sec-CH-UA and navigator.userAgentData. Empty leaves
+  // upstream's value, "Chromium", which gives the fork away.
+  // "ua-brand": "Google Chrome",
+
+  // Full version on the high-entropy UA-CH surfaces. Absent uses the build's
+  // own; set a released version with the same major.
+  // "ua-full-version": "",
+
+  // Force navigator.webdriver to false in C++, where CDP cannot flip it back.
+  // Default true.
+  // "webdriver-false": false,
+
+  // Pixels taken off the bottom of the screen's work area, so availHeight is
+  // below height. Absent draws 24-64 from the seed; 0 turns it off.
+  // "workarea-panel-height": 0,
+
+  // --- permissions ---
+
+  // Send headless permission requests to Chrome's normal prompt instead of
+  // auto-denying them. Default false; untested, may crash the browser.
+  // "headful-permission-prompts": false,
+
+  // --- media ---
+
+  // Apply the persona's decode table to mediaCapabilities.decodingInfo().
+  // Needs gl-persona and a <persona>.xrio-media.json file. Default false.
+  // "media-persona": false,
+
+  // --- speech ---
+
+  // Speech voice artifact exposed through the Web Speech API; absent leaves the
+  // platform voices. Its voices cannot actually synthesize speech.
+  // "speech-persona": "",
+
+  // --- battery ---
+
+  // Fixed battery status for every renderer, experiment only. All four keys;
+  // times in seconds or "Infinity"; level in (0, 1]. Absent by default.
+  // "battery-status": {"charging": false, "level": 0.71, "charging_time": "Infinity", "discharging_time": 42960},
+
+  // --- geometry and pixel jitter ---
+
+  // Jitter element rects and text metrics. Needs seed. Default false.
+  // "jitter-geometry": false,
+
+  // Also jitter a rect's x/y, so it moves when the page scrolls, which is a
+  // known tell. Default false.
+  // "jitter-geometry-position": false,
+
+  // Jitter measureText().width. Defaults to jitter-geometry.
+  // "jitter-text-metrics": false,
+
+  // XORed into one colour byte of a selected pixel; 1 is +-1/255. Above 1 is
+  // visible speckle.
+  // "pixel-bit-mask": 1,
+
+  // --- hardware, GPU and fingerprint noise ---
+
+  // Force prefers-color-scheme to light or dark. Absent leaves the OS setting
+  // in charge.
+  // "color-scheme": "",
+
+  // Override navigator.deviceMemory instead of drawing it from the machine
+  // class: 2, 4, 8, 16 or 32. Absent by default.
+  // "device-memory": 8,
+
+  // GL persona artifact to load; absent leaves every GL surface untouched.
+  // "gl-persona": "",
+
+  // GL_RENDERER string for WEBGL_debug_renderer_info. Empty uses the persona's
+  // own; refused without gl-persona.
+  // "gl-renderer": "",
+
+  // GL_VENDOR string for WEBGL_debug_renderer_info. Empty uses the persona's
+  // own; refused without gl-persona.
+  // "gl-vendor": "",
+
+  // Override navigator.hardwareConcurrency instead of drawing it from the
+  // machine class: 1 to 2147483647. Absent by default.
+  // "hardware-concurrency": 8,
+
+  // Machine classes drawn from, as [cores, memory_gb, free_disk_gb, weight]
+  // plus an optional chassis, laptop or desktop. memory_gb is 2, 4, 8, 16 or 32.
+  // "machine-classes": [[4,8,120,12],[8,8,120,8],[6,16,200,10],[8,16,250,26],[16,16,300,8],[12,16,400,16],[12,32,500,8],[16,32,500,10],[24,32,700,2]],
+
+  // Scale rendered audio. Umbrella for perturb-audio-buffers and
+  // perturb-offline-audio. Default false.
+  // "perturb-audio": false,
+
+  // Scale an AudioBuffer built from an AudioBus, decoded media included.
+  // Defaults to perturb-audio.
+  // "perturb-audio-buffers": false,
+
+  // Perturb canvas2d readback: getImageData, toDataURL, toBlob. Needs seed and
+  // gl-persona. Default false.
+  // "perturb-canvas": false,
+
+  // Scale an OfflineAudioContext's rendered buffer, the path that moves the
+  // audio fingerprint. Defaults to perturb-audio.
+  // "perturb-offline-audio": false,
+
+  // Selects one pixel in (this + 1) for perturbation.
+  // "pixel-rate-mask": 7,
+
+  // Which residue class of the rate mask is selected; re-rolls the flip set.
+  // "pixel-rate-phase": 0,
+
+  // Master seed. Absent leaves every seeded surface as upstream; canvas, audio
+  // and geometry also need their own knob turned on.
+  // "seed": "12345",
+
+  // Report the drawn machine class for hardwareConcurrency and deviceMemory.
+  // Default true.
+  // "spoof-hardware": true,
+
+  // --- noise tuning: changing any of these changes every fingerprint ---
+
+  // Mixes a channel index into the audio scale, so stereo channels do not move
+  // in lockstep.
+  // "audio-channel-mixer": "0x9E3779B97F4A7C15",
+
+  // Lower bound of the per-profile audio channel multiplier.
+  // "audio-scale-floor": 0.999,
+
+  // Width of the audio multiplier range above the floor.
+  // "audio-scale-span": 0.001,
+
+  // Mixes a pixel's absolute x into its flip decision.
+  // "coord-mixer": "0x9E3779B97F4A7C15",
+
+  // First multiplier of murmur3-64's finalizer.
+  // "hash-mix-1": "0xff51afd7ed558ccd",
+
+  // Second multiplier of murmur3-64's finalizer.
+  // "hash-mix-2": "0xc4ceb9fe1a85ec53",
+
+  // Shift width in murmur3-64's finalizer.
+  // "hash-shift": 33,
+
+  // Sizes are quantised to 1/this px before keying, so float noise gets the
+  // same jitter.
+  // "jitter-quantum": 64,
+
+  // Jitter offsets are in 1/this px.
+  // "jitter-step-size": 1024,
+
+  // Number of distinct jitter offsets, centred on zero.
+  // "jitter-steps": 41,
+
+  // Sub-seed stream tag for audio.
+  // "seed-purpose-audio": "audio",
+
+  // Sub-seed stream tag for canvas2d readback and encode.
+  // "seed-purpose-canvas": "canvas",
+
+  // Sub-seed stream tag for element rects and text metrics.
+  // "seed-purpose-geometry": "geometry",
+
+  // Sub-seed stream tag for the machine class draw.
+  // "seed-purpose-machine": "machine",
+
+  // FNV-1a 64 offset basis, used to fold a purpose tag into the seed.
+  // "seed-tag-basis": "0xcbf29ce484222325",
+
+  // FNV-1a 64 prime.
+  // "seed-tag-prime": "0x100000001b3",
+
+  // Used when a derived sub-seed comes out exactly zero.
+  // "seed-zero-substitute": "1",
+
+  // --- background requests and automation blockers ---
+
+  // Answer beforeunload dialogs with "leave"; false answers "stay". Default
+  // true.
+  // "beforeunload-auto-accept": false,
+
+  // Skip account reconciliation, the Gaia ListAccounts requests. Defaults to
+  // suppress-background-fetches.
+  // "suppress-account-reconcile": false,
+
+  // Umbrella for the beforeunload, popup and infobar knobs. Default true.
+  // "suppress-automation-blockers": false,
+
+  // Umbrella for the background-request knobs in this group. Default true.
+  // "suppress-background-fetches": false,
+
+  // Answer beforeunload dialogs instead of letting them stall automation.
+  // Defaults to suppress-automation-blockers.
+  // "suppress-beforeunload-dialogs": false,
+
+  // Skip the Hunspell dictionary download. Defaults to
+  // suppress-background-fetches.
+  // "suppress-dictionary-download": false,
+
+  // Skip the first-run profile import. Defaults to suppress-background-fetches.
+  // "suppress-first-run-import": false,
+
+  // Skip the per-load JS-framework DOM traversal. Defaults to
+  // suppress-background-fetches.
+  // "suppress-framework-detection": false,
+
+  // Don't start the GCM client and its checkin and register requests. Defaults
+  // to suppress-background-fetches.
+  // "suppress-gcm": false,
+
+  // Skip the intranet-redirect probe's DNS lookups. Defaults to
+  // suppress-background-fetches.
+  // "suppress-intranet-redirect-probe": false,
+
+  // Skip the network-time query. Defaults to suppress-background-fetches.
+  // "suppress-network-time-query": false,
+
+  // Skip the outdated-build check. Defaults to suppress-background-fetches.
+  // "suppress-outdated-build-detector": false,
+
+  // Open window.open() in a foreground tab instead of a popup window. Defaults
+  // to suppress-automation-blockers.
+  // "suppress-popup-windows": false,
+
+  // Suppress startup infobars. Defaults to suppress-automation-blockers.
+  // "suppress-startup-infobars": false,
+
+  // Refuse update_client update checks, the Omaha ping. Defaults to
+  // suppress-background-fetches.
+  // "suppress-update-pings": false,
+
+  // Skip the variations seed fetch. Defaults to suppress-background-fetches.
+  // "suppress-variations-fetch": false,
+
+  // --- machine class check ---
+
+  // The machine class this profile was drawn as; a launch whose live draw
+  // differs is refused. Absent by default, which enforces nothing.
+  // "machine-class-expect": {"version": 1, "persona": "", "ceiling": 8, "class": [8, 16, 250]},
+
+  // --- files and limits ---
+
+  // Path to a knob file. Command line only: a knob file may not set it.
+  // "config-file": "",
+
+  // Print every knob's effective value to stdout, then exit 0.
+  // "dump-config": false,
+
+  // Longest accepted persona name.
+  // "gl-persona-max-name": 128,
+
+  // gl-table: DERIVED by the browser. Supplying it is a refused launch.
+
+  // Largest persona artifact read, GL or media.
+  // "gl-table-max-bytes": 262144,
+
+  // Filename suffix a GL persona name expands to.
+  // "gl-table-suffix": ".xrio-gl.json",
+
+  // media-table: DERIVED by the browser. Supplying it is a refused launch.
+
+  // Filename suffix a persona name expands to for the media artifact.
+  // "media-table-suffix": ".xrio-media.json",
+
+  // Directory persona artifacts are read from. Absent uses persona-dir-name
+  // beside the browser binary.
+  // "persona-dir": "",
+
+  // Name of the persona directory beside the browser binary.
+  // "persona-dir-name": "personas",
+
+  // Longest accepted speech persona name.
+  // "speech-persona-max-name": 128,
+
+  // speech-table: DERIVED by the browser. Supplying it is a refused launch.
+
+  // Filename suffix a speech persona name expands to.
+  // "speech-table-suffix": ".xrio-speech.json",
+}

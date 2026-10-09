@@ -1,0 +1,79 @@
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index 26c0a088cc1ab42c97f8024fd59fe1bbb481b228..437e8dc365b6aaa3c255ab99123989b95cf90e85 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -39,6 +39,7 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notimplemented.h"
+ #include "base/numerics/checked_math.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/synchronization/lock.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -3828,6 +3829,8 @@ bool WebGLRenderingContextBase::ExtensionTracker::MatchesName(
+ 
+ bool WebGLRenderingContextBase::ExtensionSupportedAndAllowed(
+     const ExtensionTracker* tracker) {
++  if (::base::xrio::GlExtensionHidden(tracker->ExtensionName()))
++    return false;
+   if (tracker->Draft() &&
+       !RuntimeEnabledFeatures::WebGLDraftExtensionsEnabled())
+     return false;
+@@ -4200,6 +4203,8 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        if (const char* xrio_renderer = ::base::xrio::GlRenderer())
++          return WebGLAny(script_state, String(xrio_renderer));
+         return WebGLAny(script_state,
+                         String(ContextGL()->GetString(GL_RENDERER)));
+       }
+@@ -4209,6 +4214,8 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        if (const char* xrio_vendor = ::base::xrio::GlVendor())
++          return WebGLAny(script_state, String(xrio_vendor));
+         return WebGLAny(script_state,
+                         String(ContextGL()->GetString(GL_VENDOR)));
+       }
+@@ -7994,6 +8001,7 @@ ScriptValue WebGLRenderingContextBase::GetFloatParameter(
+   GLfloat value = 0;
+   if (!isContextLost()) {
+     ContextGL()->GetFloatv(pname, &value);
++    ::base::xrio::OverrideGlFloat(pname, &value);
+   }
+   return WebGLAny(script_state, value);
+ }
+@@ -8004,6 +8012,7 @@ ScriptValue WebGLRenderingContextBase::GetIntParameter(
+   GLint value = 0;
+   if (!isContextLost()) {
+     ContextGL()->GetIntegerv(pname, &value);
++    ::base::xrio::OverrideGlInt(pname, &value);
+     switch (pname) {
+       case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
+       case GL_IMPLEMENTATION_COLOR_READ_TYPE:
+@@ -8042,8 +8051,10 @@ ScriptValue WebGLRenderingContextBase::GetWebGLFloatArrayParameter(
+     ScriptState* script_state,
+     GLenum pname) {
+   std::array<GLfloat, 4> value = {0};
+-  if (!isContextLost())
++  if (!isContextLost()) {
+     ContextGL()->GetFloatv(pname, value.data());
++    ::base::xrio::OverrideGlFloatArray(pname, value.data(), value.size());
++  }
+   unsigned length = 0;
+   switch (pname) {
+     case GL_ALIASED_POINT_SIZE_RANGE:
+@@ -8066,8 +8077,10 @@ ScriptValue WebGLRenderingContextBase::GetWebGLIntArrayParameter(
+     ScriptState* script_state,
+     GLenum pname) {
+   std::array<GLint, 4> value = {0};
+-  if (!isContextLost())
++  if (!isContextLost()) {
+     ContextGL()->GetIntegerv(pname, value.data());
++    ::base::xrio::OverrideGlIntArray(pname, value.data(), value.size());
++  }
+   unsigned length = 0;
+   switch (pname) {
+     case GL_MAX_VIEWPORT_DIMS:

@@ -1,0 +1,54 @@
+diff --git a/components/signin/core/browser/account_reconcilor.cc b/components/signin/core/browser/account_reconcilor.cc
+index f9f58270b54a876d9a7a6334072c7bb2ad411025..3cf7953c0470db1e82bd960cf34135392d5744a2 100644
+--- a/components/signin/core/browser/account_reconcilor.cc
++++ b/components/signin/core/browser/account_reconcilor.cc
+@@ -20,6 +20,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/observer_list.h"
++#include "base/xrio_persona.h"
+ #include "base/strings/string_util.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+@@ -170,7 +171,13 @@ void AccountReconcilor::Initialize(bool start_reconcile_if_tokens_available) {
+   delegate_->set_reconcilor(this);
+   timeout_ = delegate_->GetReconcileTimeout();
+ 
+-  if (delegate_->IsReconcileEnabled()) {
++  // `&& !SuppressAccountReconcile()` so this reaches the SAME state a genuine
++  // !IsReconcileEnabled() reaches, rather than a new one. Gating only
++  // StartReconcile would leave the reconcilor registered with IdentityManager
++  // and would still call FetchDeviceBoundSessions() -- a configuration upstream
++  // never produces, and one whose egress the accounts.google.com/ListAccounts
++  // measurement did not cover.
++  if (delegate_->IsReconcileEnabled() && !::base::xrio::SuppressAccountReconcile()) {
+     SetState(AccountReconcilorState::kScheduled);
+     RegisterWithAllDependencies();
+     FetchDeviceBoundSessions();
+@@ -379,6 +386,26 @@ void AccountReconcilor::StartReconcile(Trigger trigger) {
+     return;
+   }
+ 
++  // accounts.google.com/ListAccounts, 4 requests on a profile that has never
++  // signed in. Not a flag: ChromeAccountReconcilorDelegate::IsReconcileEnabled()
++  // is true under Dice, which is the desktop Linux default, and no switch
++  // reaches it. Stock sends this too, so it is not a fork tell -- it is
++  // suppressed for the connection budget.
++  //
++  // THE BACKSTOP, not the gate. Initialize() carries the same condition, so with
++  // the knob on this object is never registered with IdentityManager and none of
++  // the observer triggers below can fire. This covers EnableReconcile(), which
++  // registers on its own when a delegate re-enables reconciliation, and it lands
++  // in the state the !IsReconcileEnabled() branch a few lines down reaches.
++  //
++  // Placed above the two CHECKs deliberately: they exist for crbug.com/40629374
++  // and the fork stops feeding that diagnostic under this knob, which is the
++  // price of not calling delegate_ at all.
++  if (::base::xrio::SuppressAccountReconcile()) {
++    SetState(AccountReconcilorState::kInactive);
++    return;
++  }
++
+   // TODO(crbug.com/40629374): remove when root cause is found.
+   CHECK(delegate_);
+   CHECK(client_);

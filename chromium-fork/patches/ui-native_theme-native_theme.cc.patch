@@ -1,0 +1,22 @@
+diff --git a/ui/native_theme/native_theme.cc b/ui/native_theme/native_theme.cc
+index 049cbdd2000458534dca9b08c02264661b75f4ca..70f0aea6ef6acdc2014154e690736b56bb3338d3 100644
+--- a/ui/native_theme/native_theme.cc
++++ b/ui/native_theme/native_theme.cc
+@@ -19,6 +19,7 @@
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/observer_list.h"
++#include "base/xrio_persona.h"
+ #include "base/sequence_checker.h"
+ #include "base/time/time.h"
+ #include "base/timer/elapsed_timer.h"
+@@ -594,6 +595,9 @@ ColorProviderKey::ForcedColors NativeTheme::CalculateForcedColors() const {
+ 
+ NativeTheme::PreferredColorScheme NativeTheme::CalculatePreferredColorScheme()
+     const {
++  if (const std::optional<bool> dark = base::xrio::ColorSchemeIsDark()) {
++    return *dark ? PreferredColorScheme::kDark : PreferredColorScheme::kLight;
++  }
+   return IsForcedDarkMode() ? PreferredColorScheme::kDark
+                             : OsSettingsProvider::Get().PreferredColorScheme();
+ }

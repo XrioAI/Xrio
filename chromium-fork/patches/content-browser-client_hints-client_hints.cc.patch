@@ -1,0 +1,39 @@
+diff --git a/content/browser/client_hints/client_hints.cc b/content/browser/client_hints/client_hints.cc
+index ca7e3fd77f2693a40a7654a6c794d9655a2c5c75..d7d4168ad82817795d621374ae72d799b463b9ff 100644
+--- a/content/browser/client_hints/client_hints.cc
++++ b/content/browser/client_hints/client_hints.cc
+@@ -15,6 +15,7 @@
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
++#include "base/xrio_persona.h"
+ #include "base/rand_util.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+@@ -239,8 +240,25 @@ void AddDeviceMemoryHeader(net::HttpRequestHeaders* headers,
+                            bool use_deprecated_version = false) {
+   DCHECK(headers);
+   blink::ApproximatedDeviceMemory::Initialize();
+-  const float device_memory =
++  float device_memory =
+       blink::ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
++  // THE WIRE HAS TO AGREE WITH THE GETTER. navigator_device_memory.cc hooks
++  // the renderer side; unhooked, a page that answers Accept-CH: Device-Memory
++  // receives the HOST's value on every subsequent request while
++  // navigator.deviceMemory reports the drawn class -- one number, two answers,
++  // checkable by the page with no reference machine. Both header names route
++  // through this one function, so this covers Device-Memory and
++  // Sec-CH-Device-Memory together.
++  //
++  // No knob of its own, deliberately: it must follow spoof-hardware and
++  // device-memory exactly, or the two readings can be made to disagree by
++  // configuration, which is the defect rather than the fix. The browser
++  // process harvests its own command line lazily on first read
++  // (base/xrio_config.h), and the draw is seed-deterministic, so this returns
++  // the same class the renderer computes.
++  if (std::optional<float> xrio_memory = ::base::xrio::DeviceMemoryGb()) {
++    device_memory = *xrio_memory;
++  }
+   DCHECK_LT(0.0, device_memory);
+   SetHeaderToDouble(headers,
+                     use_deprecated_version

@@ -1,0 +1,13 @@
+diff --git a/services/device/battery/BUILD.gn b/services/device/battery/BUILD.gn
+index 62d9b51b0076835040988f3d0539736ccbe68ac3..3e823ef1ab68819d8f917f8574e44e5b361b10bd 100644
+--- a/services/device/battery/BUILD.gn
++++ b/services/device/battery/BUILD.gn
+@@ -19,6 +19,8 @@ if (!is_android) {
+       "battery_status_manager.h",
+       "battery_status_service.cc",
+       "battery_status_service.h",
++      "xrio_battery_persona.cc",
++      "xrio_battery_persona.h",
+     ]
+ 
+     configs += [ "//build/config/compiler:wexit_time_destructors" ]

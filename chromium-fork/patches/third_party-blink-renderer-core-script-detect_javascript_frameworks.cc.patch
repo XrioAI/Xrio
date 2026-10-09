@@ -1,0 +1,23 @@
+diff --git a/third_party/blink/renderer/core/script/detect_javascript_frameworks.cc b/third_party/blink/renderer/core/script/detect_javascript_frameworks.cc
+index 0c09098baa338066dea00060b6a05bf9793ac89f..638f50a353fb3e63b70c636d930617358b77e628 100644
+--- a/third_party/blink/renderer/core/script/detect_javascript_frameworks.cc
++++ b/third_party/blink/renderer/core/script/detect_javascript_frameworks.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/script/detect_javascript_frameworks.h"
+ 
++#include "base/xrio_persona.h"
++
+ #include "base/feature_list.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/loader/javascript_framework_detection.h"
+@@ -396,6 +398,9 @@ void TraverseTreeForFrameworks(Document& document,
+ }  // namespace
+ 
+ void DetectJavascriptFrameworksOnLoad(Document& document) {
++  if (::base::xrio::SuppressFrameworkDetection())
++    return;
++
+   LocalFrame* const frame = document.GetFrame();
+   if (!frame || !frame->IsOutermostMainFrame() ||
+       !document.Url().ProtocolIsInHttpFamily() ||

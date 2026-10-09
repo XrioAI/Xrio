@@ -1,0 +1,36 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index b8eeec779ce30b20cc550f12cfda599c4604ced3..12dfc847c52ed1afe7dc447a06358e3529af6450 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -29,6 +29,7 @@
+ #include "base/process/process.h"
+ #include "base/process/process_handle.h"
+ #include "base/profiler/thread_group_profiler.h"
++#include "base/xrio_config_file.h"
+ #include "base/rand_util.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -1181,6 +1182,23 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+   ObjcEvilDoers::ZombieEnable(true, is_browser ? 10000 : 1000);
+ #endif
+ 
++  // xrio knob configuration: merge --xrio-config-file, validate every
++  // --xrio-* switch against the registry, publish the result, and answer
++  // --xrio-dump-config. Logic and rationale in base/xrio_config_file.h --
++  // including why blocking is permitted at this callback and why a bad knob
++  // refuses the launch instead of failing closed. This hunk only maps the
++  // outcome onto chrome's result codes, which base cannot name.
++  {
++    const base::xrio::StartupOutcome xrio_outcome =
++        base::xrio::ApplyStartupConfiguration(
++            base::CommandLine::ForCurrentProcess(), is_browser);
++    if (xrio_outcome != base::xrio::StartupOutcome::kContinue) {
++      return xrio_outcome == base::xrio::StartupOutcome::kExitSuccess
++                 ? 0
++                 : CHROME_RESULT_CODE_UNSUPPORTED_PARAM;
++    }
++  }
++
+   content::Profiling::ProcessStarted();
+ 
+   // Setup tracing sampler profiler as early as possible at startup if needed.

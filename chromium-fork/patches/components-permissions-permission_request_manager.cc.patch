@@ -1,0 +1,35 @@
+diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
+index 0fb19de52c5e119d2dbfe9de84e204c2655d50d6..a48567d8ff699946ed0bf6bcd4b4bf7acf51ded5 100644
+--- a/components/permissions/permission_request_manager.cc
++++ b/components/permissions/permission_request_manager.cc
+@@ -23,6 +23,7 @@
+ #include "base/metrics/user_metrics_action.h"
+ #include "base/notreached.h"
+ #include "base/observer_list.h"
++#include "base/xrio_persona.h"
+ #include "base/rand_util.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/clock.h"
+@@ -226,7 +227,21 @@ void PermissionRequestManager::AddRequest(
+     return;
+   }
+ 
+-  if (display::Screen::Get()->IsHeadless()) {
++  // Upstream denies EVERY permission request the moment the screen is headless,
++  // with no feature flag and no content-settings type filter. That is a stable,
++  // page-triggerable difference from the same binary run headed, where an
++  // undecided request stays pending. Widened, not removed: the knob ships FALSE,
++  // so absent configuration is upstream behaviour exactly.
++  //
++  // This does not invent an answer, and the two guards around it are why. The
++  // --deny-permission-prompts policy is checked ABOVE, so an explicit deny still
++  // wins; and a content setting that is already granted or blocked is resolved
++  // by PermissionContextBase and never reaches AddRequest at all. Turning this
++  // on hands the undecided case to Chrome's own state machine, which is what
++  // headed does. See base::xrio::HeadfulPermissionPromptsEnabled() for why this
++  // one defaults off while the other identity rows default on.
++  if (display::Screen::Get()->IsHeadless() &&
++      !::base::xrio::HeadfulPermissionPromptsEnabled()) {
+     request->PermissionDenied();
+     return;
+   }

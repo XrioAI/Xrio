@@ -1,0 +1,38 @@
+diff --git a/components/update_client/update_checker.cc b/components/update_client/update_checker.cc
+index 1b0e06f86ca18361cd654c873d91c0d229cdbc6b..cbffff625222ef72ea431f19de8a3c3d8da46c76 100644
+--- a/components/update_client/update_checker.cc
++++ b/components/update_client/update_checker.cc
+@@ -24,6 +24,7 @@
+ #include "base/logging.h"
+ #include "base/memory/ref_counted.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/xrio_persona.h"
+ #include "base/sequence_checker.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/thread_pool.h"
+@@ -110,6 +111,25 @@ void UpdateCheckerImpl::CheckForUpdates(
+ 
+   update_check_callback_ = std::move(update_check_callback);
+ 
++  // update.googleapis.com/service/update2/json (8 requests) and the
++  // edgedl.me.gvt1.com/edgedl/diffgen-puffin payload that follows it (4) survive
++  // --disable-component-update, which only removed the edgedl/release2 .crx3
++  // download. This gate sits BELOW every subsystem that could be responsible --
++  // the component updater, the extensions updater and the updater scheduler all
++  // funnel through UpdateChecker -- so it does not depend on attributing the
++  // ping, and the differential payload cannot follow a check that never went
++  // out.
++  //
++  // ServiceError::UPDATE_DISABLED is the honest code, and this failure path is
++  // one every offline machine already reaches: the callback runs, the caller
++  // records the error, nothing retries in a tight loop.
++  if (::base::xrio::SuppressUpdatePings()) {
++    UpdateCheckFailed(ErrorCategory::kService,
++                      static_cast<int>(ServiceError::UPDATE_DISABLED),
++                      /*retry_after_sec=*/0);
++    return;
++  }
++
+   auto check_for_updates_invoker = base::BindOnce(
+       &UpdateCheckerImpl::CheckForUpdatesHelper, weak_factory_.GetWeakPtr(),
+       context, config_->UpdateUrl(), additional_attributes);

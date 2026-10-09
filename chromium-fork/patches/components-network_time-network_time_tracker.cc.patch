@@ -1,0 +1,23 @@
+diff --git a/components/network_time/network_time_tracker.cc b/components/network_time/network_time_tracker.cc
+index ada56340053a010e8cd88045ae96ce3695b51619..8a7b3c7fe9f5ccdd6828f8390d23b4cc5461c9ce 100644
+--- a/components/network_time/network_time_tracker.cc
++++ b/components/network_time/network_time_tracker.cc
+@@ -15,6 +15,7 @@
+ #include "base/check.h"
+ #include "base/check_op.h"
+ #include "base/functional/bind.h"
++#include "base/xrio_persona.h"
+ #include "base/i18n/time_formatting.h"
+ #include "base/json/json_reader.h"
+ #include "base/logging.h"
+@@ -619,6 +620,10 @@ void NetworkTimeTracker::QueueCheckTime(base::TimeDelta delay) {
+ }
+ 
+ bool NetworkTimeTracker::ShouldIssueTimeQuery() {
++  if (::base::xrio::SuppressNetworkTimeQuery()) {
++    return false;
++  }
++
+   // Do not query the time service if the feature is not enabled.
+   if (!AreTimeFetchesEnabled()) {
+     return false;

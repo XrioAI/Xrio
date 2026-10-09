@@ -1,0 +1,19 @@
+diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+index f5c0db2d1b58de1fb54aa6545de8ac0fb177319e..ad576a292df913d01066171be24e5c7e2985c99c 100644
+--- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
++++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+@@ -4,11 +4,14 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ 
++#include "base/xrio_persona.h"
+ #include "base/system/sys_info.h"
+ 
+ namespace blink {
+ 
+ unsigned NavigatorConcurrentHardware::hardwareConcurrency() const {
++  if (std::optional<unsigned> xrio_cores = ::base::xrio::HardwareConcurrency())
++    return xrio_cores.value();
+   return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
+ }
+ 

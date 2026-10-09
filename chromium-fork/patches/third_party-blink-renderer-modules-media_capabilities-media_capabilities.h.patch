@@ -1,0 +1,13 @@
+diff --git a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.h b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.h
+index 2d9f523baa1a738e12bfff6a6ede1885f4471bb2..544097f46cb337f7eff5a6ddd8182c531bee0b91 100644
+--- a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.h
++++ b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.h
+@@ -164,6 +164,8 @@ class MODULES_EXPORT MediaCapabilities final
+       return query_type == QueryType::kWebrtcDecoding ||
+              query_type == QueryType::kWebrtcEncoding;
+     }
++    // XRIO: which persona codec family this request resolves for; 0 = kNone.
++    uint32_t xrio_media_key = 0u;
+   };
+ 
+   FRIEND_TEST_ALL_PREFIXES(MediaCapabilitiesWebrtcTests,

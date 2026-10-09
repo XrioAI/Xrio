@@ -1,0 +1,26 @@
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+index bc4c0c6ca00c1976e6ee013a467a9a585c79454f..3c98179dd1ec340991e9d580234f767bae3b018f 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+@@ -26,6 +26,8 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#include "base/xrio_persona.h"
++#include "base/xrio_perturb.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
+ 
+ #include <memory>
+@@ -197,6 +199,12 @@ AudioBuffer::AudioBuffer(AudioBus* bus)
+       return;
+     }
+     channel_data_array->AsSpan().copy_from(bus->Channel(i)->Span());
++    // Once, here, not on read: getChannelData() hands back a live reference, so
++    // perturbing there would compound with every call and two reads of the same
++    // buffer would disagree.
++    if (::base::xrio::PerturbAudioBuffersEnabled()) {
++      ::base::xrio::ScaleAudioChannel(channel_data_array->AsSpan(), i);
++    }
+     channels_.push_back(channel_data_array);
+   }
+ }

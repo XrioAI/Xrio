@@ -1,0 +1,22 @@
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+index 66e05f0dd9d7e87a02fc6e76ce74d4d149f4a943..96cbeb7794dc46fdab79c2f6a53a5fa4ab61468c 100644
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -39,6 +39,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/observer_list.h"
++#include "base/xrio_persona.h"
+ #include "base/task/common/task_annotator.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+@@ -1927,7 +1928,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
+ #endif
+ 
+   RuntimeEnabledFeatures::SetTranslateServiceEnabled(
+-      prefs.translate_service_available);
++      prefs.translate_service_available ||
++      ::base::xrio::ExposeHrefTranslate());
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+   if (web_view_impl->GetPage()) {

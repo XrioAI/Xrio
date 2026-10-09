@@ -1,0 +1,50 @@
+diff --git a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
+index 1dea63eee609e98e7ef77872f34cc52bafccb13b..cca5bf70c4e1b7876f284c0b84e1504c6f6bd98d 100644
+--- a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
++++ b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "third_party/blink/renderer/modules/media_capabilities/media_capabilities.h"
+ 
++#include "base/xrio_media_table.h"
++#include "third_party/blink/renderer/modules/media_capabilities/xrio_media_persona.h"
++
+ #include <memory>
+ #include <optional>
+ #include <sstream>
+@@ -1400,6 +1403,11 @@ void MediaCapabilities::GetPerfInfo(
+ 
+   const int callback_id = InsertCallbackAndScheduleTimeout(
+       resolver, access, request_time, QueryType::kDecoding);
++  // XRIO: remember which persona codec family this request is, so the resolve
++  // below can consult the decode table even though nothing else in
++  // PendingCallbackState carries the configuration.
++  pending_cb_map_.at(callback_id)->xrio_media_key =
++      static_cast<uint32_t>(base::xrio::MediaPersonaFamily(video_codec));
+ 
+   media::mojom::blink::PredictionFeaturesPtr features =
+       media::mojom::blink::PredictionFeatures::New(
+@@ -1556,6 +1564,11 @@ void MediaCapabilities::ResolveCallbackIfReady(int callback_id) {
+ 
+   RecordTimedOut(pending_cb->query_type, false);
+ 
++  // XRIO: the persona's decode table answers for this family when it has a row,
++  // and says nothing otherwise -- stock SwiftShader answers stand for every
++  // family the capture did not measure.
++  base::xrio::ApplyDecodingPersona(
++      static_cast<base::xrio::MediaFamily>(pending_cb->xrio_media_key), info);
+   pending_cb->resolver->DowncastTo<MediaCapabilitiesDecodingInfo>()->Resolve(
+       std::move(info));
+   pending_cb_map_.erase(callback_id);
+@@ -1735,7 +1748,10 @@ void MediaCapabilities::OnCallbackTimeout(int callback_id) {
+ 
+   info->setSupported(supported);
+   info->setSmooth(pending_cb->db_is_smooth.value_or(false));
+-
++  // XRIO: a timed-out query answers from the same decode table as one that
++  // completed, or the fallback would leak the stock answer.
++  base::xrio::ApplyDecodingPersona(
++      static_cast<base::xrio::MediaFamily>(pending_cb->xrio_media_key), info);
+   pending_cb->resolver->DowncastTo<MediaCapabilitiesDecodingInfo>()->Resolve(
+       info);
+ 

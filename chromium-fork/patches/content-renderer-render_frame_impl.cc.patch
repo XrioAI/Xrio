@@ -1,0 +1,24 @@
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+index 822048a25cdf5ee519fda0ab09a48c3ee71d5651..003ea9e78d36f5de5bbb13a3f46772ada50c308d 100644
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -39,6 +39,7 @@
+ #include "base/notreached.h"
+ #include "base/observer_list.h"
+ #include "base/process/process.h"
++#include "base/xrio_persona.h"
+ #include "base/run_loop.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_split.h"
+@@ -1295,6 +1296,11 @@ WindowOpenDisposition NavigationPolicyToDisposition(
+     case blink::kWebNavigationPolicyNewWindow:
+       return WindowOpenDisposition::NEW_WINDOW;
+     case blink::kWebNavigationPolicyNewPopup:
++      // A popup opens a window the driver has no handle on, so whatever it
++      // navigates to escapes the render entirely. As a foreground tab it stays
++      // addressable and its response is still captured (catalog SS1 #25).
++      if (::base::xrio::PopupOpensAsForegroundTab())
++        return WindowOpenDisposition::NEW_FOREGROUND_TAB;
+       return WindowOpenDisposition::NEW_POPUP;
+     case blink::kWebNavigationPolicyPictureInPicture:
+       return WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;

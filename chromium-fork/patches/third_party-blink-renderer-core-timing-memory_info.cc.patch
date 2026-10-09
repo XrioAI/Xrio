@@ -1,0 +1,38 @@
+diff --git a/third_party/blink/renderer/core/timing/memory_info.cc b/third_party/blink/renderer/core/timing/memory_info.cc
+index b17ada56e6d93cc3f40a867099afd73b19426890..68f28a7e1b204a179fdea284fd0cd9a264271839 100644
+--- a/third_party/blink/renderer/core/timing/memory_info.cc
++++ b/third_party/blink/renderer/core/timing/memory_info.cc
+@@ -37,6 +37,7 @@
+ #include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+ #include "third_party/blink/renderer/platform/wtf/math_extras.h"
++#include "base/xrio_persona.h"
+ #include "v8/include/v8.h"
+ 
+ namespace blink {
+@@ -100,6 +101,25 @@ class HeapSizeCache {
+     info_.used_js_heap_size = QuantizeMemorySize(info_.used_js_heap_size);
+     info_.total_js_heap_size = QuantizeMemorySize(info_.total_js_heap_size);
+     info_.js_heap_size_limit = QuantizeMemorySize(info_.js_heap_size_limit);
++    // AFTER the quantiser and only on this path, both deliberately.
++    //
++    // performance.memory is Chrome-only, non-standard and still shipping, and
++    // the limit is a function of the HOST's physical memory while
++    // navigator.deviceMemory reports the drawn class -- two numbers a page can
++    // compare with no reference machine of its own. On any machine with 8 GB or
++    // more they agree by saturation and there is nothing to do; below it the
++    // host reports a smaller bucket than the persona claims, and that is the
++    // contradiction. base::xrio::JsHeapSizeLimit() returns a value only where
++    // one has been measured, so this is a no-op everywhere else.
++    //
++    // Not on the kPrecise path above: with --enable-precise-memory-info a real
++    // Chrome reports an unquantised limit whose young-generation terms depend
++    // on the host, and we have not measured those for a claimed class. Leaving
++    // the host's own value there is self-consistent; substituting a bucketed
++    // one under a flag that exists to remove bucketing would be its own tell.
++    if (std::optional<uint64_t> xrio_limit = ::base::xrio::JsHeapSizeLimit()) {
++      info_.js_heap_size_limit = *xrio_limit;
++    }
+   }
+ 
+   std::optional<base::TimeTicks> last_update_time_;

@@ -1,0 +1,7 @@
+/src
+/dist/
+/.widevine-staged
+/personas/*
+!/personas/.gitkeep
+__pycache__/
+/.venv/
