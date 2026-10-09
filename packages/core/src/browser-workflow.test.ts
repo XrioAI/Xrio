@@ -19,7 +19,7 @@ import {
 
 import { defaultCacheDir } from "./cache-dir.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
-import type { Deadline } from "./deadline.ts";
+import type { Clock, Deadline } from "./deadline.ts";
 import { isXrioError } from "./errors.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import type { IdentityIntent } from "./humanizer/intent.ts";
@@ -47,6 +47,8 @@ import { noPins } from "./testing/no-pins.ts";
 import { plannedScrapes } from "./testing/planned-scrapes.ts";
 import type { PlannedScrapes, PlanningDependencies } from "./testing/planned-scrapes.ts";
 import { stageTimeline } from "./testing/stage-timeline.ts";
+
+const RETRY_TIMER_WAIT_MS = 15_000;
 
 const plannedVisits = (
   driver: BrowserDriver,
@@ -1861,14 +1863,44 @@ describe("the launch identity check", () => {
     });
   });
 
-  it("reads again once when Chrome reports an unsized window, then evaluates the sized one", async () => {
+  it("reads again once Chrome reports an unsized window, after 250 ms on the deadline's clock", async () => {
+    const { advance, clock } = manualClock();
+    const delays: number[] = [];
+
+    const watched: Clock = {
+      now: clock.now,
+      setTimer: (delayMs, onTimeout) => {
+        delays.push(delayMs);
+
+        return clock.setTimer(delayMs, onTimeout);
+      },
+    };
+
     const browsers = plannedVisits(cdpDriver, 1, { random: fixedRandom });
-    using deadline = startDeadline(10_000);
+    using deadline = startDeadline(10_000, undefined, watched);
+
+    let settled = false;
 
     const { document } = browsers.visit({
       ...(await normalRequest(deadline)),
       browserPath: await fakeChromePath("unsized-window"),
     });
+
+    void document.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await expect.poll(() => delays.includes(250), { timeout: RETRY_TIMER_WAIT_MS }).toBeTruthy();
+    advance(249);
+    await nextTurn();
+    expect(settled).toBeFalsy();
+
+    advance(1);
 
     await expect(document).resolves.toMatchObject({
       identity: { observed: { window: { outerHeight: 1018, outerWidth: 1680 } } },
