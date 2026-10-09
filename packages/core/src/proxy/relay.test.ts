@@ -623,3 +623,40 @@ describe("a relay told its first URL", () => {
     expect(authoritiesSeenBy(fake)).toStrictEqual(["origin.test:443"]);
   });
 });
+
+describe("a relay lent to a later scrape", () => {
+  it("reports to the scrape it is lent to only the failures of the tunnels it opens", async () => {
+    const { advance, clock } = manualClock();
+
+    await using fake = await startFakeHttpProxy({ silent: true, tunnelTo: 0 });
+
+    await using relay = await startRelay(
+      proxyEndpoint(fake.url),
+      startDeadline(60_000, undefined, clock),
+      "token",
+    );
+
+    const earlierReply = readAll(await sendConnect(relay.url, "origin.test:443"));
+
+    await vi.waitFor(() => {
+      expect(fake.requests).toHaveLength(1);
+    });
+    relay.lendTo(startDeadline(60_000, undefined, clock));
+    advance(10_000);
+    await earlierReply;
+    const afterEarlierTunnel = relay.failureFor("origin.test")?.code;
+
+    const laterReply = readAll(await sendConnect(relay.url, "origin.test:443"));
+
+    await vi.waitFor(() => {
+      expect(fake.requests).toHaveLength(2);
+    });
+    advance(10_000);
+    await laterReply;
+
+    expect([afterEarlierTunnel, relay.failureFor("origin.test")?.code]).toStrictEqual([
+      undefined,
+      "NETWORK_ERROR",
+    ]);
+  });
+});

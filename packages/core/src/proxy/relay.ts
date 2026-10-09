@@ -94,6 +94,7 @@ interface ClientAdmission {
 export interface Relay extends AsyncDisposable {
   readonly url: string;
   readonly failureFor: (hostname: string) => XrioError | undefined;
+  readonly lendTo: (deadline: Deadline) => void;
 }
 
 const unbracketed = (hostname: string): string => hostname.replaceAll(IPV6_BRACKETS, "");
@@ -378,7 +379,7 @@ class ProxyRelay {
   readonly #deadline: Deadline;
   readonly #proxyAuthorization: string | undefined;
   readonly #clientAuthorization: Buffer | undefined;
-  readonly #sockets = new Set<Duplex>();
+  readonly #sockets: Set<Duplex>;
   readonly #hostFailures = new Map<string, XrioError>();
   #proxyFailure: XrioError | undefined;
   #held: HeldTunnel | undefined;
@@ -387,10 +388,12 @@ class ProxyRelay {
     upstream: ProxyEndpoint | undefined,
     deadline: Deadline,
     clientAuthorization: Buffer | undefined,
+    sockets: Set<Duplex>,
   ) {
     this.#upstream = upstream;
     this.#deadline = deadline;
     this.#clientAuthorization = clientAuthorization;
+    this.#sockets = sockets;
 
     const credentials = upstream?.credentials;
 
@@ -913,7 +916,8 @@ export const startRelay = async (
   firstUrl?: URL,
 ): Promise<Relay> => {
   const { authorization, userinfo } = clientAdmissionFor(admission);
-  const relay = new ProxyRelay(upstream, deadline, authorization);
+  const sockets = new Set<Duplex>();
+  let relay = new ProxyRelay(upstream, deadline, authorization, sockets);
   const server = createServer();
 
   server.on("connection", (socket: Socket) => {
@@ -953,6 +957,9 @@ export const startRelay = async (
       await closed;
     },
     failureFor: (hostname) => relay.failureFor(hostname),
+    lendTo: (next) => {
+      relay = new ProxyRelay(upstream, next, authorization, sockets);
+    },
     url: `http://${userinfo}127.0.0.1:${port}`,
   };
 };
