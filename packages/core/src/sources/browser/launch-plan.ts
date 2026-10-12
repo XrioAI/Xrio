@@ -1,6 +1,8 @@
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { invalidOptions } from "../../errors.ts";
+import type { PresentedUserAgent } from "../../humanizer/contracts.ts";
 import { isMinted } from "../../humanizer/inputs.ts";
 import type { BrowserInputs } from "../../humanizer/inputs.ts";
 import { isOwnedSwitch } from "../../humanizer/owned-inputs.ts";
@@ -36,9 +38,19 @@ export interface LaunchPlan {
   env: Readonly<Record<string, string>>;
   directories: LaunchDirectories;
   files: readonly ProfileFile[];
+  presentedUserAgent: PresentedUserAgent | undefined;
+}
+
+interface ProbeLaunch {
+  readonly plan: LaunchPlan;
+  readonly page: string;
 }
 
 const IDENTITY_FILES_DIRECTORY = "identity-files";
+
+const PROBE_PAGE = "probe.html";
+
+const PROBE_PAGE_CONTENTS = "<!DOCTYPE html><title></title>";
 
 const SWITCH = /^--[^\s=-][^\s=]*(?:=.*)?$/su;
 
@@ -173,13 +185,17 @@ const proxySwitches = (proxyServer: string | undefined): string[] =>
         `--host-resolver-rules=${RESOLVE_NOTHING_LOCALLY}`,
       ];
 
+const quietSwitches = [
+  `--disable-features=${DISABLED_FEATURES.join(",")}`,
+  "--disable-component-update",
+  "--disable-domain-reliability",
+] as const;
+
 const xrioSwitches = (
   { identity, proxyServer }: LaunchRequest,
   directories: LaunchDirectories,
 ): string[] => [
-  `--disable-features=${DISABLED_FEATURES.join(",")}`,
-  "--disable-component-update",
-  "--disable-domain-reliability",
+  ...quietSwitches,
   ...proxySwitches(proxyServer),
   ...identity.switches,
   `--crash-dumps-dir=${directories.crashes}`,
@@ -210,14 +226,18 @@ const identityFileEnvironment = (
     identity.files.map(({ name, variable }) => [variable, identityFilePath(directories, name)]),
   );
 
-const childEnvironment = (request: LaunchRequest, directories: LaunchDirectories) => ({
-  HOME: directories.home,
-  ...request.identity.environment,
-  ...identityFileEnvironment(request, directories),
+const scratchEnvironment = (directories: LaunchDirectories) => ({
   TMPDIR: directories.tmp,
   XDG_CACHE_HOME: path.join(directories.home, ".cache"),
   XDG_CONFIG_HOME: path.join(directories.home, ".config"),
   XDG_DATA_HOME: path.join(directories.home, ".local", "share"),
+});
+
+const childEnvironment = (request: LaunchRequest, directories: LaunchDirectories) => ({
+  HOME: directories.home,
+  ...request.identity.environment,
+  ...identityFileEnvironment(request, directories),
+  ...scratchEnvironment(directories),
   ...displayEnvironment(request),
 });
 
@@ -264,5 +284,32 @@ export const planLaunch = (request: LaunchRequest): LaunchPlan => {
     env: childEnvironment(request, directories),
     executable: request.browserPath,
     files: profileFiles(request, directories),
+    presentedUserAgent: request.identity.userAgent,
+  };
+};
+
+export const planHeadlessProbe = (browserPath: string, scratchDir: string): ProbeLaunch => {
+  const directories = { ...directoriesIn(scratchDir), profile: scratchDir };
+  const file = path.join(directories.home, PROBE_PAGE);
+  const page = pathToFileURL(file).href;
+
+  return {
+    page,
+    plan: {
+      args: [
+        ...chromeBaselineSwitches,
+        ...chromeHeadlessSwitches,
+        ...quietSwitches,
+        `--crash-dumps-dir=${directories.crashes}`,
+        `--user-data-dir=${directories.profile}`,
+        "--remote-debugging-pipe",
+        page,
+      ],
+      directories,
+      env: { HOME: directories.home, ...scratchEnvironment(directories) },
+      executable: browserPath,
+      files: [{ contents: PROBE_PAGE_CONTENTS, path: file }],
+      presentedUserAgent: undefined,
+    },
   };
 };

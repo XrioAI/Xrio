@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { Deadline } from "../../../deadline.ts";
+import type { PresentedUserAgent } from "../../../humanizer/contracts.ts";
 import type { SeedCookie } from "../../../seed-cookies.ts";
 import { spawnChrome } from "../browser-process.ts";
 import type { SpawnedChrome } from "../browser-process.ts";
@@ -30,11 +31,19 @@ import type {
   ResultOf,
   Send,
   TargetSession,
+  UserAgentOverride,
 } from "./protocol.ts";
 
 const PAGES_ONLY: ParamsOf<"Target.setAutoAttach", "browser"> = {
   autoAttach: true,
   filter: [{ type: "page" }],
+  flatten: true,
+  waitForDebuggerOnStart: true,
+};
+
+const PAGES_AND_SHARED_WORKERS: ParamsOf<"Target.setAutoAttach", "browser"> = {
+  autoAttach: true,
+  filter: [{ type: "page" }, { type: "shared_worker" }],
   flatten: true,
   waitForDebuggerOnStart: true,
 };
@@ -588,7 +597,29 @@ const closeBrowser = async (
   await waitForGroupExit(chrome.pid, budget);
 };
 
-const connect = (chrome: SpawnedChrome, lifetime: AbortSignal): Connected => {
+const overrideOf = ({ metadata, userAgent }: PresentedUserAgent): UserAgentOverride => ({
+  userAgent,
+  userAgentMetadata: {
+    architecture: metadata.architecture,
+    bitness: metadata.bitness,
+    brands: metadata.brands.map(({ brand, version }) => ({ brand, version })),
+    formFactors: [...metadata.formFactors],
+    // oxlint-disable-next-line typescript/no-deprecated -- Chrome still answers uaFullVersion and Sec-CH-UA-Full-Version from it; without it both read empty.
+    fullVersion: metadata.fullVersion,
+    fullVersionList: metadata.fullVersionList.map(({ brand, version }) => ({ brand, version })),
+    mobile: metadata.mobile,
+    model: metadata.model,
+    platform: metadata.platform,
+    platformVersion: metadata.platformVersion,
+    wow64: metadata.wow64,
+  },
+});
+
+const connect = (
+  chrome: SpawnedChrome,
+  lifetime: AbortSignal,
+  presented: PresentedUserAgent | undefined,
+): Connected => {
   const firstTab = Promise.withResolvers<Tab>();
   let tab: Tab | undefined;
   let open = true;
@@ -597,28 +628,40 @@ const connect = (chrome: SpawnedChrome, lifetime: AbortSignal): Connected => {
     throw new DriverError({ kind: "launch-failed", problem: "Chrome opened no debugging pipe." });
   }
 
-  const send = connectOverPipe(chrome.pipe, lifetime, (event, reply) => {
-    if (event.type === "attached" && event.target.scope === "main") {
-      tab = new Tab(reply, event.target, lifetime);
-      firstTab.resolve(tab);
+  const userAgent = presented === undefined ? undefined : overrideOf(presented);
 
-      return;
-    }
+  const send = connectOverPipe(
+    chrome.pipe,
+    lifetime,
+    (event, reply) => {
+      if (event.type === "attached" && event.target.scope === "main") {
+        tab = new Tab(reply, event.target, lifetime);
+        firstTab.resolve(tab);
 
-    if (event.type === "closed") {
-      open = false;
-      firstTab.reject(new DriverError({ kind: "browser-gone" }));
-    }
+        return;
+      }
 
-    tab?.receive(event);
-  });
+      if (event.type === "closed") {
+        open = false;
+        firstTab.reject(new DriverError({ kind: "browser-gone" }));
+      }
+
+      tab?.receive(event);
+    },
+    userAgent,
+  );
 
   const connection: Connection = { isOpen: () => open, send };
 
   const opened = (async (): Promise<DriverBrowser> => {
     const configured = Promise.all([
       send(BROWSER, "Browser.setDownloadBehavior", { behavior: "deny" }, lifetime),
-      send(BROWSER, "Target.setAutoAttach", PAGES_ONLY, lifetime),
+      send(
+        BROWSER,
+        "Target.setAutoAttach",
+        userAgent === undefined ? PAGES_ONLY : PAGES_AND_SHARED_WORKERS,
+        lifetime,
+      ),
     ]);
 
     const [opener, { product }] = await Promise.all([
@@ -659,7 +702,7 @@ export const cdpDriver: BrowserDriver = {
     const chrome = spawnChrome(plan.executable, plan.args, plan.env);
 
     owned(chrome.pid);
-    const { opened, ...connection } = connect(chrome, deadline.signal);
+    const { opened, ...connection } = connect(chrome, deadline.signal, plan.presentedUserAgent);
 
     try {
       return await untilAborted(opened, stage.signal);

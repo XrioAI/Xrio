@@ -8,8 +8,10 @@ import type { ResolvedConfig } from "./config.ts";
 import { createScrapes } from "./coordinator.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { XrioError } from "./errors.ts";
+import type { HostCapabilities, PresentedUserAgent } from "./humanizer/contracts.ts";
 import { httpIdentity } from "./humanizer/humanizer.ts";
 import { canonicalZone } from "./humanizer/zone-name.ts";
+import type { ScrapeIntent } from "./intent.ts";
 import { HeldDeadline } from "./lifetime.ts";
 import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { outcomeOf } from "./outcome.ts";
@@ -88,6 +90,7 @@ interface HarnessOptions {
   readonly releaseHold?: () => void;
   readonly random?: (size: number) => Uint8Array;
   readonly device?: SessionHold["device"];
+  readonly headlessUserAgent?: PresentedUserAgent;
 }
 
 const harness = (options: HarnessOptions = {}) => {
@@ -143,11 +146,18 @@ const harness = (options: HarnessOptions = {}) => {
     },
     host: {
       chromeMajorFor: async () => await Promise.resolve(154),
-      snapshotFor: async (binary) => {
+      snapshotFor: async (binary, _deadline, mode) => {
         stage("host");
         events.push(`binary:${binary ?? "none"}`);
 
-        return await Promise.resolve({ permittedCpus: 32, platform: "linux" });
+        const capabilities: HostCapabilities = { permittedCpus: 32, platform: "linux" };
+        const { headlessUserAgent } = options;
+
+        if (mode === "headless" && headlessUserAgent !== undefined) {
+          return await Promise.resolve({ ...capabilities, headlessUserAgent });
+        }
+
+        return await Promise.resolve(capabilities);
       },
     },
     proxyInfo: options.proxyInfo,
@@ -1910,5 +1920,72 @@ describe("fresh-exit retries", () => {
       { record: replayedRecord, seed: "00000000000000a1" },
     ]);
     expect(new Set(usernamesOf(plans)).size).toBe(2);
+  });
+});
+
+describe("headless stock Chrome's user agent", () => {
+  const headedUserAgent: PresentedUserAgent = {
+    metadata: {
+      architecture: "x86",
+      bitness: "64",
+      brands: [{ brand: "Chromium", version: "154" }],
+      formFactors: ["Desktop"],
+      fullVersion: "154.0.8037.57",
+      fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+      mobile: false,
+      model: "",
+      platform: "Linux",
+      platformVersion: "6.8.0",
+      wow64: false,
+    },
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36",
+  };
+
+  const launchOf = async (mode: "headed" | "headless", session: ScrapeIntent["session"]) => {
+    const { plans, scrapes } = harness({ headlessUserAgent: headedUserAgent });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        { ...browserIntent, session, source: { ...browserIntent.source, mode } },
+        deadline,
+      ).answer;
+      const [plan] = plans;
+
+      if (plan.kind !== "browser") {
+        throw new Error("Expected a browser plan.");
+      }
+
+      const { switches, userAgent } = plan.identity.inputs;
+
+      return { switches: switches.filter((name) => name.startsWith("--user-agent")), userAgent };
+    } finally {
+      await scrapes.close();
+    }
+  };
+
+  it.each([
+    { name: "anonymous", session: { kind: "anonymous" } },
+    { name: "named", session: { kind: "named", name: "account" } },
+    {
+      name: "pooled",
+      session: { kind: "pool", name: "accounts", site: "https://example.com", size: 2 },
+    },
+  ] as const)(
+    "presents headed Chrome's user agent in a headless $name scrape",
+    async ({ session }) => {
+      await expect(launchOf("headless", session)).resolves.toStrictEqual({
+        switches: ["--user-agent=Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36"],
+        userAgent: headedUserAgent,
+      });
+    },
+  );
+
+  it("leaves a headed named session scrape's user agent to Chrome", async () => {
+    await expect(launchOf("headed", { kind: "named", name: "account" })).resolves.toStrictEqual({
+      switches: [],
+      userAgent: undefined,
+    });
   });
 });

@@ -213,6 +213,30 @@ export interface HostRenderer {
   readonly renderer: string;
 }
 
+interface Brand {
+  readonly brand: string;
+  readonly version: string;
+}
+
+export interface UserAgentMetadata {
+  readonly brands: readonly Brand[];
+  readonly fullVersionList: readonly Brand[];
+  readonly fullVersion: string;
+  readonly platform: string;
+  readonly platformVersion: string;
+  readonly architecture: string;
+  readonly model: string;
+  readonly mobile: boolean;
+  readonly bitness: string;
+  readonly wow64: boolean;
+  readonly formFactors: readonly string[];
+}
+
+export interface PresentedUserAgent {
+  readonly userAgent: string;
+  readonly metadata: UserAgentMetadata;
+}
+
 export interface HostCapabilities {
   readonly chromeMajor?: number;
   readonly platform: NodeJS.Platform;
@@ -222,15 +246,11 @@ export interface HostCapabilities {
   readonly fork?: ForkFacts;
   readonly fontStack?: FontStackFacts;
   readonly fontEvidence?: FontEvidence;
+  readonly headlessUserAgent?: PresentedUserAgent;
 }
 
 export const knobOf = (capabilities: HostCapabilities, key: string): string | null =>
   capabilities.fork?.knobs[key]?.value ?? null;
-
-interface Brand {
-  readonly brand: string;
-  readonly version: string;
-}
 
 export interface ClientHints {
   readonly architecture: string | null;

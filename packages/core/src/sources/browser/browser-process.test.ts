@@ -31,6 +31,14 @@ const waitForExit = async (pid: number, parent?: AbortSignal): Promise<boolean> 
 
 const SCAN_BUDGET_MS = 1000;
 
+const PROBE_PAGE = /^file:.*\/probe\.html$/u;
+
+const argvIn = (detail: string): readonly string[] => {
+  const argv: unknown = JSON.parse(detail);
+
+  return Array.isArray(argv) ? argv.filter((arg): arg is string => typeof arg === "string") : [];
+};
+
 const createHungPs = async (directory: string): Promise<string> => {
   const pidFile = path.join(directory, "pid");
 
@@ -345,17 +353,18 @@ describe("the browser-argv event", () => {
     }
   });
 
-  it("publishes one event per launch, before browser-launched", async () => {
+  it("publishes one event per launch, the user agent probe's first, before browser-launched", async () => {
     using events = recordLaunchEvents();
 
     await scrapeWith(await fakeChromePath("normal"));
 
-    expect(events.seen).toStrictEqual(["browser-argv", "browser-launched"]);
+    expect(events.seen).toStrictEqual(["browser-argv", "browser-argv", "browser-launched"]);
 
-    const argv: unknown = JSON.parse(events.details[0] ?? "null");
+    const [probe = [], visit = []] = events.details.map(argvIn);
 
-    expect(argv).toContain("--remote-debugging-pipe");
-    expect(argv).toContain("--headless");
+    expect(probe).toStrictEqual(expect.arrayContaining(["--headless", "--remote-debugging-pipe"]));
+    expect(probe.at(-1)).toMatch(PROBE_PAGE);
+    expect(visit).toStrictEqual(expect.arrayContaining(["--headless", "--remote-debugging-pipe"]));
     await expect(leftovers()).resolves.toStrictEqual(nothingLeft);
   });
 
@@ -366,8 +375,8 @@ describe("the browser-argv event", () => {
       code: "BROWSER_LAUNCH_FAILED",
     });
 
-    expect(events.seen).toStrictEqual(["browser-argv", "browser-launched"]);
-    expect(JSON.parse(events.details[0] ?? "null")).toContain("--remote-debugging-pipe");
+    expect(events.seen).toStrictEqual(["browser-argv", "browser-argv", "browser-launched"]);
+    expect(JSON.parse(events.details[1] ?? "null")).toContain("--remote-debugging-pipe");
   });
 
   it("publishes the argv of a launch whose binary cannot be executed", () => {

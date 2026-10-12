@@ -45,6 +45,7 @@ const ALLOWED_COMMANDS = {
   "Network.enable": EVERY_TARGET,
   "Network.getResponseBody": ["main"],
   "Network.setCookies": ["main"],
+  "Network.setUserAgentOverride": EVERY_TARGET,
   "Page.bringToFront": ["main"],
   "Page.createIsolatedWorld": ["main"],
   "Page.enable": ["main"],
@@ -81,8 +82,10 @@ interface AutoAttach {
   readonly flatten: true;
 }
 
-interface PagesOnly extends AutoAttach {
-  readonly filter: [{ readonly type: "page" }];
+interface TopLevelTargets extends AutoAttach {
+  readonly filter:
+    | [{ readonly type: "page" }]
+    | [{ readonly type: "page" }, { readonly type: "shared_worker" }];
 }
 
 interface EveryChild extends AutoAttach {
@@ -128,6 +131,11 @@ interface LeftReleased extends LeftButton {
 
 type MouseInput = MouseMoved | LeftPressed | LeftReleased;
 
+export interface UserAgentOverride {
+  readonly userAgent: string;
+  readonly userAgentMetadata: Protocol.Emulation.UserAgentMetadata;
+}
+
 type Narrowed<Table extends { [Name in Method]: ProtocolParams<Name> }> = Table;
 
 type ParamsIn<Kind extends Scope> = Narrowed<{
@@ -138,6 +146,7 @@ type ParamsIn<Kind extends Scope> = Narrowed<{
   "Network.enable": Kind extends "main" ? PreviewBuffers : NoBodyBuffers;
   "Network.getResponseBody": { readonly requestId: string };
   "Network.setCookies": ProtocolParams<"Network.setCookies">;
+  "Network.setUserAgentOverride": UserAgentOverride;
   "Page.bringToFront": NoParams;
   "Page.createIsolatedWorld": { readonly frameId: string; readonly worldName: "" };
   "Page.enable": NoParams;
@@ -151,7 +160,7 @@ type ParamsIn<Kind extends Scope> = Narrowed<{
     readonly returnByValue: true;
   };
   "Runtime.runIfWaitingForDebugger": NoParams;
-  "Target.setAutoAttach": Kind extends "browser" ? PagesOnly : EveryChild;
+  "Target.setAutoAttach": Kind extends "browser" ? TopLevelTargets : EveryChild;
 }>;
 
 export type ParamsOf<Name extends Method, Kind extends Scope> = ParamsIn<Kind>[Name];

@@ -1,3 +1,5 @@
+import type { PresentedUserAgent } from "./contracts.ts";
+
 export const OWNED_SWITCHES = [
   "--lang",
   "--accept-lang",
@@ -8,6 +10,7 @@ export const OWNED_SWITCHES = [
   "--window-position",
   "--screen-info",
   "--use-fake-device-for-media-stream",
+  "--user-agent",
 ] as const;
 
 export const NATIVE_GL_SWITCHES = [
@@ -280,7 +283,6 @@ const RESERVED_IDENTITY_SWITCHES = [
   "--high-dpi-support",
   "--start-maximized",
   "--start-fullscreen",
-  "--user-agent",
   "--disable-gpu",
   "--disable-software-rasterizer",
   "--disable-webgl",
@@ -349,4 +351,9 @@ export type LaunchInput =
       readonly sink: "local-state";
       readonly name: (typeof OWNED_LOCAL_STATE)[number];
       readonly value: string;
+    }
+  | {
+      readonly sink: "user-agent";
+      readonly name: "presented";
+      readonly value: PresentedUserAgent;
     };

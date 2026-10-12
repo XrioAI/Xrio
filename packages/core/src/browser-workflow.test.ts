@@ -17,6 +17,7 @@ import {
   vi,
 } from "vite-plus/test";
 
+import { defaultCacheDir } from "./cache-dir.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import type { Deadline } from "./deadline.ts";
 import { isXrioError } from "./errors.ts";
@@ -31,6 +32,7 @@ import type { RetireSteps } from "./sources/browser/chrome-scope.ts";
 import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import { killProcessGroup, waitForGroupExit } from "./sources/browser/group-lifetime.ts";
+import { hostFactsFor } from "./sources/browser/host-facts.ts";
 import type { LaunchPlan } from "./sources/browser/launch-plan.ts";
 import type { BrowserDriver } from "./sources/browser/port.ts";
 import { anonymousSessions } from "./testing/anonymous-sessions.ts";
@@ -131,6 +133,15 @@ const removeLeftoverScratch = async (): Promise<void> => {
       await rm(path.join(scratchRoot(), directory), { force: true, recursive: true });
     }),
   );
+};
+
+const probedFakeChrome = async (scenario: string): Promise<string> => {
+  const browserPath = await fakeChromePath(scenario);
+  using deadline = startDeadline(10_000);
+
+  await hostFactsFor(defaultCacheDir()).snapshotFor(browserPath, deadline, "headless");
+
+  return browserPath;
 };
 
 const load = async (scenario: string, timeoutMs = 10_000, signal?: AbortSignal) => {
@@ -551,12 +562,13 @@ describe("browser lifecycle on the fake browser", () => {
     };
 
     const browsers = plannedVisits(observedDriver, 1);
+    const browserPath = await probedFakeChrome("slow-start");
     using deadline = startDeadline(LAUNCH_DEADLINE_MS);
 
     await expect(
       browsers.visit({
         browserArgs: [],
-        browserPath: await fakeChromePath("slow-start"),
+        browserPath,
         deadline,
         mode: "headless",
         pins: noPins,
@@ -683,7 +695,7 @@ const visitOn = async (
 ) => {
   const browsers = plannedVisits(driver, 1, { retire: steps });
   const owner = new AbortController();
-  const browserPath = await fakeChromePath(scenario);
+  const browserPath = await probedFakeChrome(scenario);
   using deadline: Deadline & Disposable = startDeadline(timeoutMs);
 
   const visit = browsers.visit({

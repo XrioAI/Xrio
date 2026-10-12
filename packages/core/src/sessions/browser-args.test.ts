@@ -14,6 +14,8 @@ const PAGE = "https://fake.test/page";
 
 const WATCHED_SWITCHES: ReadonlySet<string> = new Set(["--no-sandbox", "--enable-logging"]);
 
+const PROBE_PAGE = /^file:.*\/probe\.html$/u;
+
 const isArgvEvent = (message: unknown): message is { event: "browser-argv"; detail: string } =>
   typeof message === "object" &&
   message !== null &&
@@ -22,15 +24,15 @@ const isArgvEvent = (message: unknown): message is { event: "browser-argv"; deta
   "detail" in message &&
   typeof message.detail === "string";
 
-const watchedSwitchesOf = (detail: string): string[] => {
+const argvOf = (detail: string): string[] => {
   const argv: unknown = JSON.parse(detail);
 
   return Array.isArray(argv)
-    ? argv.filter(
-        (arg: unknown): arg is string => typeof arg === "string" && WATCHED_SWITCHES.has(arg),
-      )
+    ? argv.filter((arg: unknown): arg is string => typeof arg === "string")
     : [];
 };
+
+const isProbeLaunch = (argv: readonly string[]): boolean => PROBE_PAGE.test(argv.at(-1) ?? "");
 
 const sharedStateDir = async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), "xrio-browser-args-"));
@@ -39,8 +41,14 @@ const sharedStateDir = async () => {
   const launches: string[][] = [];
 
   const recordLaunch: ChannelListener = (message) => {
-    if (isArgvEvent(message)) {
-      launches.push(watchedSwitchesOf(message.detail));
+    if (!isArgvEvent(message)) {
+      return;
+    }
+
+    const argv = argvOf(message.detail);
+
+    if (!isProbeLaunch(argv)) {
+      launches.push(argv.filter((arg) => WATCHED_SWITCHES.has(arg)));
     }
   };
 

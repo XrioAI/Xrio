@@ -8,7 +8,7 @@ import { fixedDevice } from "../../testing/fixed-seed.ts";
 import { forkWithKnobs } from "../../testing/hardware-fork.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import goldenPlans from "./launch-plan.golden.json" with { type: "json" };
-import { parseBrowserArgs, planLaunch } from "./launch-plan.ts";
+import { parseBrowserArgs, planHeadlessProbe, planLaunch } from "./launch-plan.ts";
 import type { LaunchPlan, LaunchRequest } from "./launch-plan.ts";
 
 const scratchDir = "/tmp/xrio-501/bAbC123";
@@ -398,6 +398,66 @@ describe(planLaunch, () => {
     );
   });
 
+  it("hands the user agent the identity presents to the driver, after the identity's other switches", () => {
+    const presented = {
+      metadata: {
+        architecture: "x86",
+        bitness: "64",
+        brands: [{ brand: "Chromium", version: "154" }],
+        formFactors: ["Desktop"],
+        fullVersion: "154.0.8037.57",
+        fullVersionList: [{ brand: "Chromium", version: "154.0.8037.57" }],
+        mobile: false,
+        model: "",
+        platform: "Linux",
+        platformVersion: "6.8.0",
+        wow64: false,
+      },
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0 Safari/537.36",
+    };
+
+    const plan = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/chrome/chrome",
+      display: undefined,
+      headless: true,
+      identity: planIdentity({
+        capabilities: { headlessUserAgent: presented, permittedCpus: 32, platform: "linux" },
+        device: fixedDevice,
+        exit: { facts: { kind: "unknown" }, route: "direct" },
+        hostZone: "UTC",
+        mode: "headless",
+        pins: noPins,
+      }).inputs,
+      proxyServer: undefined,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(plan.presentedUserAgent).toStrictEqual(presented);
+    expect(plan.args.slice(-5)).toStrictEqual([
+      `--user-agent=${presented.userAgent}`,
+      `--crash-dumps-dir=${scratchDir}/crashes`,
+      ...tail,
+    ]);
+  });
+
+  it("presents no user agent of its own unless the identity does", () => {
+    const plan = planLaunch({
+      browserArgs: [],
+      browserPath: "/opt/chrome/chrome",
+      display: undefined,
+      headless: true,
+      identity: identityFor({ headless: true, platform: "linux", timezone: "UTC" }),
+      proxyServer: undefined,
+      scratchDir,
+      xauthority: undefined,
+    });
+
+    expect(plan.presentedUserAgent).toBeUndefined();
+    expect(plan.args.filter((arg) => arg.startsWith("--user-agent"))).toStrictEqual([]);
+  });
+
   it("keeps Chrome's singleton socket path within the 108-byte limit", () => {
     const { env } = planLaunch({
       browserArgs: [],
@@ -498,6 +558,48 @@ const requestOf = ({
 });
 
 const goldenOf = ({ args, env, files }: LaunchPlan): GoldenPlan => ({ args, env, files });
+
+describe(planHeadlessProbe, () => {
+  it("opens its own page headless in a bare profile that is the scratch itself", () => {
+    const page = `file://${scratchDir}/home/probe.html`;
+
+    expect(planHeadlessProbe("/opt/chrome/chrome", scratchDir)).toStrictEqual({
+      page,
+      plan: {
+        args: [
+          ...baseline,
+          "--headless",
+          "--mute-audio",
+          "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
+          ...xrioSwitches.slice(0, 3),
+          `--crash-dumps-dir=${scratchDir}/crashes`,
+          `--user-data-dir=${scratchDir}`,
+          "--remote-debugging-pipe",
+          page,
+        ],
+        directories: {
+          crashes: `${scratchDir}/crashes`,
+          downloads: `${scratchDir}/downloads`,
+          home: `${scratchDir}/home`,
+          profile: scratchDir,
+          tmp: `${scratchDir}/tmp`,
+        },
+        env: {
+          HOME: `${scratchDir}/home`,
+          TMPDIR: `${scratchDir}/tmp`,
+          XDG_CACHE_HOME: `${scratchDir}/home/.cache`,
+          XDG_CONFIG_HOME: `${scratchDir}/home/.config`,
+          XDG_DATA_HOME: `${scratchDir}/home/.local/share`,
+        },
+        executable: "/opt/chrome/chrome",
+        files: [
+          { contents: "<!DOCTYPE html><title></title>", path: `${scratchDir}/home/probe.html` },
+        ],
+        presentedUserAgent: undefined,
+      },
+    });
+  });
+});
 
 describe("the launch plan golden", () => {
   it("covers every combination of mode, platform, timezone, display and xauthority once, and each mode and platform through the relay", () => {

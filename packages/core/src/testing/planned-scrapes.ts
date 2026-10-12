@@ -8,7 +8,7 @@ import type { SessionManager } from "../sessions/session.ts";
 import type { Closed, RetireSteps } from "../sources/browser/chrome-scope.ts";
 import { createFontEvidenceStore } from "../sources/browser/font-evidence.ts";
 import { hostFactsFor } from "../sources/browser/host-facts.ts";
-import type { HostFacts } from "../sources/browser/host-facts.ts";
+import type { ClientHostFacts, HostFacts } from "../sources/browser/host-facts.ts";
 import type { BrowserDriver } from "../sources/browser/port.ts";
 import { createSources } from "../sources/source.ts";
 import type { Sources } from "../sources/visit.ts";
@@ -70,18 +70,20 @@ export const plannedScrapes = (
     },
   };
 
+  const host: ClientHostFacts | HostFacts =
+    overrides.host === undefined
+      ? hostFactsFor(defaultCacheDir())
+      : {
+          chromeMajorFor: async () =>
+            await Promise.reject(new Error("Planned scrapes claim no session.")),
+          snapshotFor: overrides.host,
+        };
+
   const scrapes = createScrapes({
     admission: createAdmission(capacity),
     comparisonBinary: undefined,
     fonts: overrides.fonts ?? createFontEvidenceStore(),
-    host:
-      overrides.host === undefined
-        ? hostFactsFor(defaultCacheDir())
-        : {
-            chromeMajorFor: async () =>
-              await Promise.reject(new Error("Planned scrapes claim no session.")),
-            snapshotFor: overrides.host,
-          },
+    host,
     proxyInfo: overrides.proxyInfo,
     random: overrides.random,
     sessions: {
@@ -146,5 +148,13 @@ export const plannedScrapes = (
     }
   };
 
-  return { capture, close: scrapes.close, visit };
+  const close = async (): Promise<void> => {
+    await scrapes.close();
+
+    if ("settle" in host) {
+      await host.settle();
+    }
+  };
+
+  return { capture, close, visit };
 };

@@ -14,6 +14,7 @@ import type {
   Scope,
   Send,
   TargetScope,
+  UserAgentOverride,
 } from "./protocol.ts";
 
 const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
@@ -202,6 +203,7 @@ class PipeConnection {
   readonly #streams: PipeStreams;
   readonly #lifetime: AbortSignal;
   readonly #listener: ConnectionListener;
+  readonly #userAgent: UserAgentOverride | undefined;
   readonly #pending = new Map<number, PendingCall>();
   readonly #sessions = new Map<string, AnyTargetSession>();
   #framing = buffering();
@@ -210,10 +212,16 @@ class PipeConnection {
   #dropped = 0;
   #closed = false;
 
-  constructor(streams: PipeStreams, lifetime: AbortSignal, listener: ConnectionListener) {
+  constructor(
+    streams: PipeStreams,
+    lifetime: AbortSignal,
+    listener: ConnectionListener,
+    userAgent: UserAgentOverride | undefined,
+  ) {
     this.#streams = streams;
     this.#lifetime = lifetime;
     this.#listener = listener;
+    this.#userAgent = userAgent;
     streams.fromBrowser.on("data", (chunk: Buffer) => {
       this.#read(chunk);
     });
@@ -338,6 +346,9 @@ class PipeConnection {
       ...(hostsChildren(target)
         ? [this.send(target, "Target.setAutoAttach", EVERY_CHILD, this.#lifetime)]
         : []),
+      ...(this.#userAgent === undefined
+        ? []
+        : [this.send(target, "Network.setUserAgentOverride", this.#userAgent, this.#lifetime)]),
       this.send(target, "Runtime.runIfWaitingForDebugger", {}, this.#lifetime),
     ]);
 
@@ -493,4 +504,5 @@ export const connectOverPipe = (
   streams: PipeStreams,
   lifetime: AbortSignal,
   listener: ConnectionListener,
-): Send => new PipeConnection(streams, lifetime, listener).send;
+  userAgent?: UserAgentOverride,
+): Send => new PipeConnection(streams, lifetime, listener, userAgent).send;
