@@ -19,6 +19,9 @@ const FORK_SWITCHES = [
   "--xrio-hardware-concurrency",
   "--xrio-device-memory",
   "--xrio-gl-persona",
+  "--xrio-seed",
+  "--xrio-perturb-canvas",
+  "--xrio-perturb-audio",
 ] as const;
 
 export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE", "TZ", "FONTCONFIG_PATH"] as const;

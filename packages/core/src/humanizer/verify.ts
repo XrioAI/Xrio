@@ -84,7 +84,8 @@ export type FactTell =
   | "display-pin-unhonored"
   | "flag-infobar"
   | "hardware-capped"
-  | "hardware-unhonored";
+  | "hardware-unhonored"
+  | "noise-unhonored";
 
 export type IdentityTell =
   | "no-taskbar"

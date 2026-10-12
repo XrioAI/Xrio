@@ -4,5 +4,6 @@ export const noPins: IdentityIntent = {
   display: undefined,
   hardware: undefined,
   locale: undefined,
+  noise: undefined,
   timezone: undefined,
 };

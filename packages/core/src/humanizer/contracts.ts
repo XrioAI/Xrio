@@ -42,6 +42,12 @@ export type GpuPolicy = (typeof GPU_POLICIES)[number];
 
 export const DEFAULT_GPU_POLICY: GpuPolicy = "announce";
 
+export const NOISE_POLICIES = ["auto", "on", "off"] as const;
+
+export type NoisePolicy = (typeof NOISE_POLICIES)[number];
+
+export const DEFAULT_NOISE_POLICY: NoisePolicy = "auto";
+
 export interface HardwareTables {
   readonly cores?: readonly ValueRow[];
   readonly memoryGb?: readonly ValueRow[];

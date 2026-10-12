@@ -14,6 +14,7 @@ import {
 } from "../testing/gl-fork.ts";
 import { forkWithKnobs, HARDWARE_KNOBS } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
+import { NOISE_KNOBS } from "../testing/noise-fork.ts";
 import type {
   DeviceRecord,
   FontStack,
@@ -27,7 +28,7 @@ import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
-import { EMISSION_ORDER, resolveSurfaces } from "./surfaces.ts";
+import { EMISSION_ORDER, identityForVisit, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
 const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext => ({
@@ -41,7 +42,7 @@ const contextOf = (overrides: Partial<IdentityContext> = {}): IdentityContext =>
 });
 
 const pinnedTo = (locale: string): Partial<IdentityContext> => ({
-  pins: { display: undefined, hardware: undefined, locale, timezone: undefined },
+  pins: { ...noPins, locale },
 });
 
 const expectedLocale = (
@@ -1914,6 +1915,222 @@ describe("the hardware surface", () => {
   });
 });
 
+const FIXED_NOISE_SEED = "0x063140f55c3932af";
+
+const noiseInputs = (seed: string) => [
+  { name: "--xrio-seed", sink: "switch", value: seed },
+  { name: "--xrio-perturb-canvas", sink: "switch", value: "true" },
+  { name: "--xrio-perturb-audio", sink: "switch", value: "true" },
+];
+
+const noiseOf = (overrides: Partial<IdentityContext>) =>
+  resolveSurfaces(contextOf({ capabilities: forkWithKnobs(), ...overrides })).noise;
+
+const seededNoise = (seed: string, reason: "software-gpu" | "pinned" = "software-gpu") => ({
+  expected: [],
+  inputs: noiseInputs(seed),
+  value: { enabled: true, reason },
+});
+
+const kitWithout = (knob: string): KnobRegistry =>
+  Object.fromEntries(Object.entries(KIT_KNOBS).filter(([key]) => key !== knob));
+
+const noiseSeedOf = (seed: string): string | undefined =>
+  planIdentity(
+    contextOf({ capabilities: forkWithKnobs(), device: { kind: "fresh", seed } }),
+  ).inputs.switches.find((entry) => entry.startsWith("--xrio-seed="));
+
+describe("the noise surface", () => {
+  it("seeds the fork's canvas and audio noise when the browser renders on SwiftShader", () => {
+    expect(noiseOf({})).toStrictEqual(seededNoise(FIXED_NOISE_SEED));
+  });
+
+  it("sends the same noise in a headed browser", () => {
+    expect(noiseOf({ mode: "headed" })).toStrictEqual(seededNoise(FIXED_NOISE_SEED));
+  });
+
+  it("draws the fork's seed from the identity's seed, the same every time for one identity", () => {
+    expect([
+      noiseSeedOf(fixedSeed),
+      noiseSeedOf(fixedSeed),
+      noiseSeedOf("0000000000000001"),
+      noiseSeedOf("5eed5eed5eed5eed"),
+    ]).toStrictEqual([
+      `--xrio-seed=${FIXED_NOISE_SEED}`,
+      `--xrio-seed=${FIXED_NOISE_SEED}`,
+      "--xrio-seed=0xf394e0d3802e4851",
+      "--xrio-seed=0x5c717768df0b9580",
+    ]);
+  });
+
+  it("replays a record with the noise seed of the browser that made it", () => {
+    const capabilities = forkWithKnobs();
+    const { record } = planIdentity(contextOf({ capabilities })).chosen;
+
+    if (record === null) {
+      throw new Error("A headless plan records its device.");
+    }
+
+    const replayed = planIdentity(contextOf({ capabilities, device: { kind: "record", record } }));
+
+    expect(
+      replayed.inputs.switches.filter((entry) => entry.startsWith("--xrio-seed=")),
+    ).toStrictEqual([`--xrio-seed=${FIXED_NOISE_SEED}`]);
+    expect(replayed.chosen.surfaces.noise).toStrictEqual({ enabled: true, reason: "software-gpu" });
+  });
+
+  it("sends its own seed, never one the fork package configures", () => {
+    const configured: KnobRegistry = { ...KIT_KNOBS, seed: { origin: "set", value: "0x1" } };
+
+    expect(noiseOf({ capabilities: forkWithKnobs(configured) })).toStrictEqual(
+      seededNoise(FIXED_NOISE_SEED),
+    );
+  });
+
+  it.each([
+    { capabilities: { ...forkWithKnobs(), readableRenderNode: true } as const, name: "Linux" },
+    { capabilities: { ...forkWithKnobs(), platform: "darwin" } as const, name: "macOS" },
+  ])("sends nothing and tells nothing on a native GPU on $name", ({ capabilities }) => {
+    expect(noiseOf({ capabilities })).toStrictEqual({
+      expected: [],
+      inputs: [],
+      value: { enabled: false, reason: "native-gpu" },
+    });
+  });
+
+  it.each([
+    { capabilities: { permittedCpus: 32, platform: "linux" } as const, name: "a stock binary" },
+    { capabilities: forkWithKnobs(HARDWARE_KNOBS), name: "a fork with none of the noise knobs" },
+    ...Object.keys(NOISE_KNOBS).map((knob) => ({
+      capabilities: forkWithKnobs(kitWithout(knob)),
+      name: `a fork without ${knob}`,
+    })),
+  ])("sends nothing and tells noise-unhonored on $name", ({ capabilities }) => {
+    expect(noiseOf({ capabilities })).toStrictEqual({
+      expected: [],
+      inputs: [],
+      tells: ["noise-unhonored"],
+      value: { enabled: false, reason: "unhonored" },
+    });
+  });
+
+  it.each([
+    {
+      name: "a record made where the host's cores and memory showed",
+      overrides: { device: { kind: "record", record: recordWith(0, 0) } } as const,
+    },
+    {
+      name: "a fork that spoofs hardware without the hardware-concurrency knob",
+      overrides: { capabilities: forkWithKnobs({ ...withoutCores, ...NOISE_KNOBS }) },
+    },
+  ])(
+    "sends nothing and tells noise-unhonored for $name, where the seed would draw the fork's own cores and memory",
+    ({ overrides }) => {
+      expect(noiseOf(overrides)).toStrictEqual({
+        expected: [],
+        inputs: [],
+        tells: ["noise-unhonored"],
+        value: { enabled: false, reason: "host-hardware" },
+      });
+    },
+  );
+
+  it.each([
+    { capabilities: forkWithKnobs(KIT_KNOBS, 2), name: "a host under the smallest machine class" },
+    {
+      capabilities: forkWithKnobs({
+        ...KIT_KNOBS,
+        "spoof-hardware": { origin: "set", value: "false" },
+      }),
+      name: "a fork with spoof-hardware false",
+    },
+  ])(
+    "seeds the noise on $name, where the fork draws no cores or memory from the seed",
+    ({ capabilities }) => {
+      expect(noiseOf({ capabilities })).toStrictEqual(seededNoise(FIXED_NOISE_SEED));
+    },
+  );
+
+  it("carries the choice into the plan's surfaces and its tell into the plan's tells", () => {
+    const stock = planIdentity(contextOf());
+    const kit = planIdentity(contextOf({ capabilities: forkWithKnobs() }));
+
+    expect({
+      kit: { noise: kit.chosen.surfaces.noise, tells: kit.tells.includes("noise-unhonored") },
+      stock: { noise: stock.chosen.surfaces.noise, tells: stock.tells.includes("noise-unhonored") },
+    }).toStrictEqual({
+      kit: { noise: { enabled: true, reason: "software-gpu" }, tells: false },
+      stock: { noise: { enabled: false, reason: "unhonored" }, tells: true },
+    });
+  });
+});
+
+const nativeKit = { ...forkWithKnobs(), readableRenderNode: true } as const;
+
+describe("a noise setting the config pins", () => {
+  it("sends nothing and tells nothing on SwiftShader when the config turns noise off", () => {
+    expect(noiseOf({ pins: { ...noPins, noise: "off" } })).toStrictEqual({
+      expected: [],
+      inputs: [],
+      value: { enabled: false, reason: "pinned" },
+    });
+  });
+
+  it("seeds the noise on a native GPU when the config turns it on", () => {
+    expect(noiseOf({ capabilities: nativeKit, pins: { ...noPins, noise: "on" } })).toStrictEqual(
+      seededNoise(FIXED_NOISE_SEED, "pinned"),
+    );
+  });
+
+  it("decides by the GPU when the config says auto, as when it says nothing", () => {
+    expect([
+      noiseOf({ pins: { ...noPins, noise: "auto" } }),
+      noiseOf({ capabilities: nativeKit, pins: { ...noPins, noise: "auto" } }),
+    ]).toStrictEqual([noiseOf({}), noiseOf({ capabilities: nativeKit })]);
+  });
+
+  it.each([
+    {
+      capabilities: { permittedCpus: 32, platform: "darwin" } as const,
+      name: "stock Chrome",
+      reason: "unhonored",
+    },
+    {
+      capabilities: { ...forkWithKnobs(HARDWARE_KNOBS), readableRenderNode: true } as const,
+      name: "a fork without the noise knobs",
+      reason: "unhonored",
+    },
+  ])(
+    "sends nothing and tells noise-unhonored when the config turns noise on for $name",
+    ({ capabilities, reason }) => {
+      expect(noiseOf({ capabilities, pins: { ...noPins, noise: "on" } })).toStrictEqual({
+        expected: [],
+        inputs: [],
+        tells: ["noise-unhonored"],
+        value: { enabled: false, reason },
+      });
+    },
+  );
+
+  it("keeps a config that turns noise off when it replays a record", () => {
+    expect(
+      noiseOf({
+        device: { kind: "record", record: recordWith(6, 16) },
+        pins: { ...noPins, noise: "off" },
+      }).value,
+    ).toStrictEqual({ enabled: false, reason: "pinned" });
+  });
+
+  it("carries the config's noise setting into a visit that replays a record", () => {
+    expect(
+      identityForVisit(
+        { ...noPins, hardware: undefined, noise: "off" },
+        { kind: "record", record: recordWith(6, 16) },
+      ).noise,
+    ).toBe("off");
+  });
+});
+
 describe("the window surface", () => {
   it("maximizes the fixed seed's headless window to its work area and expects exactly that", () => {
     expect(resolveSurfaces(contextOf()).window).toStrictEqual({
@@ -2411,7 +2628,13 @@ describe("the fork in the plan", () => {
 
     expect({ binary: plan.chosen.binary, tells: plan.tells }).toStrictEqual({
       binary: { commit: null, dirty: null, fork: "xrio" },
-      tells: ["gl-persona-unavailable", "hardware-unhonored", "host-fonts", "speech-persona-skew"],
+      tells: [
+        "gl-persona-unavailable",
+        "hardware-unhonored",
+        "noise-unhonored",
+        "host-fonts",
+        "speech-persona-skew",
+      ],
     });
   });
 });
@@ -2431,18 +2654,25 @@ describe("the planned tells", () => {
     expect(
       planIdentity(contextOf({ capabilities, exit: proxyRoute, hostZone: "America/Chicago" }))
         .tells,
-    ).toStrictEqual(["exit-unknown", "gl-persona-unavailable", "hardware-unhonored"]);
+    ).toStrictEqual([
+      "exit-unknown",
+      "gl-persona-unavailable",
+      "hardware-unhonored",
+      "noise-unhonored",
+    ]);
     expect(planIdentity(contextOf({ capabilities, hostZone: "UTC" })).tells).toStrictEqual([
       "host-zone-utc",
       "gl-persona-unavailable",
       "hardware-unhonored",
+      "noise-unhonored",
     ]);
     expect(
       planIdentity(contextOf({ capabilities, hostZone: "America/Chicago" })).tells,
-    ).toStrictEqual(["gl-persona-unavailable", "hardware-unhonored"]);
+    ).toStrictEqual(["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored"]);
     expect(planIdentity(contextOf({ hostZone: "America/Chicago" })).tells).toStrictEqual([
       "gl-persona-unavailable",
       "hardware-unhonored",
+      "noise-unhonored",
       "host-fonts",
     ]);
   });
@@ -2481,6 +2711,7 @@ describe("the chosen identity", () => {
         },
         locale: { languages: ["en-US", "en"], tag: "en-US" },
         media: { source: "host" },
+        noise: { enabled: false, reason: "native-gpu" },
         screen: { source: "host" },
         seed: { source: "fresh" },
         speech: { persona: null },
@@ -2546,6 +2777,7 @@ describe("a display the caller pins", () => {
       tells: [
         "gl-persona-unavailable",
         "hardware-unhonored",
+        "noise-unhonored",
         "display-pin-unhonored",
         "host-fonts",
         "flag-infobar",

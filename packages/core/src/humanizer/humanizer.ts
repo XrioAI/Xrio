@@ -62,6 +62,7 @@ const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   leaks: resolutions.leaks.value,
   locale: resolutions.locale.value,
   media: resolutions.media.value,
+  noise: resolutions.noise.value,
   screen: resolutions.screen.value,
   seed: resolutions.seed.value,
   speech: resolutions.speech.value,

@@ -19,6 +19,7 @@ import {
   displayMisfit,
   drawDisplay,
   drawHardware,
+  drawNoiseSeed,
   seedOf,
   windowBounds,
   workAreaOf,
@@ -753,6 +754,27 @@ describe("the GL persona draw", () => {
   });
 });
 
+const KIT_SEED = /^0x[\da-f]{16}$/u;
+
+const noiseSeeds = (count: number): string[] =>
+  Array.from({ length: count }, (_, index) => drawNoiseSeed(seedAt(index + 1)));
+
+describe(drawNoiseSeed, () => {
+  it("draws the fixed seed's fork seed as 0x and 16 hex digits, keeping leading zeros", () => {
+    expect(drawNoiseSeed(fixedSeed)).toBe("0x063140f55c3932af");
+  });
+
+  it("draws a seed the fork accepts, never zero, for each of 10,000 seeds", () => {
+    expect(
+      noiseSeeds(CONTAINMENT_SEEDS).filter((seed) => !KIT_SEED.test(seed) || BigInt(seed) === 0n),
+    ).toStrictEqual([]);
+  });
+
+  it("draws a different fork seed for each of 10,000 seeds", () => {
+    expect(new Set(noiseSeeds(CONTAINMENT_SEEDS)).size).toBe(CONTAINMENT_SEEDS);
+  });
+});
+
 const launchOf = ({ chosen, expected, inputs, read }: IdentityPlan) => ({
   expected,
   inputs,
@@ -839,6 +861,7 @@ describe("the device record", () => {
         display: undefined,
         hardware: undefined,
         locale: "de-DE",
+        noise: undefined,
         timezone: "America/New_York",
       },
     });
@@ -1094,12 +1117,15 @@ describe("a record replayed on another host", () => {
         "host-zone-utc",
         "gl-persona-unavailable",
         "hardware-unhonored",
+        "noise-unhonored",
         "host-fonts",
         "replay-host-skew",
       ],
     });
   });
 });
+
+const HARDWARE_SWITCH = /^--xrio-(?:hardware-concurrency|device-memory)=/u;
 
 const replayedOn = (record: DeviceRecord, capabilities: IdentityContext["capabilities"]) => {
   const plan = planIdentity({
@@ -1112,7 +1138,7 @@ const replayedOn = (record: DeviceRecord, capabilities: IdentityContext["capabil
   });
 
   return {
-    cores: plan.inputs.switches.filter((entry) => entry.startsWith("--xrio-")),
+    cores: plan.inputs.switches.filter((entry) => HARDWARE_SWITCH.test(entry)),
     hardware: plan.chosen.surfaces.hardware,
     tells: plan.tells.filter(
       (tell) => tell === "replay-host-skew" || tell === "hardware-unhonored",
@@ -1170,7 +1196,13 @@ describe("a record replayed with another core count or memory", () => {
 
     expect({ hardware: plan.chosen.surfaces.hardware, tells: plan.tells }).toStrictEqual({
       hardware: { cores: 0, memoryGb: 0, source: "host" },
-      tells: ["host-zone-utc", "gl-persona-unavailable", "hardware-unhonored", "host-fonts"],
+      tells: [
+        "host-zone-utc",
+        "gl-persona-unavailable",
+        "hardware-unhonored",
+        "noise-unhonored",
+        "host-fonts",
+      ],
     });
   });
 });
@@ -1184,6 +1216,7 @@ describe("a record made from a scrape's pins", () => {
     },
     hardware: undefined,
     locale: "de-DE",
+    noise: undefined,
     timezone: "Europe/Berlin",
   } as const;
 

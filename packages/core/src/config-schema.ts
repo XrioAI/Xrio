@@ -1,4 +1,4 @@
-import { GPU_POLICIES } from "./humanizer/contracts.ts";
+import { GPU_POLICIES, NOISE_POLICIES } from "./humanizer/contracts.ts";
 import {
   CHROME_ACCEPT_LANGUAGES,
   FORK_MAX_CORES,
@@ -202,7 +202,7 @@ const HARDWARE = objectOf(
 );
 
 const HOST = objectOf(
-  "The locale, timezone, display and hardware that every scrape of the client presents, plus extra Chrome switches. Browser scrapes use each field the browser can present, and http scrapes use only locale. A scrape cannot override them. A browserArgs option on the client replaces host.browserArgs.",
+  "The locale, timezone, display, hardware and readback noise that every scrape of the client presents, plus extra Chrome switches. Browser scrapes use each field the browser can present, and http scrapes use only locale. A scrape cannot override them. A browserArgs option on the client replaces host.browserArgs.",
   {
     browserArgs: {
       description:
@@ -216,6 +216,12 @@ const HOST = objectOf(
       description:
         "The language tag every scrape presents, such as de-DE, written in its canonical casing. Xrio offers only the tags it has measured Chrome's language list for. It wins over the locale inferred from the proxy exit. In http mode it sets only Accept-Language.",
       enum: Object.keys(CHROME_ACCEPT_LANGUAGES),
+      type: "string",
+    },
+    noise: {
+      description:
+        "Whether a browser on Xrio's Chromium fork turns on its seeded canvas and audio noise. auto, the default, turns it on where Chrome renders on SwiftShader and off on a native GPU. on and off force it either way. Stock Chrome and a fork without the noise knobs present none.",
+      enum: NOISE_POLICIES,
       type: "string",
     },
     timezone: {

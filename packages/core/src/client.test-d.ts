@@ -118,6 +118,7 @@ describe("XrioClient types", () => {
         },
         hardware: { cores: 8, gpuPolicy: "matched", memoryGb: 16 },
         locale: "de-DE",
+        noise: "off",
         timezone: "Europe/Berlin",
       },
       proxy: { url: "http://proxy.test" },
@@ -138,6 +139,7 @@ describe("XrioClient types", () => {
     expectTypeOf<HardwareOptions["gpuPolicy"]>().toEqualTypeOf<
       "matched" | "announce" | undefined
     >();
+    expectTypeOf<HostConfig["noise"]>().toEqualTypeOf<"auto" | "on" | "off" | undefined>();
 
     const unknownSection = {
       // @ts-expect-error Only proxy and host are config sections.
@@ -260,7 +262,7 @@ describe("XrioClient types", () => {
     const client = new XrioClient({ mode: "http" });
     const url = "https://example.com";
     expectTypeOf<
-      Extract<keyof ClientOptions, "locale" | "timezone" | "display" | "hardware">
+      Extract<keyof ClientOptions, "locale" | "timezone" | "display" | "hardware" | "noise">
     >().toBeNever();
     // @ts-expect-error Locale belongs to xrio.config's host section.
     void new XrioClient({ locale: "de-DE", mode: "http" });
@@ -270,6 +272,8 @@ describe("XrioClient types", () => {
     void new XrioClient({ browserPath: "/browser", display: {} });
     // @ts-expect-error Hardware belongs to xrio.config's host section.
     void new XrioClient({ browserPath: "/browser", hardware: {} });
+    // @ts-expect-error Noise belongs to xrio.config's host section.
+    void new XrioClient({ browserPath: "/browser", noise: "off" });
     // @ts-expect-error Locale is not a scrape override.
     void client.scrape({ format: "html", locale: "de-DE", url });
     // @ts-expect-error Timezone is not a scrape override.
@@ -278,6 +282,8 @@ describe("XrioClient types", () => {
     void client.scrape({ display: {}, format: "html", url });
     // @ts-expect-error Hardware is not a scrape override.
     void client.scrape({ format: "html", hardware: {}, url });
+    // @ts-expect-error Noise is not a scrape override.
+    void client.scrape({ format: "html", noise: "on", url });
   });
 
   it("exposes each response header as an optional string and cookies separately", () => {
@@ -344,6 +350,14 @@ describe("XrioClient types", () => {
     }>();
     expectTypeOf<"fork-commit-unreadable">().toExtend<IdentityTell>();
     expectTypeOf<"flag-infobar">().toExtend<IdentityTell>();
+    expectTypeOf<"noise-unhonored">().toExtend<IdentityTell>();
+    expectTypeOf<BrowserIdentityReport["surfaces"]["noise"]>().toEqualTypeOf<
+      | { readonly enabled: true; readonly reason: "software-gpu" | "pinned" }
+      | {
+          readonly enabled: false;
+          readonly reason: "native-gpu" | "pinned" | "unhonored" | "host-hardware";
+        }
+    >();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
       | "fonts-drift"
@@ -381,6 +395,7 @@ describe("XrioClient types", () => {
       | "timezone"
       | "gpu"
       | "hardware"
+      | "noise"
       | "window"
       | "screen"
       | "fonts"

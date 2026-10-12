@@ -1,6 +1,12 @@
 import { invalidOptions } from "../errors.ts";
 import type { ResolvedMode } from "../types.ts";
-import { DEFAULT_GPU_POLICY, knobOf, headlessWindowOf, withoutPersona } from "./contracts.ts";
+import {
+  DEFAULT_GPU_POLICY,
+  DEFAULT_NOISE_POLICY,
+  knobOf,
+  headlessWindowOf,
+  withoutPersona,
+} from "./contracts.ts";
 import type {
   DeviceRecord,
   ExitFacts,
@@ -11,10 +17,19 @@ import type {
   Insets,
   MediaDeviceCounts,
   NameRow,
+  NoisePolicy,
   PersonaClaims,
   Seed,
 } from "./contracts.ts";
-import { drawDisplay, drawGlPersona, drawHardware, windowBounds, workAreaOf } from "./draws.ts";
+import {
+  drawDisplay,
+  drawGlPersona,
+  drawHardware,
+  drawNoiseSeed,
+  machineClassFitsUnder,
+  windowBounds,
+  workAreaOf,
+} from "./draws.ts";
 import type { Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
 import { glLineupOf, hardwareEligibleCount, personaClaims } from "./gl-persona.ts";
@@ -69,6 +84,13 @@ type DeviceSource = "drawn" | "display" | "record";
 
 type WebRtcPolicy = "default" | "disable_non_proxied_udp";
 
+type NoiseChoice =
+  | { readonly enabled: true; readonly reason: "software-gpu" | "pinned" }
+  | {
+      readonly enabled: false;
+      readonly reason: "native-gpu" | "pinned" | "unhonored" | "host-hardware";
+    };
+
 export interface SurfaceChoices {
   readonly seed: { readonly source: DeviceChoice["kind"] };
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
@@ -79,6 +101,7 @@ export interface SurfaceChoices {
     readonly cores: number;
     readonly memoryGb: number;
   };
+  readonly noise: NoiseChoice;
   readonly window:
     | ({ readonly source: DeviceSource; readonly kind: "maximized" | "floating" } & Bounds)
     | { readonly source: "fixed"; readonly size: Size };
@@ -119,6 +142,7 @@ export const EMISSION_ORDER = [
   "timezone",
   "gpu",
   "hardware",
+  "noise",
   "window",
   "screen",
   "fonts",
@@ -178,6 +202,7 @@ const replayPolicy = (context: IdentityContext): IdentityContext => {
       display: context.pins.display,
       hardware: context.pins.hardware,
       locale,
+      noise: context.pins.noise,
       timezone: timezone.kind === "pinned" ? timezone.zone : undefined,
     },
   };
@@ -238,6 +263,7 @@ export const identityForVisit = (
       display: undefined,
       hardware: undefined,
       locale: device.record.policy.locale,
+      noise: pins.noise,
       timezone: undefined,
     };
   }
@@ -562,6 +588,79 @@ const resolveHardware = (
   return presentHardware({ cores, memoryGb, source }, tells);
 };
 
+const NOISE_KNOBS = ["seed", "perturb-canvas", "perturb-audio"] as const;
+
+const honorsNoise = (capabilities: HostCapabilities): boolean =>
+  NOISE_KNOBS.every((knob) => capabilities.fork?.knobs[knob] !== undefined);
+
+const seedRedrawsHostHardware = (
+  capabilities: HostCapabilities,
+  hardware: SurfaceChoices["hardware"],
+  presented: EligiblePersona | null,
+): boolean =>
+  hardware.source === "host" &&
+  knobOf(capabilities, "spoof-hardware") === "true" &&
+  machineClassFitsUnder([
+    capabilities.permittedCpus,
+    ...(presented === null ? [] : [presented.persona.maxThreads]),
+  ]);
+
+const noiseRefusal = (
+  capabilities: HostCapabilities,
+  hardware: SurfaceChoices["hardware"],
+  presented: EligiblePersona | null,
+): "unhonored" | "host-hardware" | undefined => {
+  if (!honorsNoise(capabilities)) {
+    return "unhonored";
+  }
+
+  return seedRedrawsHostHardware(capabilities, hardware, presented) ? "host-hardware" : undefined;
+};
+
+const noiseInputs = (seed: Seed): LaunchInput[] => [
+  { name: "--xrio-seed", sink: "switch", value: drawNoiseSeed(seed) },
+  { name: "--xrio-perturb-canvas", sink: "switch", value: "true" },
+  { name: "--xrio-perturb-audio", sink: "switch", value: "true" },
+];
+
+const wantedNoise = (policy: NoisePolicy, backend: GlBackend["kind"]): NoiseChoice => {
+  if (policy !== "auto") {
+    return policy === "on"
+      ? { enabled: true, reason: "pinned" }
+      : { enabled: false, reason: "pinned" };
+  }
+
+  return backend === "swiftshader"
+    ? { enabled: true, reason: "software-gpu" }
+    : { enabled: false, reason: "native-gpu" };
+};
+
+const resolveNoise = (
+  { capabilities, pins }: Pick<IdentityContext, "capabilities" | "pins">,
+  { seed }: Device,
+  gl: GlChoice,
+  hardware: SurfaceChoices["hardware"],
+): Resolutions["noise"] => {
+  const wanted = wantedNoise(pins.noise ?? DEFAULT_NOISE_POLICY, gl.backend.kind);
+
+  if (!wanted.enabled) {
+    return { expected: [], inputs: [], value: wanted };
+  }
+
+  const refusal = noiseRefusal(capabilities, hardware, gl.presented);
+
+  if (refusal !== undefined) {
+    return {
+      expected: [],
+      inputs: [],
+      tells: ["noise-unhonored"],
+      value: { enabled: false, reason: refusal },
+    };
+  }
+
+  return { expected: [], inputs: noiseInputs(seed), value: wanted };
+};
+
 const resolveHeadedWindow = (): Resolutions["window"] => ({
   expected: [
     compatible("outerWidth", atMost("availWidth"), "note"),
@@ -799,15 +898,17 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => {
   const replayed = replayPolicy(context);
   const device = deviceOf(context);
   const gl = chooseGl(replayed, device);
+  const hardware = resolveHardware(replayed, device, gl.presented);
 
   return {
     automation: resolveAutomation(replayed),
     fonts: resolveFonts(replayed),
     gpu: resolveGpu(gl),
-    hardware: resolveHardware(replayed, device, gl.presented),
+    hardware,
     leaks: resolveLeaks(replayed),
     locale: resolveLocale(replayed),
     media: resolveMedia(replayed),
+    noise: resolveNoise(replayed, device, gl, hardware.value),
     screen: resolveScreen(replayed, device),
     seed: { expected: [], inputs: [], value: { source: device.source } },
     speech: resolveSpeech(replayed),

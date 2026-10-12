@@ -29,6 +29,8 @@ const UNIT_SCALE = 2 ** UNIT_BITS;
 
 const ZERO_SEED = /^0+$/u;
 
+const NONZERO_KIT_SEED = 1n;
+
 const MIN_INNER_WIDTH = 1265;
 
 const MIN_FLOATING_WORK_WIDTH = 1680;
@@ -80,6 +82,13 @@ const pick = <Row extends Weighted>(rows: readonly Row[], seed: Seed, purpose: s
 export const drawGlPersona = <Row extends Weighted>(seed: Seed, rows: readonly Row[]): Row =>
   pick(rows, seed, "gpu");
 
+export const drawNoiseSeed = (seed: Seed): string => {
+  const drawn = draw(seed, "noise");
+  const nonzero = drawn === 0n ? NONZERO_KIT_SEED : drawn;
+
+  return `0x${nonzero.toString(16).padStart(SEED_BYTES * 2, "0")}`;
+};
+
 type MachineClass = (typeof MACHINE_CLASSES)[number];
 
 const pinnedValue = (
@@ -105,6 +114,9 @@ export type HardwareDraw = DrawnHardware | UnfitHardware;
 
 const classesWithin = (limits: readonly number[]): readonly MachineClass[] =>
   MACHINE_CLASSES.filter(({ cores }) => limits.every((limit) => cores <= limit));
+
+export const machineClassFitsUnder = (ceilings: readonly number[]): boolean =>
+  classesWithin(ceilings).length > 0;
 
 const sameRows = (left: readonly MachineClass[], right: readonly MachineClass[]): boolean =>
   left.length === right.length && left.every((row) => right.includes(row));
