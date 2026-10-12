@@ -331,6 +331,19 @@ export const rules = [
     vendor: "akamai",
   },
   {
+    detail:
+      "Akamai Bot Manager's sec-cpt interstitial, named by the id of its hidden challenge container rather than by the random paths of its scripts. Served as a 200 whose own script reloads the document once the challenge request completes, which is why it is challenge_issued: it arms the challenge wait, which then rebinds the response on the reload. Interstitial-shaped pages only, so the id quoted on a served page decides nothing",
+    family: "akamai",
+    gate: "interstitial",
+    id: "akamai_sec_cpt_challenge",
+    pattern: /id=.?sec-if-cpt-container/u,
+    proves: "challenge_issued",
+    source: "dom",
+    target: "html",
+    tier: "E0",
+    vendor: "akamai",
+  },
+  {
     detail: "DataDome's captcha host referenced in the markup",
     family: "datadome",
     gate: "interstitial",
