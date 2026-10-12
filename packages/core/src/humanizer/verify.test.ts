@@ -87,7 +87,7 @@ const EVIDENCE: FontEvidence = {
   ageMs: 5_400_000,
   digest: "2eeb6d13",
   key: "5be0c7d2",
-  sentinel: "c6755abb",
+  sentinel: "77462a42",
 };
 
 const planFor = (overrides: Partial<IdentityContext> = {}) => planIdentity(contextOf(overrides));
@@ -956,7 +956,7 @@ describe("the fonts evidence", () => {
   const sentinelOnly: Observation = {
     ...linuxHeadless,
     fontsDigest: null,
-    fontsSentinel: "c6755abb",
+    fontsSentinel: "77462a42",
   };
 
   it("hands the digest and sentinel of a launch with no evidence to the store, as observed", () => {
@@ -1012,7 +1012,7 @@ describe("the fonts evidence", () => {
       fontEvidence: { kind: "drifted" },
       mismatches: [],
       notes: [
-        { expected: "c6755abb", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
+        { expected: "77462a42", field: "fontsSentinel", observed: "deadbeef", surface: "fonts" },
       ],
       tells: ["gl-persona-unavailable", "hardware-unhonored", "noise-unhonored", "fonts-drift"],
     });
@@ -1309,7 +1309,7 @@ describe(identityRead, () => {
       first: ["72px monospace", "72px sans-serif", "72px serif", '72px "Ubuntu", monospace'],
       last: '72px "Amiri", serif',
       resolved: true,
-      sentinel: "c6755abb",
+      sentinel: "77462a42",
     });
   });
 
@@ -1336,8 +1336,8 @@ describe(identityRead, () => {
     }).toStrictEqual({
       count: SENTINEL_MEASURES,
       digest: null,
-      last: '72px "KACSTOffice", serif',
-      sentinel: "c6755abb",
+      last: '72px "Quicksand", serif',
+      sentinel: "77462a42",
     });
   });
 

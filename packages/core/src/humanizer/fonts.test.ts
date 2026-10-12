@@ -60,7 +60,7 @@ describe(fontCheckEnvironment, () => {
 
 describe("the sentinel the identity read measures", () => {
   it("names two families, so the launch probe stays cheap", () => {
-    expect(FONT_SENTINEL_FAMILIES).toStrictEqual(["Ubuntu", "KACSTOffice"]);
+    expect(FONT_SENTINEL_FAMILIES).toStrictEqual(["Ubuntu", "Quicksand"]);
   });
 });
 
