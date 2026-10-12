@@ -381,6 +381,8 @@ interface CapturedDocument {
   document: DocumentHop;
 }
 
+const RETRY_FLOOR_MS = 10_000;
+
 const requireHtmlDocument = async (
   browser: DriverBrowser,
   tracker: PageTracker,
@@ -404,6 +406,40 @@ const requireHtmlDocument = async (
 
     throw unsupportedContentType(details, tracker.requestUrls(document), preview);
   }
+};
+
+const loadDocument = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  url: URL,
+  relay: RelayFailures,
+  deadline: Deadline,
+): Promise<void> => {
+  await navigateTo(browser, tracker, url, relay, deadline);
+  const document = await tracker.documentLoaded(deadline);
+  await requireHtmlDocument(browser, tracker, document, deadline);
+};
+
+const passChallenge = async (
+  browser: DriverBrowser,
+  tracker: PageTracker,
+  url: URL,
+  relay: RelayFailures,
+  deadline: Deadline,
+): Promise<ChallengeWait> => {
+  const first = await waitForChallenge(tracker, deadline);
+  const { report } = first;
+
+  if (report?.outcome !== "escalated" || deadline.remainingMs() < RETRY_FLOOR_MS) {
+    return first;
+  }
+
+  await loadDocument(browser, tracker, url, relay, deadline);
+
+  return await waitForChallenge(tracker, deadline, undefined, {
+    ...report,
+    reloads: report.reloads + 1,
+  });
 };
 
 const captureIfCurrent = async (
@@ -492,6 +528,7 @@ const captureHeldDocument = async (
 const GAVE_UP: ReadonlySet<ChallengeOutcome> = new Set([
   "budget_exhausted",
   "deadline",
+  "escalated",
   "rounds_exhausted",
 ]);
 
@@ -639,16 +676,14 @@ export const renderDocument = async <Reading>(
     await timeStage(
       "navigation",
       async () => {
-        await navigateTo(browser, tracker, url, relay, deadline);
-        const document = await tracker.documentLoaded(deadline);
-        await requireHtmlDocument(browser, tracker, document, deadline);
+        await loadDocument(browser, tracker, url, relay, deadline);
       },
       deadline,
     );
 
     const challenge = await timeStage(
       "challenge",
-      async () => await waitForChallenge(tracker, deadline),
+      async () => await passChallenge(browser, tracker, url, relay, deadline),
       deadline,
     );
 

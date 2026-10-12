@@ -53,6 +53,8 @@ const controlledBrowser = (first: DocumentHop) => {
   let selector: SelectorState = "absent";
   let afterCapture: (() => void) | undefined;
   let captures = 0;
+  let navigated = first;
+  let navigations = 0;
 
   const emit = (event: DriverEvent) => {
     for (const listener of listeners) {
@@ -92,7 +94,8 @@ const controlledBrowser = (first: DocumentHop) => {
       return value;
     },
     navigate: async () => {
-      commit(first);
+      navigations += 1;
+      commit(navigated);
       await Promise.resolve();
     },
     onEvent: (listener) => {
@@ -113,6 +116,10 @@ const controlledBrowser = (first: DocumentHop) => {
     commit,
     emit,
     listeners: () => listeners.size,
+    navigateTo: (hop: DocumentHop) => {
+      navigated = hop;
+    },
+    navigations: () => navigations,
     onCapture: (run: () => void) => {
       afterCapture = run;
     },

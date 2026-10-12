@@ -316,7 +316,12 @@ describe("XrioClient types", () => {
     expectTypeOf<BlockReport["challenge"]>().toEqualTypeOf<ChallengeReport | null>();
     expectTypeOf<ChallengeReport["rounds"]>().toEqualTypeOf<ChallengeRound[]>();
     expectTypeOf<ChallengeOutcome>().toEqualTypeOf<
-      "passed" | "passed_in_place" | "rounds_exhausted" | "budget_exhausted" | "deadline"
+      | "passed"
+      | "passed_in_place"
+      | "rounds_exhausted"
+      | "budget_exhausted"
+      | "deadline"
+      | "escalated"
     >();
     expectTypeOf<
       XrioError<"UNSUPPORTED_CONTENT_TYPE">["details"]["block"]

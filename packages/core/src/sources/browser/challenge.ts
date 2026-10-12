@@ -14,6 +14,25 @@ const MAX_ROUNDS = 3;
 
 export const CAPTURE_RESERVE_MS = 1000;
 
+interface Escalation {
+  readonly check: RegExp;
+  readonly captcha: RegExp;
+}
+
+const ESCALATIONS: readonly Escalation[] = [
+  {
+    captcha: /^https:\/\/geo\.captcha-delivery\.com\/captcha\//u,
+    check: /^https:\/\/geo\.captcha-delivery\.com\/interstitial\//u,
+  },
+];
+
+const escalatedIn = (urls: readonly string[]): boolean =>
+  ESCALATIONS.some(({ captcha, check }) => {
+    const checked = urls.findIndex((url) => check.test(url));
+
+    return checked !== -1 && urls.slice(checked + 1).some((url) => captcha.test(url));
+  });
+
 export interface ChallengeDocuments {
   readonly documentLoaded: (deadline: Deadline) => Promise<DocumentHop>;
   readonly loadedDocument: () => DocumentHop | undefined;
@@ -91,6 +110,10 @@ const waitForReplacement = async (
       return { document: next, outcome: "next" };
     }
 
+    if (escalatedIn(documents.requestUrls(document))) {
+      return { document, outcome: "escalated" };
+    }
+
     // oxlint-disable-next-line eslint/no-await-in-loop -- each tick judges the page after the previous read finishes.
     if (watchesPage && (await readPage(documents, document, deadline)) === "clear") {
       return { document, outcome: "passed_in_place" };
@@ -110,11 +133,15 @@ export const waitForChallenge = async (
   let candidate = challengeCandidate(initial ?? inputOf(documents, document));
 
   if (candidate === undefined) {
-    return { lastDocument: document, report: previous ?? null };
+    const report =
+      previous?.outcome === "escalated" ? { ...previous, outcome: "passed" as const } : previous;
+
+    return { lastDocument: document, report: report ?? null };
   }
 
   const report: ChallengeReport = {
     outcome: "rounds_exhausted",
+    reloads: previous?.reloads ?? 0,
     rounds: [...(previous?.rounds ?? [])],
   };
 
