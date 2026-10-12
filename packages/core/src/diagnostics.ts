@@ -4,6 +4,7 @@ import { channel } from "node:diagnostics_channel";
 export type Stage =
   | "scratch-sweep"
   | "queue"
+  | "session"
   | "identity"
   | "launch"
   | "verify"
@@ -22,6 +23,12 @@ interface StageTiming {
 export interface InternalEvent {
   event:
     | "identity-chosen"
+    | "session-claimed"
+    | "session-released"
+    | "session-quarantined"
+    | "ownership-lost"
+    | "warmth-changed"
+    | "pool-prune-failed"
     | "fork-probed"
     | "host-renderer-probed"
     | "font-stack-checked"

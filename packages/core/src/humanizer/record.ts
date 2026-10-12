@@ -8,7 +8,7 @@ const timezonePolicyOf = ({ source, zone }: SurfaceChoices["timezone"]): Timezon
     }
 
     case "exit": {
-      return { kind: "exit" };
+      return { kind: "exit", zone };
     }
 
     case "host": {

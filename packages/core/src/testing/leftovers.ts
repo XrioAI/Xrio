@@ -45,9 +45,16 @@ const processesInOurScratch = async (): Promise<number[]> => {
   return users.flatMap(({ directory, pid }) => (isOursOrGone(directory) ? [pid] : []));
 };
 
-export const leftovers = async () => ({
-  directories: ownedScratchDirs(),
-  processes: await processesInOurScratch(),
-});
+export const leftovers = async (stateDir?: string) => {
+  const sessionProcesses =
+    stateDir === undefined ? [] : await scratchUsers(path.join(stateDir, "profiles"));
+
+  const scratchProcesses = await processesInOurScratch();
+
+  return {
+    directories: ownedScratchDirs(),
+    processes: [...new Set([...scratchProcesses, ...sessionProcesses.map(({ pid }) => pid)])],
+  };
+};
 
 export const nothingLeft = { directories: [], processes: [] };

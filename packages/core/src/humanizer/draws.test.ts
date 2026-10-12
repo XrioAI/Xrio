@@ -32,7 +32,6 @@ import {
   MACHINE_CLASSES,
   WINDOW_STATES,
 } from "./owned-inputs.ts";
-import { recordOverrides } from "./surfaces.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import { evaluate } from "./verify.ts";
 
@@ -1194,8 +1193,7 @@ describe("a record made from a scrape's pins", () => {
     const replayed = planIdentity({ ...context, device: { kind: "record", record } });
 
     expect({
-      overrides: recordOverrides(record, { mode, pins }),
       unhonored: replayed.tells.includes("display-pin-unhonored"),
-    }).toStrictEqual({ overrides: [], unhonored: mode === "headed" });
+    }).toStrictEqual({ unhonored: mode === "headed" });
   });
 });

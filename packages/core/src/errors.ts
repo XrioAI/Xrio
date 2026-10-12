@@ -13,7 +13,16 @@ interface XrioErrorDetails {
   PROXY_SESSION_GENERATION_FAILED: undefined;
   PROXY_UNREACHABLE: undefined;
   RESPONSE_TOO_LARGE: undefined;
-  SESSION_UNAVAILABLE: { reason: "ownership-lost" };
+  SESSION_UNAVAILABLE: {
+    reason:
+      | "ownership-lost"
+      | "quarantined"
+      | "browser-too-old"
+      | "record-refused"
+      | "cannot-present"
+      | "exit-changed"
+      | "process-table-unreadable";
+  };
   TIMEOUT: undefined;
   TLS_CERTIFICATE_INVALID: undefined;
   TOO_MANY_REDIRECTS: undefined;
@@ -72,7 +81,7 @@ const errorClasses = {
   WAIT_FOR_TIMEOUT: XrioError,
 } satisfies Record<ErrorCode, TypeErrorConstructor | typeof XrioError>;
 
-const isErrorCode = (code: unknown): code is ErrorCode =>
+export const isErrorCode = (code: unknown): code is ErrorCode =>
   typeof code === "string" && Object.hasOwn(errorClasses, code);
 
 export function isXrioError(value: unknown): value is ErrorByCode[ErrorCode];
@@ -95,14 +104,26 @@ export const invalidOptions = (message: string, cause?: unknown): InvalidOptions
     code: "INVALID_OPTIONS" as const,
   });
 
-export const redactUrl = (url: URL | string): string => {
+export const redactUrl = (url: URL | string, { keepUsername = false } = {}): string => {
   const redacted = new URL(url);
 
-  redacted.username = "";
+  if (!keepUsername) {
+    redacted.username = "";
+  }
+
   redacted.password = "";
 
   return redacted.href;
 };
+
+type SessionUnavailableReason = XrioErrorDetails["SESSION_UNAVAILABLE"]["reason"];
+
+export const sessionUnavailable = (
+  reason: SessionUnavailableReason,
+  message = `The session is unavailable (${reason}).`,
+  cause?: unknown,
+): XrioError<"SESSION_UNAVAILABLE"> =>
+  new XrioError("SESSION_UNAVAILABLE", message, { cause, details: { reason } });
 
 export const clientClosed = (): XrioError =>
   new XrioError("CLIENT_CLOSED", "The client is closed.", { details: undefined });

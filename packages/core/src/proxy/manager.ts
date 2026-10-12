@@ -20,6 +20,8 @@ const ALPHABETS = {
 
 const MAX_SESSION_ATTEMPTS = 100;
 
+const DEFAULT_SESSION_ID_LENGTH = 8;
+
 export class ProxyManager {
   // Runtime-private state; callers interact only through the public methods below.
   readonly #config: ProxyConfig;
@@ -35,6 +37,24 @@ export class ProxyManager {
     } else {
       this.changeSession();
     }
+  }
+
+  public createSessionId(): string {
+    const { session } = this.#config;
+    const alphabet = ALPHABETS[session?.format ?? "numeric"];
+
+    return Array.from(
+      { length: session?.length ?? DEFAULT_SESSION_ID_LENGTH },
+      () => alphabet[randomInt(alphabet.length)],
+    ).join("");
+  }
+
+  public connectionFor(stickyId: string): string {
+    return this.#config.url.replace(SESSION_PLACEHOLDER, stickyId);
+  }
+
+  public get managesSessions(): boolean {
+    return this.#config.session !== undefined;
   }
 
   public getProxyConnectionString(): string {
@@ -59,21 +79,15 @@ export class ProxyManager {
   }
 
   public changeSession(): string {
-    const { session, url } = this.#config;
-
-    if (session === undefined) {
+    if (this.#config.session === undefined) {
       throw invalidOptions(
         "Session rotation is not configured; proxy.url needs a {session} placeholder.",
       );
     }
 
-    const alphabet = ALPHABETS[session.format ?? "numeric"];
-    const length = session.length ?? 8;
-
     // ponytail: bound collision retries; increase session.length if the ID space fills.
     for (let attempt = 0; attempt < MAX_SESSION_ATTEMPTS; attempt += 1) {
-      const id = Array.from({ length }, () => alphabet[randomInt(alphabet.length)]).join("");
-      const connection = url.replace(SESSION_PLACEHOLDER, id);
+      const connection = this.connectionFor(this.createSessionId());
 
       if (!this.#connections.has(connection)) {
         this.#connections.add(connection);

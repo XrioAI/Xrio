@@ -3,6 +3,8 @@ import { Socket } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { cloudflareCases } from "./block-cases/cloudflare.ts";
+
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 const SCENARIOS = [
@@ -28,6 +30,7 @@ const SCENARIOS = [
   "fork",
   "fonts-drift",
   "fonts-unresolved",
+  "blocked",
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -66,6 +69,8 @@ const INITIAL_LIFECYCLE = [
 const NAVIGATION_ERROR = "net::ERR_NAME_NOT_RESOLVED";
 
 const PAGE_HTML = "<!DOCTYPE html><html><head></head><body><p>fake page</p></body></html>";
+
+const BLOCKED_PAGE = cloudflareCases.tp_cloudflare_1020_dom_only;
 
 const isScenario = (value: string): value is Scenario => SCENARIO_NAMES.has(value);
 
@@ -107,6 +112,8 @@ const requested = process.env.XRIO_FAKE_SCENARIO ?? "normal";
 
 const scenario: Scenario = isScenario(requested) ? requested : "normal";
 
+const pageStatus = scenario === "blocked" ? BLOCKED_PAGE.status : 200;
+
 const PRODUCT = scenario === "old" ? "HeadlessChrome/120.0.0.0" : "HeadlessChrome/154.0.8037.57";
 
 const TARGET_NAVIGATED = { code: -32_000, message: "Inspected target navigated or closed" };
@@ -117,6 +124,11 @@ const FRAME_NOT_IN_TARGET = {
   code: -32_000,
   message: "Frame with the given id does not belong to the target.",
 };
+
+if (process.argv.includes("--version")) {
+  process.stdout.write(`${PRODUCT}\n`);
+  process.exit(0);
+}
 
 const output = new Socket({ fd: 4, readable: false });
 
@@ -209,14 +221,19 @@ const navigationEvents = (url: string, loaderId = "L1"): Json[] => [
       "X-Fake": "yes",
     },
     requestId: loaderId,
-    statusCode: 200,
+    statusCode: pageStatus,
   }),
   ...onEveryPageSession("Network.responseReceived", {
     frameId: TARGET_ID,
     hasExtraInfo: true,
     loaderId,
     requestId: loaderId,
-    response: { headers: { "Content-Type": "text/html" }, mimeType: "text/html", status: 200, url },
+    response: {
+      headers: { "Content-Type": "text/html" },
+      mimeType: "text/html",
+      status: pageStatus,
+      url,
+    },
     type: "Document",
   }),
 ];
@@ -237,7 +254,9 @@ const commitEvents = (url: string, loaderId = "L1"): Json[] => [
   }),
 ];
 
-const CAPTURED_PAGE: Json = { result: { type: "string", value: PAGE_HTML } };
+const CAPTURED_PAGE: Json = {
+  result: { type: "string", value: scenario === "blocked" ? BLOCKED_PAGE.html : PAGE_HTML },
+};
 
 const THROWN: Json = {
   exceptionDetails: {

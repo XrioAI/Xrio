@@ -6,28 +6,33 @@ import type { Answer } from "./answer.ts";
 import type { ResolvedConfig } from "./config.ts";
 import type { Deadline } from "./deadline.ts";
 import { inScrapeContext, timeStage } from "./diagnostics.ts";
-import { clientClosed } from "./errors.ts";
+import { clientClosed, isXrioError, sessionUnavailable } from "./errors.ts";
+import type { XrioError } from "./errors.ts";
+import { deviceDigest, identityPlanRecord } from "./humanizer/contracts.ts";
 import type { HostCapabilities } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
 import { httpIdentity, planIdentity } from "./humanizer/humanizer.ts";
+import { presentableRecord } from "./humanizer/read-record.ts";
 import { identityForVisit, presentedLocale } from "./humanizer/surfaces.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import type { HeldDeadline } from "./lifetime.ts";
-import { parseProxy, refuseRecordOverrides } from "./options.ts";
+import { parseProxy } from "./options.ts";
 import { outcomeOf, scrapeError } from "./outcome.ts";
 import type { ScrapeOutcome } from "./outcome.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
+import type { ProxyObservation } from "./proxy/info.ts";
 import { ProxyManager } from "./proxy/manager.ts";
 import { exitFactsFor, routeFor } from "./proxy/route.ts";
+import { bindSessionExit } from "./proxy/session-exit.ts";
 import { createRetries } from "./retries.ts";
 import type { Retries } from "./retries.ts";
 import { reportSkippedCookies } from "./seed-cookies.ts";
-import type { SessionHold, SessionManager } from "./sessions/session.ts";
+import type { ClaimChecks, SessionHold, SessionManager } from "./sessions/session.ts";
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
-import type { FinishedVisit, Sources, VisitPlan } from "./sources/visit.ts";
-import type { ProxyEndpoint, SourceDocument } from "./types.ts";
+import type { AttemptLog, FinishedVisit, SiteVisit, Sources, VisitPlan } from "./sources/visit.ts";
+import type { ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
   readonly answer: Promise<SourceDocument>;
@@ -43,7 +48,7 @@ export interface Scrapes {
 interface Dependencies {
   readonly host: HostFacts;
   readonly comparisonBinary: string | undefined;
-  readonly sessions: SessionManager;
+  readonly sessions: Pick<SessionManager, "hold">;
   readonly admission: Admission;
   readonly sources: Sources;
   readonly fonts: FontEvidenceStore;
@@ -51,7 +56,8 @@ interface Dependencies {
   readonly retryRandom: () => number;
   readonly closing: AbortSignal;
   readonly configuredProxy: ProxyEndpoint | undefined;
-  readonly proxyInfo: typeof lookupProxyInfo;
+  readonly managedProxy: ProxyManager | undefined;
+  readonly proxyInfo: (proxy: ProxyEndpoint, deadline: Deadline) => Promise<ProxyObservation>;
 }
 
 interface VisitContext {
@@ -59,6 +65,7 @@ interface VisitContext {
   readonly intent: ScrapeIntent;
   readonly hold: SessionHold;
   readonly held: HeldDeadline;
+  readonly capabilities: HostCapabilities | undefined;
   readonly dependencies: Dependencies;
 }
 
@@ -73,6 +80,26 @@ const comparisonFacts = async ({
 
     return null;
   }
+};
+
+const sessionExit = async ({ dependencies, held, hold, intent }: VisitContext) => {
+  const exit = await bindSessionExit(
+    {
+      binding: hold.binding,
+      drawStickyId: hold.drawStickyId,
+      manager: intent.route === undefined ? dependencies.managedProxy : undefined,
+      observe: dependencies.proxyInfo,
+      proxy: intent.route ?? dependencies.configuredProxy,
+    },
+    held,
+  );
+
+  if (exit.kind === "changed") {
+    await hold.retire();
+    throw sessionUnavailable("exit-changed", "The session's exit left its region.");
+  }
+
+  return exit;
 };
 
 const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
@@ -91,18 +118,15 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
     };
   }
 
-  const route = routeFor(proxy);
-  const observation = proxy === undefined ? undefined : await dependencies.proxyInfo(proxy, held);
+  const exit = await sessionExit(context);
+  const route = routeFor(exit.proxy);
+  const { observation } = exit;
 
   held.throwIfExpired();
   const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
 
-  const capabilities = await dependencies.host.snapshotFor(intent.source.browserPath, held);
-  const scrape = { mode: intent.source.mode, pins };
-
-  if (hold.device.kind === "record") {
-    refuseRecordOverrides(hold.device.record, { ...scrape, pins: intent.identity });
-  }
+  const capabilities =
+    context.capabilities ?? (await dependencies.host.snapshotFor(intent.source.browserPath, held));
 
   const fonts = await dependencies.fonts.claim(
     intent.source.browserPath,
@@ -113,7 +137,6 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
 
   try {
     const identity = planIdentity({
-      ...scrape,
       capabilities:
         fonts.evidence === undefined
           ? capabilities
@@ -122,16 +145,22 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
       exit: { facts: exitFactsFor(route, observation), route: route.kind },
       followExit: route.kind === "proxy",
       hostZone: readHostZone(),
+      mode: intent.source.mode,
+      pins,
     });
 
     return {
       ...intent.source,
+      browserArgs: hold.browserArgs ?? intent.source.browserArgs,
       capabilities,
       cookies: intent.cookies.seeds,
+      exitAddress: observation?.exitIp,
       fonts,
       identity,
       kind: "browser",
-      proxy,
+      profile: hold.profile,
+      proxy: exit.proxy,
+      sessionBinding: exit.binding,
       url: intent.url,
     };
   } catch (error) {
@@ -148,7 +177,7 @@ type Continuation =
 
 interface VisitResult extends FinishedVisit {
   readonly next: Continuation;
-  readonly outcome: ScrapeOutcome;
+  readonly answered: ScrapeOutcome;
 }
 
 const planVisits = (context: VisitContext): (() => Promise<VisitPlan>) => {
@@ -193,6 +222,70 @@ const continuationFor = (
     : { kind: "complete" };
 };
 
+const replayedDigest = ({ device }: SessionHold): string | null =>
+  device.kind === "record" ? deviceDigest(device.record) : null;
+
+const attemptOf = (
+  { hold, intent }: VisitContext,
+  plan: VisitPlan | undefined,
+  outcome: ScrapeOutcome,
+): AttemptLog => {
+  const browser = plan?.kind === "browser" ? plan : undefined;
+
+  const launched = {
+    argv: null,
+    exitAddress: browser?.exitAddress ?? null,
+    plan: browser === undefined ? null : identityPlanRecord(browser.identity),
+    proxyUrl: plan?.proxy?.url ?? null,
+    site: intent.url.hostname,
+    url: intent.url.href,
+  };
+
+  if (outcome.kind === "failed") {
+    return {
+      ...launched,
+      challengeOutcome: null,
+      challengeRules: [],
+      deviceDigest: replayedDigest(hold),
+      errorCode: isXrioError(outcome.error) ? outcome.error.code : null,
+      outcome: "failed",
+      status: null,
+      vendor: null,
+    };
+  }
+
+  const { block, identity, status } = outcome.document;
+
+  return {
+    ...launched,
+    challengeOutcome: block.challenge?.outcome ?? null,
+    challengeRules: block.challenge?.rounds.map((round) => round.rule) ?? [],
+    deviceDigest: identity.mode === "http" ? null : deviceDigest(identity.record),
+    errorCode: null,
+    outcome: block.verdict,
+    status,
+    vendor: block.vendor,
+  };
+};
+
+const siteVisitOf = (attempt: AttemptLog): SiteVisit | undefined =>
+  attempt.outcome === "failed" || attempt.deviceDigest === null
+    ? undefined
+    : {
+        challengeOutcome: attempt.challengeOutcome,
+        challengeRules: attempt.challengeRules,
+        deviceDigest: attempt.deviceDigest,
+        exitAddress: attempt.exitAddress,
+        site: attempt.site,
+        vendor: attempt.vendor,
+        verdict: attempt.outcome,
+      };
+
+const withSession = (outcome: ScrapeOutcome, session: SessionSummary | undefined): ScrapeOutcome =>
+  outcome.kind === "document" && session !== undefined
+    ? { ...outcome, document: { ...outcome.document, session } }
+    : outcome;
+
 const recordOf = (outcome: ScrapeOutcome): FinishedVisit["record"] =>
   outcome.kind === "document" && outcome.document.identity.mode !== "http"
     ? outcome.document.identity.record
@@ -201,21 +294,24 @@ const recordOf = (outcome: ScrapeOutcome): FinishedVisit["record"] =>
 class AttemptStartError extends Error {
   override readonly name = "AttemptStartError";
   readonly failure: Error;
+  readonly plan: VisitPlan | undefined;
 
-  constructor(failure: Error) {
+  constructor(failure: Error, plan: VisitPlan | undefined) {
     super(failure.message, { cause: failure });
     this.failure = failure;
+    this.plan = plan;
   }
 }
 
 const startAttempt = async <Result>(
   start: () => Result | Promise<Result>,
   held: HeldDeadline,
+  plan?: VisitPlan,
 ): Promise<Result> => {
   try {
     return await start();
   } catch (error) {
-    throw new AttemptStartError(scrapeError(error, held));
+    throw new AttemptStartError(scrapeError(error, held), plan);
   }
 };
 
@@ -225,7 +321,7 @@ const visitOnce = async (
   retries: Retries,
   planVisit: () => Promise<VisitPlan>,
 ): Promise<VisitResult> => {
-  const { answer, dependencies, held, intent } = context;
+  const { answer, dependencies, held, hold, intent } = context;
 
   await using slot = await startAttempt(
     async () =>
@@ -241,18 +337,44 @@ const visitOnce = async (
   let transferred = false;
 
   try {
-    const visit = await startAttempt(() => dependencies.sources.start(plan, slot, held), held);
+    const visit = await startAttempt(
+      () => dependencies.sources.start(plan, slot, held),
+      held,
+      plan,
+    );
 
     transferred = true;
 
     const outcome = await outcomeOf(visit.document, held);
     const next = continuationFor(outcome, context, terminal, retries);
+    const attempt = attemptOf(context, plan, outcome);
+    const siteVisit = siteVisitOf(attempt);
+
+    const answered = withSession(
+      outcome,
+      siteVisit === undefined || plan.kind !== "browser"
+        ? undefined
+        : hold.summary(siteVisit, plan),
+    );
 
     if (next.kind !== "retry") {
-      answer.offer(outcome, next.kind === "complete");
+      answer.offer(answered, next.kind === "complete");
     }
 
-    return { closed: await visit.closed, next, outcome, record: recordOf(outcome) };
+    const record = recordOf(outcome);
+    const closed = await visit.closed;
+
+    return {
+      ...attempt,
+      answered,
+      argv: await visit.argv,
+      binding: record === null || plan.kind !== "browser" ? undefined : plan.sessionBinding,
+      browserArgs: plan.kind === "browser" ? plan.browserArgs : [],
+      closed,
+      next,
+      record,
+      siteVisit,
+    };
   } finally {
     if (!transferred && plan.kind === "browser") {
       await plan.fonts.settle(null);
@@ -275,7 +397,10 @@ const visitAfterStartFailures = async (
         throw error;
       }
 
-      const { failure } = error;
+      const { failure, plan } = error;
+
+      await context.hold.logAttempt(attemptOf(context, plan, { error: failure, kind: "failed" }));
+
       const delayMs = retries.next(failure);
 
       if (delayMs === undefined || !(await retries.wait(delayMs))) {
@@ -300,7 +425,7 @@ const completeVisits = async (context: VisitContext, retries: Retries): Promise<
 
     if (visit.next.kind === "retry") {
       if (!visit.closed.exited || !(await retries.wait(visit.next.delayMs))) {
-        context.answer.offer(visit.outcome, true);
+        context.answer.offer(visit.answered, true);
         break;
       }
     } else {
@@ -332,6 +457,122 @@ const settleAnswerOnAbort = (answer: Answer, deadline: Deadline): Disposable => 
   };
 };
 
+interface BrowserScrape {
+  readonly mode: "headless" | "headed";
+  readonly capabilities: HostCapabilities;
+  readonly browserArgs: readonly string[];
+}
+
+const sessionBrowser = async (
+  intent: ScrapeIntent,
+  deadline: Deadline,
+  { host }: Dependencies,
+): Promise<BrowserScrape | undefined> => {
+  if (intent.source.mode === "http" || intent.session.kind === "anonymous") {
+    return undefined;
+  }
+
+  const { browserArgs, browserPath, mode } = intent.source;
+  const capabilities = await host.snapshotFor(browserPath, deadline);
+  const chromeMajor = await host.chromeMajorFor(browserPath, capabilities, deadline);
+
+  return { browserArgs, capabilities: { ...capabilities, chromeMajor }, mode };
+};
+
+const claimChecks = (
+  browser: BrowserScrape | undefined,
+  { managedProxy, random }: Dependencies,
+): ClaimChecks => {
+  const seed = () => seedOf(random(SEED_BYTES));
+
+  if (browser === undefined) {
+    return { seed };
+  }
+
+  return {
+    capabilities: browser.capabilities,
+    check: (row) =>
+      row.record === undefined
+        ? undefined
+        : presentableRecord(
+            { browserArgs: row.browserArgs, platform: row.platform, record: row.record },
+            browser,
+          ),
+    seed,
+    stickyId: managedProxy === undefined ? randomUUID : () => managedProxy.createSessionId(),
+  };
+};
+
+type HeldVisit =
+  | { readonly kind: "settled" }
+  | { readonly kind: "member-retired"; readonly error: XrioError<"SESSION_UNAVAILABLE"> };
+
+const SETTLED: HeldVisit = { kind: "settled" };
+
+const retiredMember = (
+  intent: ScrapeIntent,
+  error: unknown,
+): error is XrioError<"SESSION_UNAVAILABLE"> =>
+  intent.session.kind === "pool" &&
+  isXrioError(error, "SESSION_UNAVAILABLE") &&
+  error.details.reason === "exit-changed";
+
+const visitInHold = async (
+  intent: ScrapeIntent,
+  checks: ClaimChecks,
+  deadline: Deadline,
+  dependencies: Dependencies,
+  answer: Answer,
+): Promise<HeldVisit> => {
+  const claimDeadline = deadline.boundTo(dependencies.closing, "client-closed");
+
+  await using hold = await timeStage(
+    "session",
+    async () => await dependencies.sessions.hold(intent.session, checks, claimDeadline),
+    claimDeadline,
+  );
+
+  const held = hold.bind(deadline);
+  using _answerLifetime = settleAnswerOnAbort(answer, held);
+
+  try {
+    const context = { answer, capabilities: checks.capabilities, dependencies, held, hold, intent };
+    const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
+    const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
+    await completeVisits(context, retries);
+
+    return SETTLED;
+  } catch (error) {
+    if (retiredMember(intent, error)) {
+      return { error, kind: "member-retired" };
+    }
+
+    answer.fail(scrapeError(error, held));
+
+    return SETTLED;
+  }
+};
+
+const visitUntilSettled = async (
+  intent: ScrapeIntent,
+  checks: ClaimChecks,
+  deadline: Deadline,
+  dependencies: Dependencies,
+  answer: Answer,
+): Promise<HeldVisit> => {
+  const members = intent.session.kind === "pool" ? intent.session.size : 1;
+  let visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+
+  // oxlint-disable no-await-in-loop -- A pool claims its next member only after the retired one was released.
+  for (let tried = 1; visit.kind === "member-retired" && tried < members; tried += 1) {
+    deadline.throwIfExpired();
+    visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+  }
+  // oxlint-enable no-await-in-loop
+
+  return visit;
+};
+
 const coordinate = async (
   intent: ScrapeIntent,
   deadline: Deadline,
@@ -341,26 +582,12 @@ const coordinate = async (
   reportSkippedCookies(intent.cookies.skipped);
 
   try {
-    await using hold = await dependencies.sessions.hold(
-      intent.session,
-      {
-        identity: intent.identity,
-        seed: () => seedOf(dependencies.random(SEED_BYTES)),
-        source: intent.source,
-      },
-      deadline,
-    );
+    const browser = await sessionBrowser(intent, deadline, dependencies);
+    const checks = claimChecks(browser, dependencies);
+    const visit = await visitUntilSettled(intent, checks, deadline, dependencies, answer);
 
-    const held = hold.bind(deadline);
-    using _answerLifetime = settleAnswerOnAbort(answer, held);
-
-    try {
-      const context = { answer, dependencies, held, hold, intent };
-      const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
-      const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
-      await completeVisits(context, retries);
-    } catch (error) {
-      answer.fail(scrapeError(error, held));
+    if (visit.kind === "member-retired") {
+      answer.fail(visit.error);
     }
   } catch (error) {
     answer.fail(scrapeError(error, deadline));
@@ -372,7 +599,7 @@ const coordinate = async (
 export const createScrapes = (
   dependencies: Omit<
     Dependencies,
-    "random" | "retryRandom" | "closing" | "configuredProxy" | "proxyInfo"
+    "random" | "retryRandom" | "closing" | "configuredProxy" | "managedProxy" | "proxyInfo"
   > & {
     readonly random?: Dependencies["random"];
     readonly retryRandom?: Dependencies["retryRandom"];
@@ -389,6 +616,7 @@ export const createScrapes = (
     ...dependencies,
     closing: closingSignal.signal,
     configuredProxy: proxy === undefined ? undefined : parseProxy(proxy.getProxyConnectionString()),
+    managedProxy: proxy,
     proxyInfo: dependencies.proxyInfo ?? lookupProxyInfo,
     random: dependencies.random ?? randomBytes,
     retryRandom: dependencies.retryRandom ?? Math.random,

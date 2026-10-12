@@ -1,5 +1,7 @@
-import type { BlockReport } from "./blocks/classify.ts";
+import type { BlockReport, BlockVerdict, ChallengeOutcome } from "./blocks/classify.ts";
+import type { ErrorCode } from "./errors.ts";
 import type { IdentityReport } from "./humanizer/report.ts";
+import type { Warmth } from "./sessions/warmth.ts";
 
 export type ScrapeFormat = "html" | "markdown" | "json";
 
@@ -7,6 +9,7 @@ interface HttpMode {
   mode: "http";
   browserPath?: never;
   waitFor?: never;
+  session?: never;
 }
 
 interface BrowserMode {
@@ -34,6 +37,8 @@ export type ClientOptions = (
   proxy?: string;
   maxBrowsers?: number;
   cacheDir?: string;
+  stateDir?: string;
+  warmthMaxAgeMs?: number;
   configFile?: string;
 };
 
@@ -44,7 +49,63 @@ export type ScrapeOptions<Format extends ScrapeFormat = ScrapeFormat> = ModeOver
   cookies?: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  session?: string | { readonly pool: string; readonly size: number };
 };
+
+export interface SessionSummary {
+  readonly name: string;
+  readonly pool?: string;
+  readonly created: boolean;
+  readonly visits: number;
+  readonly warmth: Warmth;
+  readonly profileDir: string;
+  readonly cacheDir: string;
+  readonly proxy?: string;
+}
+
+export interface SessionOutcomes {
+  readonly ok: number;
+  readonly suspect: number;
+  readonly blocked: number;
+  readonly queued: number;
+  readonly unknown: number;
+  readonly failed: number;
+}
+
+export interface SessionInfo {
+  readonly name: string;
+  readonly pool?: string;
+  readonly state: "ready" | "quarantined" | "retired";
+  readonly visits: number;
+  readonly lastVisitAt: number;
+  readonly profileDir: string;
+  readonly cacheDir: string;
+  readonly proxy?: string;
+  readonly outcomes: SessionOutcomes;
+}
+
+export interface SessionVisit {
+  readonly at: number;
+  readonly site: string;
+  readonly url: string;
+  readonly outcome: BlockVerdict | "failed";
+  readonly errorCode: ErrorCode | null;
+  readonly status: number | null;
+  readonly vendor: string | null;
+  readonly challengeOutcome: ChallengeOutcome | null;
+  readonly challengeRules: readonly string[];
+  readonly exitAddress: string | null;
+  readonly proxy: string | null;
+  readonly deviceDigest: string | null;
+  readonly argv: readonly string[] | null;
+  readonly plan: string | null;
+  readonly planDigest: string | null;
+}
+
+export interface SessionVisitFilter {
+  readonly site?: string;
+  readonly limit?: number;
+}
 
 export interface StructuredContent {
   metadata: {
@@ -74,6 +135,7 @@ export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
     format: Selected;
     block: BlockReport;
     identity: IdentityReport;
+    session?: SessionSummary;
   };
 }[Format];
 
@@ -83,6 +145,7 @@ export interface SourceDocument extends ResponseDetails {
   block: BlockReport;
   requestUrls: readonly string[];
   identity: IdentityReport;
+  session?: SessionSummary;
 }
 
 export type RenderedDocument = Pick<SourceDocument, "html" | "url"> &
@@ -95,5 +158,6 @@ export interface ProxyEndpoint {
   hostname: string;
   port: number;
   credentials: { username: string; password: string } | undefined;
+  url: string;
   redactedUrl: string;
 }

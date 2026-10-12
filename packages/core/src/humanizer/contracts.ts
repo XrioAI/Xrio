@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { ChromeProduct } from "../sources/browser/port.ts";
+import type { IdentityPlan } from "./humanizer.ts";
 import {
   chromeAcceptLanguages,
   FORK_MAX_CORES,
@@ -115,7 +116,7 @@ export interface PresentedDevice {
 
 export type TimezonePolicy =
   | { readonly kind: "pinned"; readonly zone: string }
-  | { readonly kind: "exit" }
+  | { readonly kind: "exit"; readonly zone: string }
   | { readonly kind: "host"; readonly zone: string };
 
 const DEVICE_SCHEMA = 1;
@@ -207,6 +208,7 @@ export interface HostRenderer {
 }
 
 export interface HostCapabilities {
+  readonly chromeMajor?: number;
   readonly platform: NodeJS.Platform;
   readonly permittedCpus: number;
   readonly readableRenderNode?: true;
@@ -313,7 +315,7 @@ interface DeviceRecordRefusal {
 const describeRefusal = (refusal: DeviceRecordRefusal): string =>
   `Device record cannot replay: ${refusal.reason}.`;
 
-class DeviceRecordRefusedError extends Error {
+export class DeviceRecordRefusedError extends Error {
   override readonly name = "DeviceRecordRefusedError";
   readonly refusal: DeviceRecordRefusal;
 
@@ -388,9 +390,9 @@ const policyProblem = ({ locale, timezone }: DeviceRecord["policy"]) => {
     return `Xrio has not measured Chrome's language list for its locale ${locale}`;
   }
 
-  return timezone.kind === "exit" || canonicalZone(timezone.zone) !== undefined
-    ? undefined
-    : `its zone ${timezone.zone} is not one Chrome names`;
+  return canonicalZone(timezone.zone) === undefined
+    ? `its zone ${timezone.zone} is not one Chrome names`
+    : undefined;
 };
 
 const unreplayable = (field: "device" | "policy", reason: string): DeviceRecordRefusedError =>
@@ -452,7 +454,16 @@ interface DigestedHost {
   readonly fontStack: StackContent | undefined;
 }
 
-type Digested = PresentedDevice | DigestedHost;
+interface PlanData extends Omit<IdentityPlan, "read" | "fontEvidence"> {
+  readonly fontEvidence: Omit<FontEvidence, "ageMs"> | undefined;
+}
+
+type Digested = PresentedDevice | DigestedHost | PlanData;
+
+export interface PlanRecord {
+  readonly json: string;
+  readonly digest: string;
+}
 
 const canonicalJson = (value: Digested): string => {
   const keys = new Set<string>();
@@ -470,6 +481,29 @@ const sha256Of = (value: Digested): string =>
   createHash("sha256").update(canonicalJson(value)).digest("hex");
 
 export const deviceDigest = (record: DeviceRecord): string => sha256Of(record.device);
+
+export const identityPlanRecord = ({
+  claims,
+  chosen,
+  expected,
+  fontEvidence,
+  inputs,
+  tells,
+}: IdentityPlan): PlanRecord => {
+  const json = canonicalJson({
+    chosen,
+    claims,
+    expected,
+    fontEvidence:
+      fontEvidence === undefined
+        ? undefined
+        : { digest: fontEvidence.digest, key: fontEvidence.key, sentinel: fontEvidence.sentinel },
+    inputs,
+    tells,
+  });
+
+  return { digest: createHash("sha256").update(json).digest("hex"), json };
+};
 
 const stackContentOf = (stack: FontStackFacts): StackContent =>
   stack.kind === "checked"

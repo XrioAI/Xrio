@@ -5,8 +5,12 @@ import type { ESTree } from "vite-plus/lint/plugins";
 
 const DOWNSTREAM = /\/packages\/core\/src\/(?:sources|humanizer)\//u;
 
+const SESSIONS = /\/packages\/core\/src\/sessions\//u;
+
+const IMPLEMENTATION = /\/packages\/core\/src\/(?:humanizer|proxy|sources)\//u;
+
 const MANAGER =
-  /\/packages\/core\/src\/(?:sessions\/|proxy\/(?:route|routes|exit|manager|info)\.ts$|coordinator\.ts$)/u;
+  /\/packages\/core\/src\/(?:sessions\/|proxy\/(?:route|routes|exit|manager|info|session-exit)\.ts$|coordinator\.ts$)/u;
 
 const isText = (value: unknown): value is string => typeof value === "string";
 
@@ -25,7 +29,11 @@ export default defineRule({
     const filename = path.resolve(context.filename);
 
     const check = (source: ESTree.Node | null | undefined) => {
-      if (source === undefined || source === null || !DOWNSTREAM.test(filename)) {
+      if (
+        source === undefined ||
+        source === null ||
+        (!DOWNSTREAM.test(filename) && !SESSIONS.test(filename))
+      ) {
         return;
       }
 
@@ -37,7 +45,10 @@ export default defineRule({
 
       const target = path.resolve(path.dirname(filename), specifier);
 
-      if (MANAGER.test(target)) {
+      if (
+        (DOWNSTREAM.test(filename) && MANAGER.test(target)) ||
+        (SESSIONS.test(filename) && !filename.endsWith(".test.ts") && IMPLEMENTATION.test(target))
+      ) {
         context.report({ data: { path: specifier }, messageId: "upward", node: source });
       }
     };
@@ -47,9 +58,25 @@ export default defineRule({
         check(node.source);
       },
       ExportNamedDeclaration: (node) => {
+        if (SESSIONS.test(filename) && node.exportKind === "type") {
+          return;
+        }
+
         check(node.source);
       },
       ImportDeclaration: (node) => {
+        if (
+          SESSIONS.test(filename) &&
+          (node.importKind === "type" ||
+            (node.specifiers.length > 0 &&
+              node.specifiers.every(
+                (specifier) =>
+                  specifier.type === "ImportSpecifier" && specifier.importKind === "type",
+              )))
+        ) {
+          return;
+        }
+
         check(node.source);
       },
       ImportExpression: (node) => {

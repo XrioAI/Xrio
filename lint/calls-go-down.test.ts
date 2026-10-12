@@ -50,6 +50,10 @@ describe("calls-go-down lint", () => {
     },
     {
       filename: "sources/browser/runtime.ts",
+      source: "import { bindSessionExit } from '../../proxy/session-exit.ts';",
+    },
+    {
+      filename: "sources/browser/runtime.ts",
       source: "import { sessions } from '../../sessions/session.ts';",
     },
     {

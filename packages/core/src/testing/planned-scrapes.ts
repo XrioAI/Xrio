@@ -4,7 +4,6 @@ import { createScrapes } from "../coordinator.ts";
 import type { Deadline } from "../deadline.ts";
 import type { IdentityIntent } from "../humanizer/intent.ts";
 import type { HeldDeadline } from "../lifetime.ts";
-import { anonymousSessions } from "../sessions/session.ts";
 import type { SessionManager } from "../sessions/session.ts";
 import type { Closed, RetireSteps } from "../sources/browser/chrome-scope.ts";
 import { createFontEvidenceStore } from "../sources/browser/font-evidence.ts";
@@ -14,6 +13,7 @@ import type { BrowserDriver } from "../sources/browser/port.ts";
 import { createSources } from "../sources/source.ts";
 import type { Sources } from "../sources/visit.ts";
 import type { ProxyEndpoint, SourceDocument, WaitFor } from "../types.ts";
+import { anonymousSessions } from "./anonymous-sessions.ts";
 
 type Dependencies = Parameters<typeof createScrapes>[0];
 
@@ -77,7 +77,11 @@ export const plannedScrapes = (
     host:
       overrides.host === undefined
         ? hostFactsFor(defaultCacheDir())
-        : { snapshotFor: overrides.host },
+        : {
+            chromeMajorFor: async () =>
+              await Promise.reject(new Error("Planned scrapes claim no session.")),
+            snapshotFor: overrides.host,
+          },
     proxyInfo: overrides.proxyInfo,
     random: overrides.random,
     sessions: {

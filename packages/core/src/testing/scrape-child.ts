@@ -5,7 +5,7 @@ import { isLaunchEvent } from "./launch-events.ts";
 
 const CHILD_TIMEOUT_MS = 60_000;
 
-const [mode, browserPath, url] = process.argv.slice(2);
+const [mode, browserPath, url, session, stateDir] = process.argv.slice(2);
 
 if ((mode !== "headless" && mode !== "headed") || browserPath === undefined || url === undefined) {
   throw new Error("Usage: scrape-child.ts <headless|headed> <browserPath> <url>");
@@ -17,8 +17,8 @@ subscribe("xrio:event", (message) => {
   }
 });
 
-await using client = new XrioClient({ browserPath, mode });
+await using client = new XrioClient({ browserPath, mode, stateDir });
 
-const result = await client.scrape({ format: "html", timeoutMs: CHILD_TIMEOUT_MS, url });
+const result = await client.scrape({ format: "html", session, timeoutMs: CHILD_TIMEOUT_MS, url });
 
 process.stdout.write(`${JSON.stringify({ status: result.status })}\n`);

@@ -9,14 +9,16 @@ import { createScrapes } from "./coordinator.ts";
 import { startDeadline, untilDeadline } from "./deadline.ts";
 import { XrioError } from "./errors.ts";
 import { httpIdentity } from "./humanizer/humanizer.ts";
+import { canonicalZone } from "./humanizer/zone-name.ts";
 import { HeldDeadline } from "./lifetime.ts";
 import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { outcomeOf } from "./outcome.ts";
-import type { lookupProxyInfo, ProxyObservation } from "./proxy/info.ts";
+import type { ProxyObservation } from "./proxy/info.ts";
+import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
 import { loadHttpDocument } from "./sources/http.ts";
-import type { Sources, Visit, VisitPlan } from "./sources/visit.ts";
+import type { AttemptLog, FinishedVisit, Sources, Visit, VisitPlan } from "./sources/visit.ts";
 import { startFakeHttpProxy } from "./testing/fake-proxies.ts";
 import { fixedRandom } from "./testing/fixed-seed.ts";
 import { startFixtureServer } from "./testing/fixture-server.ts";
@@ -52,26 +54,39 @@ const firstDocument = documentFor("<p>First</p>");
 
 const secondDocument = documentFor("<p>Second</p>");
 
+type StubVisit = Pick<Visit, "closed" | "document">;
+
+interface StubSources {
+  readonly close: Sources["close"];
+  readonly start: (...visit: Parameters<Sources["start"]>) => StubVisit;
+}
+
 interface HarnessOptions {
+  readonly bindings?: readonly SessionBinding[];
   readonly config?: Pick<ResolvedConfig, "proxy">;
   readonly retryRandom?: () => number;
-  readonly proxyInfo?: typeof lookupProxyInfo;
-  readonly sources?: Sources;
+  readonly proxyInfo?: Parameters<typeof createScrapes>[0]["proxyInfo"];
+  readonly sources?: StubSources;
   readonly admission?: Admission;
-  readonly visits?: readonly Visit[];
+  readonly visits?: readonly StubVisit[];
   readonly failureAt?: string;
   readonly revisit?: boolean;
   readonly cleanupFailure?: string;
   readonly throwOnStart?: boolean;
+  readonly claimWaits?: boolean;
+  readonly releaseHold?: () => void;
 }
 
 const harness = (options: HarnessOptions = {}) => {
   const events: string[] = [];
   const plans: VisitPlan[] = [];
+  const finished: FinishedVisit[] = [];
+  const attempts: AttemptLog[] = [];
   const fontLocales: string[] = [];
   const failure = new XrioError("NETWORK_ERROR", "The fake stage failed.", { details: undefined });
   const owner = new AbortController();
   let visitIndex = 0;
+  let holdIndex = 0;
   let warmth = options.revisit ?? false;
 
   const stage = (name: string) => {
@@ -114,6 +129,7 @@ const harness = (options: HarnessOptions = {}) => {
       },
     },
     host: {
+      chromeMajorFor: async () => await Promise.resolve(154),
       snapshotFor: async (binary) => {
         stage("host");
         events.push(`binary:${binary ?? "none"}`);
@@ -125,19 +141,39 @@ const harness = (options: HarnessOptions = {}) => {
     random: fixedRandom,
     retryRandom: options.retryRandom ?? (() => 0),
     sessions: {
-      hold: async (_intent, checks) => {
+      hold: async (_intent, checks, claim) => {
         stage("hold");
+        const binding = options.bindings?.[holdIndex];
+        holdIndex += 1;
+
+        if (options.claimWaits === true) {
+          await untilDeadline(async () => await Promise.withResolvers<never>().promise, claim);
+        }
 
         return await Promise.resolve({
           [Symbol.asyncDispose]: async () => {
             stage("hold-release");
+            options.releaseHold?.();
             await Promise.resolve();
           },
           bind: (deadline) => new HeldDeadline(deadline, owner.signal),
+          binding,
+          browserArgs: undefined,
           device: { kind: "fresh", seed: checks.seed() },
-          finish: async () => {
+          drawStickyId: () => checks.stickyId?.() ?? "drawn",
+          finish: async (visit) => {
             stage("finish");
+            finished.push(visit);
             warmth = false;
+            await Promise.resolve();
+          },
+          logAttempt: async (attempt) => {
+            attempts.push(attempt);
+            await Promise.resolve();
+          },
+          profile: { kind: "scratch" },
+          retire: async () => {
+            stage("retire");
             await Promise.resolve();
           },
           revisitWanted: () => {
@@ -145,6 +181,8 @@ const harness = (options: HarnessOptions = {}) => {
 
             return warmth;
           },
+          // oxlint-disable-next-line unicorn/no-useless-undefined -- The fake hold belongs to no session to summarize.
+          summary: () => undefined,
         });
       },
     },
@@ -159,7 +197,7 @@ const harness = (options: HarnessOptions = {}) => {
         plans.push(plan);
 
         if (options.sources !== undefined) {
-          return options.sources.start(plan, slot, held);
+          return { argv: Promise.resolve(null), ...options.sources.start(plan, slot, held) };
         }
 
         if (options.throwOnStart === true) {
@@ -178,12 +216,16 @@ const harness = (options: HarnessOptions = {}) => {
           return result;
         };
 
-        return { closed: closed(), document: visit?.document ?? Promise.resolve(selected) };
+        return {
+          argv: Promise.resolve(["--fake-argv", plan.url.href]),
+          closed: closed(),
+          document: visit?.document ?? Promise.resolve(selected),
+        };
       },
     },
   });
 
-  return { events, failure, fontLocales, owner, plans, scrapes };
+  return { attempts, events, failure, finished, fontLocales, owner, plans, scrapes };
 };
 
 const relevantEvents = (events: readonly string[]) =>
@@ -523,6 +565,29 @@ describe(createScrapes, () => {
     },
   );
 
+  it("rejects a scrape still waiting for its session claim with CLIENT_CLOSED on close", async () => {
+    const { clock } = manualClock();
+    using deadline = startDeadline(60_000, undefined, clock);
+    const { events, scrapes } = harness({ claimWaits: true });
+
+    const waiting = scrapes.start(
+      { ...browserIntent, session: { kind: "named", name: "account" } },
+      deadline,
+    );
+
+    await expect.poll(() => events.includes("hold")).toBeTruthy();
+    const closing = scrapes.close();
+
+    await expect(waiting.answer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+    await closing;
+    expect(relevantEvents(events)).toStrictEqual([
+      "host",
+      "hold",
+      "admission-close",
+      "sources-close",
+    ]);
+  });
+
   it("keeps the first document without launching a revisit after close", async () => {
     const retired = Promise.withResolvers<Closed>();
 
@@ -820,7 +885,7 @@ describe(createAnswer, () => {
 const failedVisit = (
   failure: Error,
   closed: Promise<Closed> = Promise.resolve({ exited: true }),
-): Visit => {
+): StubVisit => {
   const document = Promise.reject<SourceDocument>(failure);
   void Promise.allSettled([document]);
 
@@ -1095,5 +1160,364 @@ describe("transport retries", () => {
     await run.settled;
     expect(plans).toHaveLength(1);
     await scrapes.close();
+  });
+});
+
+describe("attempt log", () => {
+  it.each([
+    { failureAt: "queue", planned: false },
+    { failureAt: "plan", planned: false },
+    { failureAt: "start", planned: true },
+  ])(
+    "logs a start failure at $failureAt with its plan only once one exists",
+    async ({ failureAt, planned }) => {
+      const { attempts, finished, scrapes } = harness({ failureAt });
+      using deadline = startDeadline(1000);
+      const run = scrapes.start(browserIntent, deadline);
+
+      await expect(run.answer).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+      await run.settled;
+      expect({
+        attempts: attempts.map((attempt) => ({
+          argv: attempt.argv,
+          errorCode: attempt.errorCode,
+          outcome: attempt.outcome,
+          planned: /^[0-9a-f]{64}$/u.test(attempt.plan?.digest ?? ""),
+          url: attempt.url,
+        })),
+        finished: finished.length,
+      }).toStrictEqual({
+        attempts: [
+          {
+            argv: null,
+            errorCode: "NETWORK_ERROR",
+            outcome: "failed",
+            planned,
+            url: "https://example.com/",
+          },
+        ],
+        finished: 0,
+      });
+      await scrapes.close();
+    },
+  );
+
+  it("logs a retried attempt and the attempt after it", async () => {
+    const failure = new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+    const { finished, scrapes } = harness({ visits: [failedVisit(failure)] });
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await run.answer;
+    await run.settled;
+    expect(
+      finished.map(({ errorCode, outcome, status }) => ({ errorCode, outcome, status })),
+    ).toStrictEqual([
+      { errorCode: "NETWORK_ERROR", outcome: "failed", status: null },
+      { errorCode: null, outcome: "ok", status: 200 },
+    ]);
+    await scrapes.close();
+  });
+
+  it("finishes a launched visit with the argv its source reported and its plan", async () => {
+    const { attempts, finished, scrapes } = harness();
+    using deadline = startDeadline(1000);
+    const run = scrapes.start(browserIntent, deadline);
+
+    await run.answer;
+    await run.settled;
+    expect({
+      attempts: attempts.length,
+      finished: finished.map(({ argv, outcome, plan, site, status }) => ({
+        argv,
+        outcome,
+        planned: /^[0-9a-f]{64}$/u.test(plan?.digest ?? ""),
+        site,
+        status,
+      })),
+    }).toStrictEqual({
+      attempts: 0,
+      finished: [
+        {
+          argv: ["--fake-argv", "https://example.com/"],
+          outcome: "ok",
+          planned: true,
+          site: "example.com",
+          status: 200,
+        },
+      ],
+    });
+    await scrapes.close();
+  });
+});
+
+describe("session exit binding", () => {
+  const binding = {
+    kind: "proxy",
+    region: { country: "US", zone: "America/New_York" },
+    stickyId: "stored-id",
+  } as const;
+
+  const accepted = { ...proxyObservation, country: "US", timezone: "America/New_York" };
+
+  const configured = {
+    proxy: { session: {}, url: "http://account-{session}:secret@proxy.test" },
+  } as const;
+
+  it("accepts a different address and provider with the exact stored country and zone", async () => {
+    const { plans, scrapes } = harness({
+      bindings: [binding],
+      config: configured,
+      proxyInfo: async () =>
+        await Promise.resolve({ ...accepted, exitIp: "203.0.113.9", provider: "ipwho.is" }),
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        { ...browserIntent, session: { kind: "named", name: "account" } },
+        deadline,
+      ).answer;
+      expect(plans[0].proxy?.credentials?.username).toBe("account-stored-id");
+      expect(plans[0].kind === "browser" && plans[0].sessionBinding).toStrictEqual(binding);
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("rejects a different zone name after the stored id and three replacement ids", async () => {
+    const users: (string | undefined)[] = [];
+
+    const { plans, scrapes } = harness({
+      bindings: [binding],
+      config: configured,
+      proxyInfo: async (proxy) => {
+        users.push(proxy.credentials?.username);
+
+        return await Promise.resolve({ ...accepted, timezone: "America/Detroit" });
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await expect(
+        scrapes.start({ ...browserIntent, session: { kind: "named", name: "account" } }, deadline)
+          .answer,
+      ).rejects.toMatchObject({ code: "SESSION_UNAVAILABLE", details: { reason: "exit-changed" } });
+      expect(users).toHaveLength(4);
+      expect(users[0]).toBe("account-stored-id");
+      expect(users.slice(1)).toStrictEqual([
+        expect.stringMatching(/^account-\d{8}$/u),
+        expect.stringMatching(/^account-\d{8}$/u),
+        expect.stringMatching(/^account-\d{8}$/u),
+      ]);
+      expect(plans).toStrictEqual([]);
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("plans the first matching replacement id without retrying the document", async () => {
+    const users: (string | undefined)[] = [];
+
+    const { plans, scrapes } = harness({
+      bindings: [binding],
+      config: configured,
+      proxyInfo: async (proxy) => {
+        users.push(proxy.credentials?.username);
+
+        return await Promise.resolve(
+          users.length === 1 ? { ...accepted, country: "CA" } : accepted,
+        );
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        { ...browserIntent, session: { kind: "named", name: "account" } },
+        deadline,
+      ).answer;
+      expect(users).toHaveLength(2);
+      expect(plans).toHaveLength(1);
+      expect(plans[0].proxy?.credentials?.username).toBe(users[1]);
+      expect(plans[0].kind === "browser" && plans[0].sessionBinding).toMatchObject({
+        kind: "proxy",
+        region: { country: "US", zone: "America/New_York" },
+      });
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it.each([
+    {
+      expected: "http://account-stored-id:secret@proxy.test/",
+      route: undefined,
+      routing: { bindings: [binding], config: configured },
+    },
+    {
+      expected: "http://client:secret@proxy.test:8080/",
+      route: parseProxy("http://client:secret@proxy.test:8080"),
+      routing: { bindings: [binding], config: configured },
+    },
+    { expected: null, route: undefined, routing: {} },
+  ])(
+    "finishes a visit with the exact proxy URL $expected it used",
+    async ({ expected, route, routing }) => {
+      const { finished, scrapes } = harness({
+        ...routing,
+        proxyInfo: async () => await Promise.resolve(accepted),
+      });
+
+      using deadline = startDeadline(1000);
+
+      try {
+        const run = scrapes.start(
+          { ...browserIntent, route, session: { kind: "named", name: "account" } },
+          deadline,
+        );
+
+        await run.answer;
+        await run.settled;
+        expect(finished.map(({ proxyUrl }) => proxyUrl)).toStrictEqual([expected]);
+      } finally {
+        await scrapes.close();
+      }
+    },
+  );
+
+  it.each([
+    { binding: { kind: "direct", stickyId: "direct" } as const, proxy: "http://proxy.test" },
+    { binding, proxy: undefined },
+  ])("refuses switching an established route kind", async ({ binding: stored, proxy }) => {
+    const { plans, scrapes } = harness({ bindings: [stored] });
+    using deadline = startDeadline(1000);
+
+    try {
+      await expect(
+        scrapes.start(
+          {
+            ...browserIntent,
+            route: proxy === undefined ? undefined : parseProxy(proxy),
+            session: { kind: "named", name: "account" },
+          },
+          deadline,
+        ).answer,
+      ).rejects.toMatchObject({ code: "SESSION_UNAVAILABLE", details: { reason: "exit-changed" } });
+      expect(plans).toStrictEqual([]);
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it("retires an exhausted pool member and visits a fresh member under the same deadline", async () => {
+    let observations = 0;
+
+    const { events, plans, scrapes } = harness({
+      bindings: [binding, { kind: "unbound", stickyId: "fresh-id" }],
+      config: configured,
+      proxyInfo: async () => {
+        observations += 1;
+
+        return await Promise.resolve({ ...accepted, country: "CA" });
+      },
+    });
+
+    using deadline = startDeadline(1000);
+
+    try {
+      await scrapes.start(
+        {
+          ...browserIntent,
+          session: { kind: "pool", name: "accounts", site: "https://example.com", size: 2 },
+        },
+        deadline,
+      ).answer;
+      expect(observations).toBe(5);
+      expect(events.filter((event) => event === "hold")).toStrictEqual(["hold", "hold"]);
+      expect(events.filter((event) => event === "retire")).toStrictEqual(["retire"]);
+      expect(plans).toHaveLength(1);
+      expect(plans[0].proxy?.credentials?.username).toBe("account-fresh-id");
+    } finally {
+      await scrapes.close();
+    }
+  });
+
+  it.each(["Asia/Calcutta", "Asia/Kolkata"])(
+    "keeps a binding when the provider spells its zone %s",
+    async (observed) => {
+      let lookups = 0;
+
+      const stored = {
+        kind: "proxy",
+        region: { country: "IN", zone: canonicalZone("Asia/Kolkata") ?? "" },
+        stickyId: "stored-id",
+      } as const;
+
+      const { plans, scrapes } = harness({
+        bindings: [stored],
+        config: configured,
+        proxyInfo: async () => {
+          lookups += 1;
+
+          return await Promise.resolve({ ...accepted, country: "IN", timezone: observed });
+        },
+      });
+
+      using deadline = startDeadline(1000);
+
+      try {
+        await scrapes.start(
+          { ...browserIntent, session: { kind: "named", name: "account" } },
+          deadline,
+        ).answer;
+        expect({
+          binding: plans[0].kind === "browser" && plans[0].sessionBinding,
+          lookups,
+        }).toStrictEqual({
+          binding: stored,
+          lookups: 1,
+        });
+      } finally {
+        await scrapes.close();
+      }
+    },
+  );
+
+  it("fails a pool scrape with TIMEOUT when its deadline passes while a retired member is released", async () => {
+    const time = manualClock();
+    using deadline = startDeadline(1000, undefined, time.clock);
+
+    const { events, plans, scrapes } = harness({
+      bindings: [binding, { kind: "unbound", stickyId: "fresh-id" }],
+      config: configured,
+      proxyInfo: async () => await Promise.resolve({ ...accepted, country: "CA" }),
+      releaseHold: () => {
+        time.advance(1000);
+      },
+    });
+
+    try {
+      const run = scrapes.start(
+        {
+          ...browserIntent,
+          session: { kind: "pool", name: "accounts", site: "example.com", size: 2 },
+        },
+        deadline,
+      );
+
+      await expect(run.answer).rejects.toMatchObject({ code: "TIMEOUT" });
+      await expect(run.settled).resolves.toBeUndefined();
+      expect({
+        holds: events.filter((event) => event === "hold" || event === "retire"),
+        plans,
+      }).toStrictEqual({ holds: ["hold", "retire"], plans: [] });
+    } finally {
+      await scrapes.close();
+    }
   });
 });

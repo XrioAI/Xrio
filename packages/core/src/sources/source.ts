@@ -32,7 +32,7 @@ export const createSources = (
         return { exited: true } as const;
       };
 
-      return { closed: closing(), document };
+      return { argv: Promise.resolve(null), closed: closing(), document };
     },
   };
 };

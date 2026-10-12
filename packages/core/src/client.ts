@@ -7,7 +7,9 @@ import type { Scrapes } from "./coordinator.ts";
 import { startDeadline } from "./deadline.ts";
 import type { ClientDefaults } from "./intent.ts";
 import { resolveClientOptions, resolveScrapeIntent } from "./options.ts";
-import { anonymousSessions } from "./sessions/session.ts";
+import type { SessionAdmin, SessionManager } from "./sessions/session.ts";
+import { createSessions } from "./sessions/session.ts";
+import { profileUse } from "./sources/browser/browser-process.ts";
 import { cdpDriver } from "./sources/browser/cdp/driver.ts";
 import { createFontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import { hostFactsFor } from "./sources/browser/host-facts.ts";
@@ -31,6 +33,8 @@ export type {
 } from "./blocks/classify.ts";
 
 export { isXrioError, XrioError } from "./errors.ts";
+
+export type { SessionAdmin } from "./sessions/session.ts";
 
 export type { XrioConfig } from "./config.ts";
 
@@ -66,6 +70,11 @@ export type {
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
+  SessionInfo,
+  SessionOutcomes,
+  SessionSummary,
+  SessionVisit,
+  SessionVisitFilter,
   StructuredContent,
   WaitFor,
 } from "./types.ts";
@@ -84,6 +93,7 @@ export class XrioClient {
   readonly #defaults: ClientDefaults;
   readonly #hostFacts: ClientHostFacts;
   readonly #scrapes: Scrapes;
+  readonly #sessions: SessionManager;
 
   constructor(options: ClientOptions) {
     const config = loadXrioConfig(options?.configFile);
@@ -91,15 +101,46 @@ export class XrioClient {
     this.#defaults = resolveClientOptions(options, config.host, config.scrape);
     this.#hostFacts = hostFactsFor(this.#defaults.cacheDir);
 
+    this.#sessions = createSessions(this.#defaults.stateDir, {
+      databaseDir: this.#defaults.databaseDir,
+      profileUse,
+      warmthMaxAgeMs: this.#defaults.warmthMaxAgeMs,
+    });
     this.#scrapes = createScrapes({
       admission: createAdmission(this.#defaults.maxBrowsers),
       comparisonBinary: this.#defaults.browser.browserPath,
       config,
       fonts: createFontEvidenceStore({ root: hostCacheRoot(this.#defaults.cacheDir) }),
       host: this.#hostFacts,
-      sessions: anonymousSessions(),
+      sessions: this.#sessions,
       sources: createSources(cdpDriver),
     });
+  }
+
+  get sessions(): SessionAdmin {
+    const { admin } = this.#sessions;
+
+    return {
+      delete: async (name) => {
+        this.#scrapes.assertOpen();
+        await admin.delete(name);
+      },
+      list: async () => {
+        this.#scrapes.assertOpen();
+
+        return await admin.list();
+      },
+      prune: async (options) => {
+        this.#scrapes.assertOpen();
+
+        return await admin.prune(options);
+      },
+      visits: async (name, filter) => {
+        this.#scrapes.assertOpen();
+
+        return await admin.visits(name, filter);
+      },
+    };
   }
 
   scrape<Format extends ScrapeFormat>(
@@ -115,7 +156,7 @@ export class XrioClient {
     const content = formats[intent.format](document);
     deadline.throwIfExpired();
 
-    return {
+    const result = {
       ...content,
       block: document.block,
       cookies: document.cookies,
@@ -124,10 +165,13 @@ export class XrioClient {
       status: document.status,
       url: document.url,
     };
+
+    return document.session === undefined ? result : { ...result, session: document.session };
   }
 
   async close(): Promise<void> {
     await this.#scrapes.close();
+    await this.#sessions.close();
     await this.#hostFacts.settle();
   }
 

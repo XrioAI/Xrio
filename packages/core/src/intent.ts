@@ -12,9 +12,10 @@ type SourceIntent =
       readonly waitFor?: WaitFor;
     };
 
-interface SessionIntent {
-  readonly kind: "anonymous";
-}
+type SessionIntent =
+  | { readonly kind: "anonymous" }
+  | { readonly kind: "named"; readonly name: string }
+  | { readonly kind: "pool"; readonly name: string; readonly size: number; readonly site: string };
 
 export interface ScrapeIntent {
   readonly url: URL;
@@ -33,6 +34,9 @@ type BrowserIntent = Extract<SourceIntent, { mode: "headless" | "headed" }>;
 
 export type ClientDefaults = Pick<ScrapeIntent, "identity" | "session" | "route" | "retries"> & {
   readonly cacheDir: CacheDir;
+  readonly stateDir: string;
+  readonly databaseDir: string;
+  readonly warmthMaxAgeMs: number;
   readonly maxBrowsers: number | undefined;
   readonly mode: SourceIntent["mode"];
   readonly browser: Pick<BrowserIntent, "browserArgs"> & {

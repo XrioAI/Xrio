@@ -1,4 +1,6 @@
-import type { DeviceRecord, HostCapabilities } from "../humanizer/contracts.ts";
+import type { BlockVerdict, ChallengeOutcome } from "../blocks/classify.ts";
+import type { ErrorCode } from "../errors.ts";
+import type { DeviceRecord, HostCapabilities, PlanRecord } from "../humanizer/contracts.ts";
 import type { HttpPlan, IdentityPlan } from "../humanizer/humanizer.ts";
 import type { ScrapeIntent } from "../intent.ts";
 import type { HeldDeadline } from "../lifetime.ts";
@@ -8,9 +10,23 @@ import type { ProxyEndpoint, SourceDocument } from "../types.ts";
 import type { Closed } from "./browser/chrome-scope.ts";
 import type { FontClaim } from "./browser/font-evidence.ts";
 
+export type Profile =
+  | { readonly kind: "scratch" }
+  | { readonly kind: "persistent"; readonly dir: string };
+
+export type SessionBinding =
+  | { readonly kind: "unbound"; readonly stickyId: string }
+  | { readonly kind: "direct"; readonly stickyId: string }
+  | {
+      readonly kind: "proxy";
+      readonly stickyId: string;
+      readonly region: { readonly country: string; readonly zone: string };
+    };
+
 export interface Visit {
   readonly document: Promise<SourceDocument>;
   readonly closed: Promise<Closed>;
+  readonly argv: Promise<readonly string[] | null>;
 }
 
 type BrowserIntent = Exclude<ScrapeIntent["source"], { mode: "http" }>;
@@ -23,6 +39,9 @@ export type VisitPlan =
       readonly capabilities: HostCapabilities;
       readonly identity: IdentityPlan;
       readonly fonts: FontClaim;
+      readonly profile?: Profile;
+      readonly sessionBinding?: SessionBinding;
+      readonly exitAddress?: string;
       readonly proxy: ProxyEndpoint | undefined;
     } & BrowserIntent)
   | {
@@ -35,8 +54,39 @@ export type VisitPlan =
       readonly proxy: ProxyEndpoint | undefined;
     };
 
-export interface FinishedVisit {
+export interface SiteVisit {
+  readonly site: string;
+  readonly verdict: SourceDocument["block"]["verdict"];
+  readonly vendor: SourceDocument["block"]["vendor"];
+  readonly challengeOutcome: string | null;
+  readonly challengeRules: readonly string[];
+  readonly exitAddress: string | null;
+  readonly deviceDigest: string;
+}
+
+export type AttemptOutcome = BlockVerdict | "failed";
+
+export interface AttemptLog {
+  readonly url: string;
+  readonly site: string;
+  readonly outcome: AttemptOutcome;
+  readonly errorCode: ErrorCode | null;
+  readonly status: number | null;
+  readonly vendor: string | null;
+  readonly challengeOutcome: ChallengeOutcome | null;
+  readonly challengeRules: readonly string[];
+  readonly exitAddress: string | null;
+  readonly proxyUrl: string | null;
+  readonly deviceDigest: string | null;
+  readonly argv: readonly string[] | null;
+  readonly plan: PlanRecord | null;
+}
+
+export interface FinishedVisit extends AttemptLog {
+  readonly siteVisit?: SiteVisit;
+  readonly binding?: SessionBinding;
   readonly record: DeviceRecord | null;
+  readonly browserArgs: readonly string[];
   readonly closed: Closed;
 }
 

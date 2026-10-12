@@ -971,6 +971,33 @@ const probeFailed = ({ directory }: ForkPackage, cause: unknown): XrioError =>
     },
   );
 
+export const readChromeVersion = async (binary: string, shutdown: AbortSignal): Promise<string> => {
+  const stops = {
+    budget: AbortSignal.timeout(PROBE_BUDGET_MS),
+    budgetMs: PROBE_BUDGET_MS,
+    groups: new Set<number>(),
+    shutdown,
+  };
+
+  try {
+    return parseVersion(await runForkOutput(binary, ["--version"], stops));
+  } catch (error) {
+    throw new XrioError(
+      "BROWSER_LAUNCH_FAILED",
+      `The browser at ${binary} could not report its version: ${messageOf(error)}.`,
+      {
+        cause: error,
+        details: {
+          mismatches: [],
+          stderr: error instanceof ForkProbeError ? error.stderr.slice(-STDERR_TAIL_CHARS) : "",
+        },
+      },
+    );
+  }
+};
+
+export const chromeMajorOf = (version: string): number => Number(version.split(".", 1)[0]);
+
 export interface ProbeWork {
   readonly join: <Value>(work: Promise<Value>) => Promise<Value>;
   readonly settled: () => Promise<void>;

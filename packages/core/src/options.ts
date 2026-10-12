@@ -1,14 +1,17 @@
+/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters -- This module parses untrusted public options. */
+import path from "node:path";
+
 import { CacheDir, defaultCacheDir } from "./cache-dir.ts";
 import { invalidOptions, redactUrl } from "./errors.ts";
 import { resolveHostConfig } from "./host-config.ts";
 import type { HostSettings } from "./host-config.ts";
-import type { DeviceRecord } from "./humanizer/contracts.ts";
 import { parseRequestHeaders } from "./humanizer/request-headers.ts";
-import { recordOverrides } from "./humanizer/surfaces.ts";
 import type { ClientDefaults, ScrapeIntent } from "./intent.ts";
 import { resolveScrapeConfig } from "./scrape-config.ts";
 import type { ScrapeSettings } from "./scrape-config.ts";
 import { parseSeedCookies } from "./seed-cookies.ts";
+import { defaultDatabaseDir, defaultStateDir } from "./sessions/profiles.ts";
+import { DEFAULT_WARMTH_MAX_AGE_MS } from "./sessions/warmth.ts";
 import { parseBrowserArgs } from "./sources/browser/launch-plan.ts";
 import type {
   ClientOptions,
@@ -114,6 +117,7 @@ export const parseProxy = (value: string): ProxyEndpoint => {
     port: url.port === "" ? defaultProxyPorts[protocol] : Number(url.port),
     protocol,
     redactedUrl: redactUrl(url),
+    url: url.href,
   };
 };
 
@@ -176,6 +180,42 @@ const explicitProxy = (value: string): ProxyEndpoint => {
   return proxy;
 };
 
+const positiveDuration = (value: number, field: string): number => {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw invalidOptions(`${field} must be a positive integer.`);
+  }
+
+  return value;
+};
+
+const resolveStateDir = (directory: string): string => {
+  if (typeof directory !== "string" || directory.trim() === "") {
+    throw invalidOptions("stateDir must be a non-empty path.");
+  }
+
+  const stateDir = path.resolve(directory);
+
+  if (stateDir === defaultStateDir() || stateDir === defaultDatabaseDir()) {
+    throw invalidOptions(
+      `stateDir must not be ${stateDir}, which Xrio uses when stateDir is unset. Leave stateDir unset or choose another directory.`,
+    );
+  }
+
+  return stateDir;
+};
+
+const sessionDirectories = (
+  directory: string | undefined,
+): Pick<ClientDefaults, "databaseDir" | "stateDir"> => {
+  if (directory === undefined) {
+    return { databaseDir: defaultDatabaseDir(), stateDir: defaultStateDir() };
+  }
+
+  const stateDir = resolveStateDir(directory);
+
+  return { databaseDir: stateDir, stateDir };
+};
+
 export const resolveClientOptions = (
   options?: ClientOptions,
   host: HostSettings = resolveHostConfig(),
@@ -204,6 +244,62 @@ export const resolveClientOptions = (
     retries: scrape.retries,
     route: proxy,
     session: { kind: "anonymous" },
+    ...sessionDirectories(options.stateDir),
+    warmthMaxAgeMs: positiveDuration(
+      options.warmthMaxAgeMs ?? DEFAULT_WARMTH_MAX_AGE_MS,
+      "warmthMaxAgeMs",
+    ),
+  };
+};
+
+const SESSION_NAME_MAX_LENGTH = 128;
+
+const sessionName = (value: unknown): string => {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > SESSION_NAME_MAX_LENGTH ||
+    value.includes("/")
+  ) {
+    throw invalidOptions(
+      `A session name must have 1 to ${SESSION_NAME_MAX_LENGTH} characters and no slash.`,
+    );
+  }
+
+  return value;
+};
+
+const resolveSession = (options: ScrapeOptions, mode: string): ScrapeIntent["session"] => {
+  if (options.session === undefined) {
+    return { kind: "anonymous" };
+  }
+
+  if (mode === "http") {
+    throw invalidOptions("session is only supported in browser modes.");
+  }
+
+  if ("cookies" in options && options.cookies !== undefined) {
+    throw invalidOptions("cookies cannot be supplied to a session.");
+  }
+
+  if (typeof options.session === "string") {
+    return { kind: "named", name: sessionName(options.session) };
+  }
+
+  if (
+    typeof options.session !== "object" ||
+    options.session === null ||
+    !Number.isSafeInteger(options.session.size) ||
+    options.session.size < 1
+  ) {
+    throw invalidOptions("A session pool needs a positive integer size.");
+  }
+
+  return {
+    kind: "pool",
+    name: sessionName(options.session.pool),
+    site: parseTargetUrl(options.url).hostname,
+    size: options.session.size,
   };
 };
 
@@ -279,26 +375,10 @@ export const resolveScrapeIntent = (
     identity: defaults.identity,
     retries: defaults.retries,
     route: proxy,
-    session: defaults.session,
+    session: resolveSession(options, source.mode),
     signal,
     source,
     timeoutMs,
     url,
   };
-};
-
-export const refuseRecordOverrides = (
-  record: DeviceRecord,
-  scrape: Parameters<typeof recordOverrides>[1],
-): void => {
-  const overrides = recordOverrides(record, scrape);
-
-  if (overrides.length > 0) {
-    const fields = new Intl.ListFormat("en", { type: "conjunction" }).format(overrides);
-    const pronoun = overrides.length === 1 ? "it" : "them";
-
-    throw invalidOptions(
-      `The session's device record fixes its ${fields}; a scrape in that session cannot change ${pronoun}.`,
-    );
-  }
 };
