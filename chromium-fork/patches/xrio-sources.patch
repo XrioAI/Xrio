@@ -2566,10 +2566,10 @@ index 0000000000000000000000000000000000000000..b2918faef3370768e5e5b59844fe0e13
 +}  // namespace base::xrio
 diff --git a/base/xrio_knobs.cc b/base/xrio_knobs.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..50f3f04ce9802a0db9315750d5c19983c59cdf22
+index 0000000000000000000000000000000000000000..12c61be44e3324e41bfc2355a0b7fae6128e711c
 --- /dev/null
 +++ b/base/xrio_knobs.cc
-@@ -0,0 +1,1547 @@
+@@ -0,0 +1,1548 @@
 +#include "base/xrio_knobs.h"
 +
 +#include <algorithm>
@@ -3357,7 +3357,8 @@ index 0000000000000000000000000000000000000000..50f3f04ce9802a0db9315750d5c19983
 +     nullptr},
 +
 +    {"pixel-bit-mask", KnobType::kInt, "1",
-+     "XORed into one colour byte of a selected pixel. 1 is +-1/255.",
++     "Bits of one premultiplied colour channel forced to a seeded value on a "
++     "selected, partially transparent pixel. 1 is the low bit.",
 +     &PixelBitMask},
 +    {"pixel-rate-mask", KnobType::kInt, "7",
 +     "Selects one pixel in (this + 1) for perturbation. Sparse enough to stay "
@@ -4119,7 +4120,7 @@ index 0000000000000000000000000000000000000000..50f3f04ce9802a0db9315750d5c19983
 +}  // namespace base::xrio
 diff --git a/base/xrio_knobs.h b/base/xrio_knobs.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..457f2bcd01c88fb31779a4ace380a1adf2473933
+index 0000000000000000000000000000000000000000..550691658f206398c1ac2c45cc0daa6d14ebb786
 --- /dev/null
 +++ b/base/xrio_knobs.h
 @@ -0,0 +1,348 @@
@@ -4364,9 +4365,9 @@ index 0000000000000000000000000000000000000000..457f2bcd01c88fb31779a4ace380a1ad
 +  // phase must fit inside it; both constraints are enforced at validation.
 +  uint64_t pixel_rate_mask;
 +  uint64_t pixel_rate_phase;
-+  // XORed into one of the three colour bytes. 1 is +-1/255: invisible to a
-+  // human, fatal to a hash. Anything wider is visible in the rendered product,
-+  // which IS the deliverable, so validation caps it.
++  // Bits of one premultiplied colour channel forced to a seeded value. 1 is the
++  // low bit: invisible to a human, fatal to a hash. Anything wider is visible
++  // in the rendered product, which IS the deliverable, so validation caps it.
 +  uint8_t pixel_bit_mask;
 +  // How far above the rate-mask bits the channel choice is drawn from, so the
 +  // two decisions do not correlate. Derived from the mask width, not keyed.
@@ -8117,12 +8118,13 @@ index 0000000000000000000000000000000000000000..c60e0dedc8497a10835babebae517bd0
 +}  // namespace base::xrio
 diff --git a/base/xrio_perturb.cc b/base/xrio_perturb.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf913c320f310b961cb449324f866e520065f0ea
+index 0000000000000000000000000000000000000000..adb76044fa6db696b960967983d198d8279f6e12
 --- /dev/null
 +++ b/base/xrio_perturb.cc
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,264 @@
 +#include "base/xrio_perturb.h"
 +
++#include <algorithm>
 +#include <atomic>
 +#include <cmath>
 +
@@ -8319,29 +8321,30 @@ index 0000000000000000000000000000000000000000..bf913c320f310b961cb449324f866e52
 +  return value + offset;
 +}
 +
++namespace {
++
++uint8_t WithForcedBits(uint8_t value, uint8_t mask, bool set, uint8_t ceiling) {
++  const int forced = set ? (value | mask) : (value & ~mask);
++  return forced <= ceiling ? static_cast<uint8_t>(forced) : value;
++}
++
++}  // namespace
++
 +void PerturbPixels(span<uint8_t> pixels,
 +                   size_t row_bytes,
 +                   int width,
 +                   int height,
 +                   int bytes_per_pixel,
++                   ChannelOrder channel_order,
 +                   int origin_x,
 +                   int origin_y,
-+                   uint64_t seed,
-+                   std::array<uint8_t, 3> skip_colour) {
++                   uint64_t seed) {
 +  if (bytes_per_pixel != 4 || width <= 0 || height <= 0) {
 +    return;
 +  }
 +
-+  // Hoisted once per buffer, never per pixel: the inner loop below runs for
-+  // every pixel of every readback, and a flat_map lookup plus a strtod there
-+  // would be a real cost. Hoisting also makes the whole buffer coherent -- the
-+  // rate cannot move between two rows of one image.
 +  const PerturbTuning& tuning = Tuning();
 +
-+  // Refuse rather than clamp. A buffer that does not hold what its geometry
-+  // claims means an assumption here is wrong, and writing into it on a guess is
-+  // how a fingerprint patch becomes a memory-safety bug. subspan() would CHECK
-+  // rather than corrupt, but a crash is not the behaviour we want either.
 +  const size_t row_pixel_bytes = static_cast<size_t>(width) * 4u;
 +  CheckedNumeric<size_t> required =
 +      CheckedNumeric<size_t>(row_bytes) * static_cast<size_t>(height - 1);
@@ -8352,40 +8355,32 @@ index 0000000000000000000000000000000000000000..bf913c320f310b961cb449324f866e52
 +    return;
 +  }
 +
++  const uint8_t mask = std::max<uint8_t>(1, tuning.pixel_bit_mask);
++
 +  for (int row = 0; row < height; ++row) {
-+    // Bounds-checked, and padding past row_pixel_bytes is never in the span we
-+    // hand the inner loop, so it cannot be written.
 +    span<uint8_t> scanline = pixels.subspan(
 +        static_cast<size_t>(row) * row_bytes, row_pixel_bytes);
 +    const uint64_t y =
 +        static_cast<uint64_t>(static_cast<uint32_t>(origin_y + row));
 +    for (int column = 0; column < width; ++column) {
++      span<uint8_t> pixel =
++          scanline.subspan(static_cast<size_t>(column) * 4u, 4u);
++      const uint8_t alpha = pixel[3];
++      if (alpha == 0 || alpha == 255) {
++        continue;
++      }
 +      const uint64_t x =
 +          static_cast<uint64_t>(static_cast<uint32_t>(origin_x + column));
-+      // Absolute coordinates only. Using the offset into this buffer instead
-+      // would make a sub-rect read disagree with a whole-canvas read.
 +      const uint64_t h =
 +          Fmix64(seed ^ (x * tuning.coord_mixer) ^ (y << 32), tuning);
 +      if ((h & tuning.pixel_rate_mask) != tuning.pixel_rate_phase) {
 +        continue;
 +      }
-+      // One of the three colour bytes; the fourth is alpha under both RGBA and
-+      // BGRA and is never touched, so a transparent pixel stays transparent.
-+      span<uint8_t> pixel =
-+          scanline.subspan(static_cast<size_t>(column) * 4u, 4u);
-+      // A CLEARED pixel is left exactly as it was found -- see the header for
-+      // why this is a value test rather than a neighbourhood test, and why the
-+      // caller supplies the colour instead of it being hardcoded black.
-+      //
-+      // Three colour bytes, never alpha: a transparent pixel that is not the
-+      // skip colour still moves, and alpha is never written either way.
-+      if (pixel[0] == skip_colour[0] && pixel[1] == skip_colour[1] &&
-+          pixel[2] == skip_colour[2]) {
-+        continue;
-+      }
-+      // Shifted past the bits the rate decision consumed, or the two would
-+      // correlate and only one channel would ever move.
-+      pixel[(h >> tuning.channel_shift) % 3] ^= tuning.pixel_bit_mask;
++      const size_t logical = (h >> tuning.channel_shift) % 3;
++      const size_t index =
++          channel_order == ChannelOrder::kRgba ? logical : 2 - logical;
++      const bool set = ((h >> 32) & 1) != 0;
++      pixel[index] = WithForcedBits(pixel[index], mask, set, alpha);
 +    }
 +  }
 +}
@@ -8393,14 +8388,13 @@ index 0000000000000000000000000000000000000000..bf913c320f310b961cb449324f866e52
 +}  // namespace base::xrio
 diff --git a/base/xrio_perturb.h b/base/xrio_perturb.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..4f7e481696d072697275e76815c3d4003edb54ce
+index 0000000000000000000000000000000000000000..159c12c10a167144ef4f0f600968f840719afa38
 --- /dev/null
 +++ b/base/xrio_perturb.h
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,159 @@
 +#ifndef BASE_XRIO_PERTURB_H_
 +#define BASE_XRIO_PERTURB_H_
 +
-+#include <array>
 +#include <cstddef>
 +#include <cstdint>
 +#include <optional>
@@ -8440,11 +8434,12 @@ index 0000000000000000000000000000000000000000..4f7e481696d072697275e76815c3d400
 +//   where they overlap, or the disagreement is a stronger tell than the
 +//   constant hash was (catalog SS2 #50, SS3 #98).
 +//
-+//   Sparse and low-bit only. The rendered page IS the product. Only the low bit
-+//   of a colour channel moves, on roughly one pixel in eight -- enough to change
-+//   a hash completely, not enough to change a pixel any human or diff can see.
-+//   Dense LSB noise across a flat region is its own anomaly; real rasterisers do
-+//   not produce it.
++//   Sparse, small, and only where rasterisers differ. Only partially
++//   transparent pixels move -- anti-aliased edges, where real GPUs and drivers
++//   disagree -- in the low bit of one premultiplied colour channel, forced to a
++//   seeded value so a second pass changes nothing, on roughly one in eight of
++//   them. Opaque and cleared pixels, which a page can know exactly,
++//   never move.
 +//
 +// EVERY MAGNITUDE BELOW IS A KNOB. The rate, the bit that moves, the audio
 +// scale range and the geometry step are `pixel-rate-mask`, `pixel-bit-mask`,
@@ -8511,81 +8506,17 @@ index 0000000000000000000000000000000000000000..4f7e481696d072697275e76815c3d400
 +// target starts failing.
 +BASE_EXPORT std::optional<uint64_t> GeometrySeed();
 +
-+// Flips the low bit of a colour channel on a sparse, deterministic subset of the
-+// pixels in `pixels`, keyed on each pixel's absolute canvas coordinate.
-+//
-+// `row_bytes` is the stride, which may exceed `width * bytes_per_pixel`; padding
-+// is never touched. `origin_x` / `origin_y` place this buffer's top-left corner
-+// in canvas space -- pass the sub-rect origin for a partial read and (0, 0) for
-+// a whole-canvas one, which is what makes the two agree.
-+//
-+// A pixel whose three COLOUR bytes equal `skip_colour` is NEVER touched.
-+//
-+// It defaults to black, which covers both cleared canvas2d states -- clearRect's
-+// (0,0,0,0) and an `{alpha: false}` WebGL context's (0,0,0,255). creepjs's
-+// cheapest canvas check is `Math.max(...getImageData(...).data) === 0` after a
-+// clearRect, with no ground truth needed, so a single flipped bit there is free
-+// for the detector. Alpha is not part of the test, so a transparent pixel that
-+// is not black still moves: this is a colour test, not an alpha test. The price
-+// is that the skip colour is never perturbed anywhere, which is the right trade
-+// -- an untouched flat region is what a real rasteriser produces.
-+//
-+// IT IS A PARAMETER BECAUSE WEBGL USED TO PASS ITS LIVE CLEAR COLOUR, and no
-+// caller passes a non-default any more. `gl.clearColor(0.2, 0.6, 0.9, 1);
-+// gl.clear(); readPixels()` is a GROUND-TRUTH read -- the page chose the
-+// colour, the float-to-unorm8 conversion is exact, so it knows precisely what
-+// every pixel must be -- and MEASURED on the v2 build a flat clear read back in
-+// FOUR colours against stock's one, which black alone did not cover.
-+//
-+// That caller was removed on 2026-09-07 with the WebGL readback perturbation
-+// (fork/readback-perturbation.md). The parameter is RETAINED, not dead weight:
-+// it is the same ground-truth argument for any future caller with a
-+// caller-known background, the unit tests cover it, and the alternative -- a
-+// hardcoded black skip -- is the exact defect the v2 measurement found. Both
-+// remaining callers are canvas2d, where the cleared state IS black, so they
-+// take the default.
-+//
-+// One edge worth keeping written down, because it was half the reason the WebGL
-+// hook was not coherent: the value a caller can query is the CURRENT clear
-+// colour, so a page that clears to A, draws, then sets the clear colour to B
-+// before reading would get its A-coloured background perturbed. Changing
-+// `clearColor` WITHOUT clearing could therefore change the readback of an
-+// unchanged framebuffer -- state dependence a real driver does not have.
-+//
-+// Why not the stronger "never perturb a uniform REGION": that needs a pixel's
-+// neighbours, and a neighbour may lie outside the rectangle the caller asked
-+// for. Pixel (3,3) is interior to readPixels(0,0,8,8) and on the border of
-+// readPixels(0,0,4,4), so the two reads would disagree on a one-pixel ring --
-+// breaking the crop coherence the whole design rests on (SS2 #50, SS3 #98). A
-+// value test is local, so it is identical under every crop.
-+//
-+// The test is per-pixel and therefore identical under every crop, which the
-+// stronger "leave uniform regions alone" form is not: a four-neighbour test
-+// makes a pixel's fate depend on whether the requested rectangle happens to
-+// contain its neighbours, and a sub-rect read would then disagree with a
-+// whole-canvas read on a one-pixel ring.
-+//
-+// No-op unless `bytes_per_pixel` is 4. Every readback surface we care about is
-+// 8-bit RGBA or BGRA; for those the fourth byte is alpha under both orders, so
-+// only the first three are touched and channel order does not matter. Anything
-+// else (F16, and any future wide format) is passed through untouched rather than
-+// guessed at.
-+//
-+// Takes a span rather than (pointer, length): base/ enforces
-+// -Wunsafe-buffer-usage as an error, and span's (ptr, count) constructor is
-+// itself UNSAFE_BUFFER_USAGE. Every caller has a typed accessor that yields a
-+// span directly -- DOMArrayBufferView::ByteSpanMaybeShared(),
-+// gfx::SkPixmapToWritableSpan() -- so no raw pointer is ever formed, and the
-+// subspan arithmetic below is bounds-checked instead of merely careful.
++enum class ChannelOrder { kRgba, kBgra };
++
 +BASE_EXPORT void PerturbPixels(span<uint8_t> pixels,
 +                               size_t row_bytes,
 +                               int width,
 +                               int height,
 +                               int bytes_per_pixel,
++                               ChannelOrder channel_order,
 +                               int origin_x,
 +                               int origin_y,
-+                               uint64_t seed,
-+                               std::array<uint8_t, 3> skip_colour = {0, 0, 0});
++                               uint64_t seed);
 +
 +// Multiplies a rendered audio channel by a per-profile factor very close to 1.
 +//
@@ -8622,14 +8553,16 @@ index 0000000000000000000000000000000000000000..4f7e481696d072697275e76815c3d400
 +#endif  // BASE_XRIO_PERTURB_H_
 diff --git a/base/xrio_perturb_unittest.cc b/base/xrio_perturb_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..83965fa5d97c743823e878af01f285b9efd965d0
+index 0000000000000000000000000000000000000000..3bbd9cf75055a0dc430f3c680f5628b5cd60e6ea
 --- /dev/null
 +++ b/base/xrio_perturb_unittest.cc
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,390 @@
 +#include "base/xrio_perturb.h"
 +
-+#include <array>
++#include <algorithm>
 +#include <cmath>
++#include <cstdlib>
++#include <utility>
 +#include <vector>
 +
 +#include "base/xrio_config.h"
@@ -8654,9 +8587,20 @@ index 0000000000000000000000000000000000000000..83965fa5d97c743823e878af01f285b9
 +}
 +
 +void Perturb(std::vector<uint8_t>& pixels, int width, int height,
-+             int origin_x = 0, int origin_y = 0, uint64_t seed = kSeed) {
++             int origin_x = 0, int origin_y = 0, uint64_t seed = kSeed,
++             ChannelOrder order = ChannelOrder::kRgba) {
 +  PerturbPixels(pixels, static_cast<size_t>(width) * 4, width, height,
-+                /*bytes_per_pixel=*/4, origin_x, origin_y, seed);
++                /*bytes_per_pixel=*/4, order, origin_x, origin_y, seed);
++}
++
++std::vector<uint8_t> PremultipliedCanvas() {
++  auto pixels = Canvas();
++  for (size_t i = 0; i < pixels.size(); i += 4) {
++    for (size_t c = 0; c < 3; ++c) {
++      pixels[i + c] = std::min(pixels[i + c], pixels[i + 3]);
++    }
++  }
++  return pixels;
 +}
 +
 +size_t CountDiff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
@@ -8693,17 +8637,67 @@ index 0000000000000000000000000000000000000000..83965fa5d97c743823e878af01f285b9
 +  EXPECT_LT(changed, 1000u);
 +}
 +
-+TEST(XrioPerturbTest, OnlyTheLowBitOfOneColourChannelMoves) {
-+  auto original = Canvas(), perturbed = Canvas();
++TEST(XrioPerturbTest, OneColourChannelMovesOnePremultipliedStep) {
++  auto original = PremultipliedCanvas(), perturbed = PremultipliedCanvas();
 +  Perturb(perturbed, kW, kH);
-+  for (size_t i = 0; i < original.size(); ++i) {
-+    if (original[i] == perturbed[i]) {
-+      continue;
++  for (size_t i = 0; i < original.size(); i += 4) {
++    EXPECT_EQ(original[i + 3], perturbed[i + 3]) << "alpha moved at " << i;
++    int moved = 0;
++    for (size_t c = 0; c < 3; ++c) {
++      const int delta = perturbed[i + c] - original[i + c];
++      EXPECT_LE(std::abs(delta), 1) << "byte " << i + c;
++      EXPECT_LE(perturbed[i + c], perturbed[i + 3]) << "premultiplied overflow";
++      moved += delta != 0;
 +    }
-+    EXPECT_EQ(original[i] ^ 1, perturbed[i]) << "byte " << i << " moved by more "
-+                                                "than its low bit";
-+    EXPECT_NE(3u, i % 4) << "byte " << i << " is alpha and must never move";
++    EXPECT_LE(moved, 1) << "more than one channel moved at pixel " << i / 4;
 +  }
++}
++
++TEST(XrioPerturbTest, PerturbingTwiceChangesNothingMore) {
++  auto premul = PremultipliedCanvas();
++  Perturb(premul, kW, kH);
++  const auto once = premul;
++  Perturb(premul, kW, kH);
++  EXPECT_EQ(once, premul) << "a perturbed canvas read back again must not move "
++                             "twice";
++}
++
++TEST(XrioPerturbTest, OpaquePixelsNeverMove) {
++  std::vector<uint8_t> pixels = Canvas();
++  for (size_t i = 3; i < pixels.size(); i += 4) {
++    pixels[i] = 255;
++  }
++  const auto before = pixels;
++  Perturb(pixels, kW, kH);
++  EXPECT_EQ(before, pixels)
++      << "opaque fills read back exactly, so a page can hold ground truth";
++}
++
++TEST(XrioPerturbTest, FullyTransparentPixelsNeverMove) {
++  std::vector<uint8_t> pixels(static_cast<size_t>(kW) * kH * 4);
++  for (size_t i = 0; i < pixels.size(); i += 4) {
++    pixels[i] = 0x40;
++    pixels[i + 1] = 0x80;
++    pixels[i + 2] = 0xC0;
++    pixels[i + 3] = 0x00;
++  }
++  const auto before = pixels;
++  Perturb(pixels, kW, kH);
++  EXPECT_EQ(before, pixels);
++}
++
++TEST(XrioPerturbTest, RgbaAndBgraMoveTheSameLogicalChannel) {
++  auto rgba = PremultipliedCanvas();
++  auto bgra = rgba;
++  for (size_t i = 0; i < bgra.size(); i += 4) {
++    std::swap(bgra[i], bgra[i + 2]);
++  }
++  Perturb(rgba, kW, kH, 0, 0, kSeed, ChannelOrder::kRgba);
++  Perturb(bgra, kW, kH, 0, 0, kSeed, ChannelOrder::kBgra);
++  for (size_t i = 0; i < bgra.size(); i += 4) {
++    std::swap(bgra[i], bgra[i + 2]);
++  }
++  EXPECT_EQ(rgba, bgra);
 +}
 +
 +// The property the whole design turns on: a sub-rect read and a whole-canvas
@@ -8773,95 +8767,21 @@ index 0000000000000000000000000000000000000000..83965fa5d97c743823e878af01f285b9
 +      << "the rest of the buffer must still be perturbed";
 +}
 +
-+// The measured v2 residual: gl.clearColor(0.2,0.6,0.9,1) + readPixels read back
-+// in FOUR colours against stock's one. A clear is a GROUND-TRUTH read -- the page
-+// chose the colour -- so the caller hands us that colour to leave alone.
-+TEST(XrioPerturbTest, AFlatClearInTheSkipColourReadsBackAsOneColour) {
-+  const std::array<uint8_t, 3> clear = {51, 153, 229};  // 0.2, 0.6, 0.9
-+  std::vector<uint8_t> pixels(static_cast<size_t>(kW) * kH * 4);
-+  for (size_t i = 0; i < pixels.size(); i += 4) {
-+    pixels[i] = clear[0];
-+    pixels[i + 1] = clear[1];
-+    pixels[i + 2] = clear[2];
-+    pixels[i + 3] = 255;
-+  }
-+  auto before = pixels;
-+  PerturbPixels(pixels, static_cast<size_t>(kW) * 4, kW, kH,
-+                /*bytes_per_pixel=*/4, 0, 0, kSeed, clear);
-+  EXPECT_EQ(before, pixels) << "a flat clear must read back in ONE colour";
-+
-+  // And the skip colour is the CALLER's, not a constant: the same buffer with
-+  // the default (black) skip is perturbed, or the parameter is doing nothing.
-+  auto with_default_skip = before;
-+  Perturb(with_default_skip, kW, kH);
-+  EXPECT_GT(CountDiff(before, with_default_skip), 0u);
-+}
-+
-+// Drawn content in a buffer that was cleared to a non-black colour must still
-+// move, or the skip becomes "perturb nothing" on any page that sets a clear
-+// colour.
-+TEST(XrioPerturbTest, TheSkipColourDoesNotSpareDrawnPixels) {
-+  const std::array<uint8_t, 3> clear = {51, 153, 229};
-+  auto pixels = Canvas();
-+  auto before = pixels;
-+  PerturbPixels(pixels, static_cast<size_t>(kW) * 4, kW, kH,
-+                /*bytes_per_pixel=*/4, 0, 0, kSeed, clear);
-+  EXPECT_GT(CountDiff(before, pixels), 0u);
-+}
-+
-+// The skip tests the three COLOUR bytes and not alpha, and the reason is a
-+// cleared buffer that is not (0,0,0,0): a WebGL context created {alpha: false}
-+// clears to (0,0,0,255). An alpha test would leave R/G/B moving inside a
-+// cleared buffer a page can read with no ground truth at all.
-+//
-+// THE JUSTIFICATION USED TO NAME readPixels AS "the one surface still perturbed
-+// at the shipping default", and both halves of that are now false: the WebGL
-+// readback perturbation was removed 2026-09-07
-+// (fork/readback-perturbation.md), and perturb-canvas defaults off. The RULE
-+// still stands on the canvas2d opt-in, which reaches this same helper and can
-+// be handed an opaque-black cleared buffer by an {alpha: false} offscreen
-+// context -- so this is a property of PerturbPixels, not of one caller.
-+TEST(XrioPerturbTest, AnOpaqueBlackBufferReadsBackAsOpaqueBlack) {
-+  std::vector<uint8_t> cleared(static_cast<size_t>(kW) * kH * 4);
-+  for (size_t i = 0; i < cleared.size(); i += 4) {
-+    cleared[i] = cleared[i + 1] = cleared[i + 2] = 0;
-+    cleared[i + 3] = 255;
-+  }
-+  auto before = cleared;
-+  Perturb(cleared, kW, kH);
-+  EXPECT_EQ(before, cleared)
-+      << "a gl.clear() on an alpha:false context must read back exactly";
-+}
-+
-+// A fully transparent pixel that is not black is NOT a cleared pixel, and it
-+// must still be perturbed -- otherwise the skip becomes an alpha test and a page
-+// can read the mask's shape off a translucent canvas.
-+TEST(XrioPerturbTest, TransparentButNotBlackIsStillPerturbed) {
-+  std::vector<uint8_t> pixels(static_cast<size_t>(kW) * kH * 4);
-+  for (size_t i = 0; i < pixels.size(); i += 4) {
-+    pixels[i] = 0x40;
-+    pixels[i + 1] = 0x80;
-+    pixels[i + 2] = 0xC0;
-+    pixels[i + 3] = 0x00;
-+  }
-+  auto before = pixels;
-+  Perturb(pixels, kW, kH);
-+  EXPECT_GT(CountDiff(before, pixels), 0u);
-+}
-+
 +TEST(XrioPerturbTest, RefusesGeometryTheBufferCannotHold) {
 +  auto pixels = Canvas(4, 4);
 +  const auto original = pixels;
 +  // Claims twice the rows the buffer holds. Must refuse outright rather than
 +  // clamp: writing on a guess is how a fingerprint patch becomes a memory bug.
-+  PerturbPixels(pixels, 4 * 4, 4, 8, 4, 0, 0, kSeed);
++  PerturbPixels(pixels, 4 * 4, 4, 8, 4, ChannelOrder::kRgba, 0,
++                0, kSeed);
 +  EXPECT_EQ(original, pixels);
 +}
 +
 +TEST(XrioPerturbTest, PassesThroughFormatsItDoesNotUnderstand) {
 +  auto pixels = Canvas();
 +  const auto original = pixels;
-+  PerturbPixels(pixels, kW * 8, kW, kH, /*bytes_per_pixel=*/8, 0, 0, kSeed);
++  PerturbPixels(pixels, kW * 8, kW, kH, /*bytes_per_pixel=*/8,
++                ChannelOrder::kRgba, 0, 0, kSeed);
 +  EXPECT_EQ(original, pixels);
 +}
 +
@@ -8870,7 +8790,8 @@ index 0000000000000000000000000000000000000000..83965fa5d97c743823e878af01f285b9
 +  constexpr size_t kStride = kWidth * 4 + 12;  // deliberately padded
 +  std::vector<uint8_t> pixels(kStride * kHeight, 0xAB);
 +  const auto original = pixels;
-+  PerturbPixels(pixels, kStride, kWidth, kHeight, 4, 0, 0, kSeed);
++  PerturbPixels(pixels, kStride, kWidth, kHeight, 4, ChannelOrder::kRgba, 0,
++                0, kSeed);
 +  for (int row = 0; row < kHeight; ++row) {
 +    for (size_t i = kWidth * 4; i < kStride; ++i) {
 +      EXPECT_EQ(original[row * kStride + i], pixels[row * kStride + i])
@@ -10479,10 +10400,10 @@ index 0000000000000000000000000000000000000000..62d366cf973e61cd25c19ebb56a54635
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIA_CAPABILITIES_XRIO_MEDIA_PERSONA_H_
 diff --git a/third_party/blink/renderer/platform/graphics/xrio_canvas_perturb.h b/third_party/blink/renderer/platform/graphics/xrio_canvas_perturb.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..496950fccb29286e884ee5392a0d5e62b609afa2
+index 0000000000000000000000000000000000000000..8c6dc99a0b4332325566f3f244881c592e803c9e
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/graphics/xrio_canvas_perturb.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,125 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_XRIO_CANVAS_PERTURB_H_
 +#define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_XRIO_CANVAS_PERTURB_H_
 +
@@ -10492,6 +10413,7 @@ index 0000000000000000000000000000000000000000..496950fccb29286e884ee5392a0d5e62
 +#include "base/containers/span.h"
 +#include "base/xrio_persona.h"
 +#include "base/xrio_perturb.h"
++#include "third_party/skia/include/core/SkBitmap.h"
 +#include "third_party/skia/include/core/SkData.h"
 +#include "third_party/skia/include/core/SkImageInfo.h"
 +#include "third_party/skia/include/core/SkPixmap.h"
@@ -10531,6 +10453,44 @@ index 0000000000000000000000000000000000000000..496950fccb29286e884ee5392a0d5e62
 +// is configured (fail closed), the format is not 4 bytes per pixel, or the
 +// geometry does not hold together. Refusing beats guessing -- this code writes
 +// into image memory.
++inline void PerturbPixmap(const SkPixmap& pixmap,
++                          int origin_x,
++                          int origin_y,
++                          uint64_t seed) {
++  const SkImageInfo& info = pixmap.info();
++  base::xrio::ChannelOrder channel_order;
++  switch (info.colorType()) {
++    case kRGBA_8888_SkColorType:
++      channel_order = base::xrio::ChannelOrder::kRgba;
++      break;
++    case kBGRA_8888_SkColorType:
++      channel_order = base::xrio::ChannelOrder::kBgra;
++      break;
++    default:
++      return;
++  }
++  if (info.alphaType() == kPremul_SkAlphaType) {
++    base::xrio::PerturbPixels(gfx::SkPixmapToWritableSpan(pixmap),
++                              pixmap.rowBytes(), info.width(), info.height(),
++                              info.bytesPerPixel(), channel_order, origin_x,
++                              origin_y, seed);
++    return;
++  }
++  if (info.alphaType() != kUnpremul_SkAlphaType) {
++    return;
++  }
++  SkBitmap premultiplied;
++  if (!premultiplied.tryAllocPixels(info.makeAlphaType(kPremul_SkAlphaType)) ||
++      !pixmap.readPixels(premultiplied.pixmap())) {
++    return;
++  }
++  base::xrio::PerturbPixels(
++      gfx::SkPixmapToWritableSpan(premultiplied.pixmap()),
++      premultiplied.rowBytes(), info.width(), info.height(),
++      info.bytesPerPixel(), channel_order, origin_x, origin_y, seed);
++  premultiplied.pixmap().readPixels(pixmap);
++}
++
 +inline void PerturbEncodeSource(SkPixmap* pixmap, sk_sp<SkData>* owner) {
 +  if (!pixmap || !owner || !pixmap->addr()) {
 +    return;
@@ -10556,17 +10516,11 @@ index 0000000000000000000000000000000000000000..496950fccb29286e884ee5392a0d5e62
 +    return;
 +  }
 +
-+  // Spans throughout, no memcpy and no raw pointers: base/ and blink/ enforce
-+  // -Wunsafe-buffer-usage as an error, and span's (ptr, count) constructor is
-+  // itself UNSAFE_BUFFER_USAGE. Both pixmaps share `info` and `rowBytes`, so the
-+  // two spans are the same length and copy_from() is exact.
 +  SkPixmap perturbed(info, copy->writable_data(), pixmap->rowBytes());
 +  base::span<uint8_t> destination = gfx::SkPixmapToWritableSpan(perturbed);
 +  destination.copy_from(gfx::SkPixmapToSpan(*pixmap));
 +
-+  base::xrio::PerturbPixels(destination, perturbed.rowBytes(), info.width(),
-+                           info.height(), info.bytesPerPixel(),
-+                           /*origin_x=*/0, /*origin_y=*/0, seed.value());
++  PerturbPixmap(perturbed, /*origin_x=*/0, /*origin_y=*/0, seed.value());
 +
 +  *pixmap = perturbed;
 +  *owner = std::move(copy);
