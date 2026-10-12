@@ -312,7 +312,7 @@ const report = {
     idleLoopDelayMs: round(idleLoopDelayMs),
     loopResolutionMs: LOOP_RESOLUTION_MS,
     node: process.version,
-    packages: { "@mdream/js": manifest.dependencies["@mdream/js"] },
+    packages: { "@mdream/js": manifest.devDependencies["@mdream/js"] },
     platform: `${process.platform}-${process.arch}`,
     runs,
     warmup,

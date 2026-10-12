@@ -278,9 +278,6 @@ importers:
 
   packages/core:
     dependencies:
-      '@mdream/js':
-        specifier: 1.7.2
-        version: 1.7.2(patch_hash=f047c9820b99d9ee56f0aaeff529bb4aac26ebe0964dc4e738f468d1cf2136b8)
       entities:
         specifier: 8.1.0
         version: 8.1.0
@@ -294,6 +291,9 @@ importers:
         specifier: 3.2.0
         version: 3.2.0
     devDependencies:
+      '@mdream/js':
+        specifier: 1.7.2
+        version: 1.7.2(patch_hash=f047c9820b99d9ee56f0aaeff529bb4aac26ebe0964dc4e738f468d1cf2136b8)
       '@xrio/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
