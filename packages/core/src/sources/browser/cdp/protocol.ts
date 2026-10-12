@@ -41,6 +41,7 @@ const ALLOWED_COMMANDS = {
   "Browser.close": ["browser"],
   "Browser.getVersion": ["browser"],
   "Browser.setDownloadBehavior": ["browser"],
+  "Input.dispatchMouseEvent": ["main"],
   "Network.enable": EVERY_TARGET,
   "Network.getResponseBody": ["main"],
   "Network.setCookies": ["main"],
@@ -98,12 +99,42 @@ interface NoBodyBuffers {
   readonly maxTotalBufferSize: 0;
 }
 
+interface MouseAt {
+  readonly x: number;
+  readonly y: number;
+  readonly pointerType: "mouse";
+}
+
+interface MouseMoved extends MouseAt {
+  readonly type: "mouseMoved";
+  readonly button: "none";
+  readonly buttons: 0;
+}
+
+interface LeftButton extends MouseAt {
+  readonly button: "left";
+  readonly clickCount: 1;
+}
+
+interface LeftPressed extends LeftButton {
+  readonly type: "mousePressed";
+  readonly buttons: 1;
+}
+
+interface LeftReleased extends LeftButton {
+  readonly type: "mouseReleased";
+  readonly buttons: 0;
+}
+
+type MouseInput = MouseMoved | LeftPressed | LeftReleased;
+
 type Narrowed<Table extends { [Name in Method]: ProtocolParams<Name> }> = Table;
 
 type ParamsIn<Kind extends Scope> = Narrowed<{
   "Browser.close": NoParams;
   "Browser.getVersion": NoParams;
   "Browser.setDownloadBehavior": { readonly behavior: "deny" };
+  "Input.dispatchMouseEvent": MouseInput;
   "Network.enable": Kind extends "main" ? PreviewBuffers : NoBodyBuffers;
   "Network.getResponseBody": { readonly requestId: string };
   "Network.setCookies": ProtocolParams<"Network.setCookies">;

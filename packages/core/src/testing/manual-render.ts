@@ -6,6 +6,7 @@ import type {
   DriverBrowser,
   DriverEvent,
   DriverListener,
+  PageArea,
   RawHeaders,
   ResultGuard,
 } from "../sources/browser/port.ts";
@@ -45,6 +46,71 @@ export const documentHop = (overrides: Partial<DocumentHop> = {}): DocumentHop =
 
 type SelectorState = "matched" | "absent" | "invalid";
 
+interface TurnstileWidget {
+  readonly box: PageArea;
+  readonly reachable: boolean;
+  readonly solved: boolean;
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly widget: string;
+}
+
+export const turnstileWidget = (
+  widget: string,
+  overrides: Partial<Omit<TurnstileWidget, "widget">> = {},
+): TurnstileWidget => ({
+  box: { height: 65, width: 300, x: 490, y: 260 },
+  reachable: true,
+  solved: false,
+  viewport: { height: 720, width: 1280 },
+  widget,
+  ...overrides,
+});
+
+const readsWidget = (expression: string): boolean => expression.includes("cf-turnstile-response");
+
+const readsSelector = (expression: string): boolean => expression.includes("querySelectorAll");
+
+const guarded = <Result>(
+  value: string | TurnstileWidget | null,
+  guard: ResultGuard<Result>,
+): Result => {
+  if (!guard(value)) {
+    throw new Error("Unexpected capture, selector or widget reply.");
+  }
+
+  return value;
+};
+
+const controlledWidget = () => {
+  let shown: TurnstileWidget | null = null;
+  let reads = 0;
+  let afterClick: (() => void) | undefined;
+  const clicks: PageArea[] = [];
+
+  return {
+    click: async (area: PageArea): Promise<void> => {
+      clicks.push(area);
+      await Promise.resolve();
+      const run = afterClick;
+      afterClick = undefined;
+      run?.();
+    },
+    clicks: () => clicks,
+    onClick: (run: () => void) => {
+      afterClick = run;
+    },
+    read: (): TurnstileWidget | null => {
+      reads += 1;
+
+      return shown;
+    },
+    reads: () => reads,
+    show: (widget: TurnstileWidget | null) => {
+      shown = widget;
+    },
+  };
+};
+
 const bodyOf = (hop: DocumentHop): string => (hop.headers.length > 1 ? CHALLENGE : CONTENT);
 
 const controlledBrowser = (first: DocumentHop) => {
@@ -55,6 +121,7 @@ const controlledBrowser = (first: DocumentHop) => {
   let captures = 0;
   let navigated = first;
   let navigations = 0;
+  const turnstile = controlledWidget();
 
   const emit = (event: DriverEvent) => {
     for (const listener of listeners) {
@@ -70,6 +137,7 @@ const controlledBrowser = (first: DocumentHop) => {
   };
 
   const browser: DriverBrowser = {
+    clickWithin: turnstile.click,
     close: async () => {
       await Promise.resolve();
     },
@@ -77,18 +145,19 @@ const controlledBrowser = (first: DocumentHop) => {
       expression: string,
       guard: ResultGuard<Result>,
     ): Promise<Result> => {
-      const value: unknown = expression.includes("querySelectorAll") ? selector : html;
-
-      if (!guard(value)) {
-        throw new Error("Unexpected capture or selector reply.");
+      if (readsWidget(expression)) {
+        return guarded(await Promise.resolve(turnstile.read()), guard);
       }
 
-      if (!expression.includes("querySelectorAll")) {
-        captures += 1;
-        afterCapture?.();
-        afterCapture = undefined;
+      if (readsSelector(expression)) {
+        return guarded(await Promise.resolve(selector), guard);
       }
 
+      const value = guarded(html, guard);
+
+      captures += 1;
+      afterCapture?.();
+      afterCapture = undefined;
       await Promise.resolve();
 
       return value;
@@ -113,6 +182,7 @@ const controlledBrowser = (first: DocumentHop) => {
   return {
     browser,
     captures: () => captures,
+    clicks: turnstile.clicks,
     commit,
     emit,
     listeners: () => listeners.size,
@@ -123,12 +193,15 @@ const controlledBrowser = (first: DocumentHop) => {
     onCapture: (run: () => void) => {
       afterCapture = run;
     },
+    onClick: turnstile.onClick,
     setHtml: (body: string) => {
       html = body;
     },
     setSelector: (value: SelectorState) => {
       selector = value;
     },
+    showWidget: turnstile.show,
+    widgetReads: turnstile.reads,
   };
 };
 

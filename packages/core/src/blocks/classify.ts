@@ -31,6 +31,7 @@ export interface ChallengeRound {
 export interface ChallengeReport {
   outcome: ChallengeOutcome;
   rounds: ChallengeRound[];
+  clicks: number;
   reloads: number;
 }
 

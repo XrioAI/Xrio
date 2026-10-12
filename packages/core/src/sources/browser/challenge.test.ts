@@ -11,7 +11,9 @@ import {
   LARGE_CHALLENGE,
   PAGE_URL,
   startedRender,
+  turnstileWidget,
 } from "../../testing/manual-render.ts";
+import { DriverError } from "./port.ts";
 import type { DocumentHop, DriverEvent } from "./port.ts";
 
 const served = (index: number, overrides: Partial<DocumentHop> = {}): DocumentHop =>
@@ -31,6 +33,12 @@ const SEC_CPT_CHALLENGE = akamaiCases.tp_akamai_sec_cpt_challenge_200.html;
 const CHALLENGE_SCRIPT_URL = `${PAGE_URL}cdn-cgi/challenge-platform/h/g/orchestrate/test`;
 
 const READY = { selector: "#ready" };
+
+const FIRST_WIDGET = turnstileWidget("cf-chl-widget-a1_response");
+
+const RERENDERED_WIDGET = turnstileWidget("cf-chl-widget-b2_response");
+
+const CHECKBOX = { height: 10, width: 10, x: 513, y: 287.5 } as const;
 
 const requestChallengeScript = (document: DocumentHop): DriverEvent => ({
   ...document,
@@ -77,6 +85,7 @@ describe("challenge waits", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
@@ -107,6 +116,7 @@ describe("challenge waits", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
       reloads: 0,
       rounds: rounds.map((round) => ({ ...round, waitedMs: 250 })),
@@ -141,6 +151,7 @@ describe("challenge waits", () => {
     await run.tick(250);
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed_in_place",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
@@ -162,6 +173,7 @@ describe("challenge waits", () => {
     await run.tick(250);
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed_in_place",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
@@ -203,6 +215,7 @@ describe("challenge waits", () => {
     await run.tick(19_500);
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed_in_place",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
@@ -219,6 +232,7 @@ describe("challenge waits", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
@@ -238,6 +252,7 @@ describe("challenge waits", () => {
     await run.tick(250);
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "budget_exhausted",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
@@ -299,6 +314,7 @@ describe("challenge waits", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toMatchObject({
+      clicks: 0,
       outcome: "rounds_exhausted",
       reloads: 0,
       rounds: [{ waitedMs: 250 }, { waitedMs: 250 }, { waitedMs: 250 }],
@@ -318,6 +334,7 @@ describe("challenge waits", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
       reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
@@ -336,7 +353,9 @@ describe("a challenge page that reloads itself", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -352,7 +371,9 @@ describe("a challenge page that reloads itself", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed_in_place",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -367,7 +388,9 @@ describe("a challenge page that reloads itself", () => {
     await run.tick(250);
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "budget_exhausted",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 20_000 }],
     });
     expect(source.block).toMatchObject({ vendor: "akamai", verdict: "blocked" });
@@ -383,7 +406,9 @@ describe("a challenge page that reloads itself", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.status).toBe(403);
@@ -399,7 +424,9 @@ describe("a challenge page that reloads itself", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "rounds_exhausted",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.block).toMatchObject({ vendor: "akamai", verdict: "blocked" });
@@ -423,6 +450,7 @@ describe("late challenges and selector waits", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "passed",
       reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
@@ -443,6 +471,7 @@ describe("late challenges and selector waits", () => {
     await run.tick(9000);
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "budget_exhausted",
       reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 20_000 }],
@@ -490,6 +519,7 @@ describe("settling the challenge outcome", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "rounds_exhausted",
       reloads: 0,
       rounds: [{ ...LATE_ROUND, waitedMs: 250 }],
@@ -515,6 +545,7 @@ describe("settling the challenge outcome", () => {
     await run.tick();
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
       outcome: "rounds_exhausted",
       reloads: 0,
       rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 250 }],
@@ -558,6 +589,7 @@ describe("device check escalation", () => {
       verdict: source.block.verdict,
     }).toStrictEqual({
       challenge: {
+        clicks: 0,
         outcome: "escalated",
         reloads: 0,
         rounds: [{ ...DATADOME_ROUND, waitedMs: 250 }],
@@ -585,6 +617,7 @@ describe("device check escalation", () => {
       navigations: run.navigations(),
     }).toStrictEqual({
       challenge: {
+        clicks: 0,
         outcome: "passed",
         reloads: 1,
         rounds: [
@@ -607,7 +640,7 @@ describe("device check escalation", () => {
     await run.tick();
     const { source } = await run.result;
     expect([source.block.challenge, source.html, source.block.verdict]).toStrictEqual([
-      { outcome: "passed", reloads: 1, rounds: [{ ...DATADOME_ROUND, waitedMs: 250 }] },
+      { clicks: 0, outcome: "passed", reloads: 1, rounds: [{ ...DATADOME_ROUND, waitedMs: 250 }] },
       CONTENT,
       "ok",
     ]);
@@ -644,5 +677,211 @@ describe("device check escalation", () => {
       "budget_exhausted",
       1,
     ]);
+  });
+});
+
+describe("checkbox clicks on a Cloudflare challenge", () => {
+  it("clicks the checkbox a challenge still shows after 6 s, then passes on the replacement", async () => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    run.onClick(() => {
+      run.commit(served(2));
+    });
+    await nextTurn();
+    await run.tick(5750);
+    const beforeGrace = run.clicks().length;
+    await run.tick(250);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect(beforeGrace).toBe(0);
+    expect(run.clicks()).toStrictEqual([CHECKBOX]);
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 1,
+      outcome: "passed",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 6250 }],
+    });
+    expect(source.html).toBe(CONTENT);
+  });
+
+  it("never looks for the checkbox of a challenge that hands over within 6 s", async () => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    await nextTurn();
+    await run.tick(5500);
+    run.commit(served(2));
+    await run.tick(250);
+    const { source } = await run.result;
+    expect({ clicks: run.clicks(), widgetReads: run.widgetReads() }).toStrictEqual({
+      clicks: [],
+      widgetReads: 0,
+    });
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
+      outcome: "passed",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 5750 }],
+    });
+  });
+
+  it("never looks for a checkbox on another vendor's challenge", async () => {
+    const run = startedRender(challenged(1, "x-datadome-response"));
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    await nextTurn();
+    await run.tick(6000);
+    await run.tick(13_750);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect({ clicks: run.clicks(), widgetReads: run.widgetReads() }).toStrictEqual({
+      clicks: [],
+      widgetReads: 0,
+    });
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
+      outcome: "budget_exhausted",
+      reloads: 0,
+      rounds: [{ rule: "datadome_response_header", vendor: "datadome", waitedMs: 20_000 }],
+    });
+  });
+
+  it.each([
+    { name: "shows no widget", widget: null },
+    { name: "shows a solved widget", widget: turnstileWidget("solved", { solved: true }) },
+    { name: "covers the widget", widget: turnstileWidget("covered", { reachable: false }) },
+    {
+      name: "shows the checkbox off screen",
+      widget: turnstileWidget("below", { box: { height: 65, width: 300, x: 490, y: 700 } }),
+    },
+  ])("clicks nothing on a Cloudflare challenge that $name", async ({ widget }) => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.showWidget(widget);
+    await nextTurn();
+    await run.tick(6000);
+    await run.tick(13_750);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect({ clicks: run.clicks(), widgetReads: run.widgetReads() }).toStrictEqual({
+      clicks: [],
+      widgetReads: 1,
+    });
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
+      outcome: "budget_exhausted",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
+    });
+  });
+
+  it("clicks one widget rendering only once in a round", async () => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    await nextTurn();
+    await run.tick(6000);
+    await run.tick(6000);
+    await run.tick(250);
+    await run.tick(7750);
+    const { source } = await run.result;
+    expect({ clicks: run.clicks(), widgetReads: run.widgetReads() }).toStrictEqual({
+      clicks: [CHECKBOX],
+      widgetReads: 3,
+    });
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 1,
+      outcome: "budget_exhausted",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
+    });
+  });
+
+  it("clicks a re-rendered widget once more, no sooner than 6 s after the first click", async () => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    await nextTurn();
+    await run.tick(6000);
+    run.showWidget(RERENDERED_WIDGET);
+    await run.tick(5750);
+    const beforeSecond = run.clicks().length;
+    await run.tick(250);
+    await run.tick(8000);
+    const { source } = await run.result;
+    expect(beforeSecond).toBe(1);
+    expect(run.clicks()).toStrictEqual([CHECKBOX, CHECKBOX]);
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 2,
+      outcome: "budget_exhausted",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 20_000 }],
+    });
+  });
+
+  it("leaves the last 3 s of a round to the handover and clicks nothing in them", async () => {
+    const run = startedRender(challenged(1), 9500);
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    await nextTurn();
+    await run.tick(6000);
+    await run.tick(2500);
+    const { source } = await run.result;
+    expect({ clicks: run.clicks(), widgetReads: run.widgetReads() }).toStrictEqual({
+      clicks: [],
+      widgetReads: 0,
+    });
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
+      outcome: "deadline",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 8500 }],
+    });
+  });
+
+  it("counts no click when the document is replaced before the button goes down", async () => {
+    const run = startedRender(challenged(1));
+    using _deadline = run.deadline;
+    run.showWidget(FIRST_WIDGET);
+    run.onClick(() => {
+      run.commit(served(2));
+      throw new DriverError({ kind: "document-replaced" });
+    });
+    await nextTurn();
+    await run.tick(6000);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 0,
+      outcome: "passed",
+      reloads: 0,
+      rounds: [{ ...CLOUDFLARE_ROUND, waitedMs: 6250 }],
+    });
+    expect(source.html).toBe(CONTENT);
+  });
+
+  it("adds the clicks of a late challenge's round to the report", async () => {
+    const first = served(1);
+    const run = startedRender(first);
+    using _deadline = run.deadline;
+    run.setHtml(CHALLENGE);
+    run.showWidget(FIRST_WIDGET);
+    run.onCapture(() => {
+      run.emit(requestChallengeScript(first));
+    });
+    run.onClick(() => {
+      run.commit(served(2));
+    });
+    await nextTurn();
+    await run.tick(6000);
+    await run.tick(250);
+    const { source } = await run.result;
+    expect(source.block.challenge).toStrictEqual({
+      clicks: 1,
+      outcome: "passed",
+      reloads: 0,
+      rounds: [{ ...LATE_ROUND, waitedMs: 6250 }],
+    });
   });
 });

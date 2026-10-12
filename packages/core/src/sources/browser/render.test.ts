@@ -22,6 +22,10 @@ const scriptedBrowser = (navigation: Navigation): DriverBrowser => {
   const listeners = new Set<DriverListener>();
 
   return {
+    clickWithin: async () => {
+      await Promise.resolve();
+      throw new Error("The scripted browser never clicks.");
+    },
     close: async () => {
       await Promise.resolve();
     },

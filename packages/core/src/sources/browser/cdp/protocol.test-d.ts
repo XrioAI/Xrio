@@ -71,6 +71,61 @@ describe("the CDP commands our driver may send", () => {
         signal,
       ),
     ).resolves.toBeVoid();
+    expectTypeOf(
+      send(
+        main,
+        "Input.dispatchMouseEvent",
+        { button: "none", buttons: 0, pointerType: "mouse", type: "mouseMoved", x: 4, y: 8 },
+        signal,
+      ),
+    ).resolves.toBeVoid();
+    expectTypeOf(
+      send(
+        main,
+        "Input.dispatchMouseEvent",
+        {
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+          pointerType: "mouse",
+          type: "mousePressed",
+          x: 4,
+          y: 8,
+        },
+        signal,
+      ),
+    ).resolves.toBeVoid();
+    void send(
+      main,
+      "Input.dispatchMouseEvent",
+      // @ts-expect-error The pointer never scrolls the page.
+      { deltaX: 0, deltaY: 100, pointerType: "mouse", type: "mouseWheel", x: 4, y: 8 },
+      signal,
+    );
+    void send(
+      main,
+      "Input.dispatchMouseEvent",
+      {
+        // @ts-expect-error Only the left button is ever pressed.
+        button: "right",
+        buttons: 1,
+        clickCount: 1,
+        pointerType: "mouse",
+        type: "mousePressed",
+        x: 4,
+        y: 8,
+      },
+      signal,
+    );
+    void send(
+      // @ts-expect-error Input goes to the main page only.
+      iframe,
+      "Input.dispatchMouseEvent",
+      { button: "none", buttons: 0, pointerType: "mouse", type: "mouseMoved", x: 4, y: 8 },
+      signal,
+    );
+    // @ts-expect-error The keyboard is never used.
+    void send(main, "Input.dispatchKeyEvent", { type: "keyDown" }, signal);
     // @ts-expect-error Cookie seeding belongs only to the main page.
     void send(worker, "Network.setCookies", { cookies: [] }, signal);
     // @ts-expect-error Extra headers would leak across third-party browser requests.
