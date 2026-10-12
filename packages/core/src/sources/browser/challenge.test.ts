@@ -337,6 +337,7 @@ describe("a challenge page that reloads itself", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -353,6 +354,7 @@ describe("a challenge page that reloads itself", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed_in_place",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.html).toBe(CONTENT);
@@ -368,6 +370,7 @@ describe("a challenge page that reloads itself", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "budget_exhausted",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 20_000 }],
     });
     expect(source.block).toMatchObject({ vendor: "akamai", verdict: "blocked" });
@@ -384,6 +387,7 @@ describe("a challenge page that reloads itself", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "passed",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.status).toBe(403);
@@ -400,6 +404,7 @@ describe("a challenge page that reloads itself", () => {
     const { source } = await run.result;
     expect(source.block.challenge).toStrictEqual({
       outcome: "rounds_exhausted",
+      reloads: 0,
       rounds: [{ ...SEC_CPT_ROUND, waitedMs: 250 }],
     });
     expect(source.block).toMatchObject({ vendor: "akamai", verdict: "blocked" });
