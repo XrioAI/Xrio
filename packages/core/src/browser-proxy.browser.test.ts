@@ -353,7 +353,7 @@ const rejectionOf = async (pending: Promise<unknown>) => {
 const failureOf = async (url: string, proxy: string, timeoutMs = SCRAPE_TIMEOUT_MS) =>
   await rejectionOf(scrape(url, proxy, timeoutMs));
 
-const leaksOf = ({ identity }: ScrapeResult) => {
+const leaksOf = ({ identity }: Pick<ScrapeResult, "identity">) => {
   if (identity.mode === "http") {
     throw new Error("A browser scrape reports a browser identity.");
   }

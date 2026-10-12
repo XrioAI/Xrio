@@ -9,7 +9,7 @@ import { inScrapeContext, timeStage } from "./diagnostics.ts";
 import { clientClosed, isXrioError, sessionUnavailable } from "./errors.ts";
 import type { XrioError } from "./errors.ts";
 import { deviceDigest, identityPlanRecord } from "./humanizer/contracts.ts";
-import type { HostCapabilities } from "./humanizer/contracts.ts";
+import type { HostCapabilities, Seed } from "./humanizer/contracts.ts";
 import { SEED_BYTES, seedOf } from "./humanizer/draws.ts";
 import { readHostZone } from "./humanizer/host-zone.ts";
 import { httpIdentity, planIdentity } from "./humanizer/humanizer.ts";
@@ -17,9 +17,10 @@ import { presentableRecord } from "./humanizer/read-record.ts";
 import { identityForVisit, presentedLocale } from "./humanizer/surfaces.ts";
 import type { ScrapeIntent } from "./intent.ts";
 import type { HeldDeadline } from "./lifetime.ts";
-import { parseProxy } from "./options.ts";
 import { outcomeOf, scrapeError } from "./outcome.ts";
 import type { ScrapeOutcome } from "./outcome.ts";
+import { proxyExits } from "./proxy/exit.ts";
+import type { ProxyExits } from "./proxy/exit.ts";
 import { lookupProxyInfo } from "./proxy/info.ts";
 import type { ProxyObservation } from "./proxy/info.ts";
 import { ProxyManager } from "./proxy/manager.ts";
@@ -32,10 +33,11 @@ import type { ClaimChecks, SessionHold, SessionManager } from "./sessions/sessio
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
 import type { AttemptLog, FinishedVisit, SiteVisit, Sources, VisitPlan } from "./sources/visit.ts";
-import type { ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
+import type { AttemptReport, ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
   readonly answer: Promise<SourceDocument>;
+  readonly attempts: () => AttemptReport;
   readonly settled: Promise<void>;
 }
 
@@ -55,18 +57,26 @@ interface Dependencies {
   readonly random: (size: number) => Uint8Array;
   readonly retryRandom: () => number;
   readonly closing: AbortSignal;
-  readonly configuredProxy: ProxyEndpoint | undefined;
+  readonly exits: ProxyExits;
   readonly managedProxy: ProxyManager | undefined;
   readonly proxyInfo: (proxy: ProxyEndpoint, deadline: Deadline) => Promise<ProxyObservation>;
 }
 
 interface VisitContext {
   readonly answer: Answer;
+  readonly attempts: AttemptReport;
   readonly intent: ScrapeIntent;
   readonly hold: SessionHold;
   readonly held: HeldDeadline;
   readonly capabilities: HostCapabilities | undefined;
   readonly dependencies: Dependencies;
+}
+
+type ScrapeReply = Pick<VisitContext, "answer" | "attempts">;
+
+interface Visitor {
+  readonly proxy: ProxyEndpoint | undefined;
+  readonly device: SessionHold["device"];
 }
 
 const comparisonFacts = async ({
@@ -82,14 +92,17 @@ const comparisonFacts = async ({
   }
 };
 
-const sessionExit = async ({ dependencies, held, hold, intent }: VisitContext) => {
+const sessionExit = async (
+  { dependencies, held, hold, intent }: VisitContext,
+  proxy: ProxyEndpoint | undefined,
+) => {
   const exit = await bindSessionExit(
     {
       binding: hold.binding,
       drawStickyId: hold.drawStickyId,
       manager: intent.route === undefined ? dependencies.managedProxy : undefined,
       observe: dependencies.proxyInfo,
-      proxy: intent.route ?? dependencies.configuredProxy,
+      proxy,
     },
     held,
   );
@@ -102,28 +115,30 @@ const sessionExit = async ({ dependencies, held, hold, intent }: VisitContext) =
   return exit;
 };
 
-const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
+const plannedVisit = async (
+  context: VisitContext,
+  { device, proxy }: Visitor,
+): Promise<VisitPlan> => {
   const { dependencies, held, hold, intent } = context;
-  const proxy = intent.route ?? dependencies.configuredProxy;
 
   if (intent.source.mode === "http") {
     return {
       capabilities: await comparisonFacts(context),
       cookies: intent.cookies.seeds,
       headers: intent.source.headers,
-      identity: httpIdentity(identityForVisit(intent.identity, hold.device)),
+      identity: httpIdentity(identityForVisit(intent.identity, device)),
       kind: "http",
       proxy,
       url: intent.url,
     };
   }
 
-  const exit = await sessionExit(context);
+  const exit = await sessionExit(context, proxy);
   const route = routeFor(exit.proxy);
   const { observation } = exit;
 
   held.throwIfExpired();
-  const pins = identityForVisit(intent.identity, hold.device, observation?.locale);
+  const pins = identityForVisit(intent.identity, device, observation?.locale);
 
   const capabilities =
     context.capabilities ?? (await dependencies.host.snapshotFor(intent.source.browserPath, held));
@@ -141,7 +156,7 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
         fonts.evidence === undefined
           ? capabilities
           : { ...capabilities, fontEvidence: fonts.evidence },
-      device: hold.device,
+      device,
       exit: { facts: exitFactsFor(route, observation), route: route.kind },
       followExit: route.kind === "proxy",
       hostZone: readHostZone(),
@@ -173,19 +188,20 @@ const plannedVisit = async (context: VisitContext): Promise<VisitPlan> => {
 type Continuation =
   | { readonly kind: "complete" }
   | { readonly kind: "revisit" }
-  | { readonly kind: "retry"; readonly delayMs: number };
+  | { readonly kind: "retry"; readonly delayMs: number }
+  | { readonly kind: "fresh-exit"; readonly delayMs: 0; readonly route: ProxyEndpoint };
 
 interface VisitResult extends FinishedVisit {
   readonly next: Continuation;
   readonly answered: ScrapeOutcome;
 }
 
-const planVisits = (context: VisitContext): (() => Promise<VisitPlan>) => {
+const planVisits = (context: VisitContext, visitor: Visitor): (() => Promise<VisitPlan>) => {
   let frozen: VisitPlan | undefined;
 
   return async () => {
     if (frozen === undefined) {
-      frozen = await plannedVisit(context);
+      frozen = await plannedVisit(context, visitor);
 
       return frozen;
     }
@@ -210,11 +226,18 @@ const continuationFor = (
   context: VisitContext,
   terminal: boolean,
   retries: Retries,
+  route: ProxyEndpoint | undefined,
 ): Continuation => {
   if (outcome.kind === "failed") {
     const delayMs = retries.next(outcome.error);
 
     return delayMs === undefined ? { kind: "complete" } : { delayMs, kind: "retry" };
+  }
+
+  const freshExit = retries.freshExitAfter(outcome.document.block, route);
+
+  if (freshExit !== undefined) {
+    return { delayMs: 0, kind: "fresh-exit", route: freshExit };
   }
 
   return !terminal && context.hold.revisitWanted(outcome)
@@ -321,7 +344,9 @@ const visitOnce = async (
   retries: Retries,
   planVisit: () => Promise<VisitPlan>,
 ): Promise<VisitResult> => {
-  const { answer, dependencies, held, hold, intent } = context;
+  const { answer, attempts, dependencies, held, hold, intent } = context;
+
+  attempts.total += 1;
 
   await using slot = await startAttempt(
     async () =>
@@ -346,7 +371,7 @@ const visitOnce = async (
     transferred = true;
 
     const outcome = await outcomeOf(visit.document, held);
-    const next = continuationFor(outcome, context, terminal, retries);
+    const next = continuationFor(outcome, context, terminal, retries, plan.proxy);
     const attempt = attemptOf(context, plan, outcome);
     const siteVisit = siteVisitOf(attempt);
 
@@ -410,9 +435,26 @@ const visitAfterStartFailures = async (
   }
 };
 
+const firstVisitor = ({ dependencies, hold, intent }: VisitContext): Visitor => ({
+  device: hold.device,
+  proxy: intent.route ?? dependencies.exits.current(),
+});
+
+const drawnSeed = (random: Dependencies["random"]): Seed => seedOf(random(SEED_BYTES));
+
+const visitorBehind = (
+  proxy: ProxyEndpoint,
+  { device }: Visitor,
+  { random }: Dependencies,
+): Visitor => ({
+  device: device.kind === "record" ? device : { kind: "fresh", seed: drawnSeed(random) },
+  proxy,
+});
+
 const completeVisits = async (context: VisitContext, retries: Retries): Promise<void> => {
   let terminal = false;
-  let planVisit = planVisits(context);
+  let visitor = firstVisitor(context);
+  let planVisit = planVisits(context, visitor);
 
   for (;;) {
     const visit = await visitAfterStartFailures(context, terminal, retries, planVisit);
@@ -423,14 +465,21 @@ const completeVisits = async (context: VisitContext, retries: Retries): Promise<
       break;
     }
 
-    if (visit.next.kind === "retry") {
-      if (!visit.closed.exited || !(await retries.wait(visit.next.delayMs))) {
-        context.answer.offer(visit.answered, true);
-        break;
-      }
-    } else {
+    if (visit.next.kind === "revisit") {
       terminal = true;
-      planVisit = planVisits(context);
+      planVisit = planVisits(context, visitor);
+      continue;
+    }
+
+    if (!visit.closed.exited || !(await retries.wait(visit.next.delayMs))) {
+      context.answer.offer(visit.answered, true);
+      break;
+    }
+
+    if (visit.next.kind === "fresh-exit") {
+      visitor = visitorBehind(visit.next.route, visitor, context.dependencies);
+      planVisit = planVisits(context, visitor);
+      context.attempts.freshExits += 1;
     }
   }
 };
@@ -483,7 +532,7 @@ const claimChecks = (
   browser: BrowserScrape | undefined,
   { managedProxy, random }: Dependencies,
 ): ClaimChecks => {
-  const seed = () => seedOf(random(SEED_BYTES));
+  const seed = () => drawnSeed(random);
 
   if (browser === undefined) {
     return { seed };
@@ -517,12 +566,21 @@ const retiredMember = (
   isXrioError(error, "SESSION_UNAVAILABLE") &&
   error.details.reason === "exit-changed";
 
+const NO_FRESH_EXITS: Pick<ProxyExits, "freshExitAfter"> = {
+  freshExitAfter: (): undefined => undefined,
+};
+
+const freshExitsFor = (
+  { session }: ScrapeIntent,
+  { exits }: Dependencies,
+): Pick<ProxyExits, "freshExitAfter"> => (session.kind === "anonymous" ? exits : NO_FRESH_EXITS);
+
 const visitInHold = async (
   intent: ScrapeIntent,
   checks: ClaimChecks,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: Answer,
+  { answer, attempts }: ScrapeReply,
 ): Promise<HeldVisit> => {
   const claimDeadline = deadline.boundTo(dependencies.closing, "client-closed");
 
@@ -536,9 +594,25 @@ const visitInHold = async (
   using _answerLifetime = settleAnswerOnAbort(answer, held);
 
   try {
-    const context = { answer, capabilities: checks.capabilities, dependencies, held, hold, intent };
+    const context = {
+      answer,
+      attempts,
+      capabilities: checks.capabilities,
+      dependencies,
+      held,
+      hold,
+      intent,
+    };
+
     const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
-    const retries = createRetries(intent.retries, retryDeadline, dependencies.retryRandom);
+
+    const retries = createRetries(
+      intent.retries,
+      retryDeadline,
+      dependencies.retryRandom,
+      freshExitsFor(intent, dependencies),
+    );
+
     await completeVisits(context, retries);
 
     return SETTLED;
@@ -558,15 +632,15 @@ const visitUntilSettled = async (
   checks: ClaimChecks,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: Answer,
+  reply: ScrapeReply,
 ): Promise<HeldVisit> => {
   const members = intent.session.kind === "pool" ? intent.session.size : 1;
-  let visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+  let visit = await visitInHold(intent, checks, deadline, dependencies, reply);
 
   // oxlint-disable no-await-in-loop -- A pool claims its next member only after the retired one was released.
   for (let tried = 1; visit.kind === "member-retired" && tried < members; tried += 1) {
     deadline.throwIfExpired();
-    visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+    visit = await visitInHold(intent, checks, deadline, dependencies, reply);
   }
   // oxlint-enable no-await-in-loop
 
@@ -577,14 +651,16 @@ const coordinate = async (
   intent: ScrapeIntent,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: Answer,
+  reply: ScrapeReply,
 ): Promise<void> => {
+  const { answer } = reply;
+
   reportSkippedCookies(intent.cookies.skipped);
 
   try {
     const browser = await sessionBrowser(intent, deadline, dependencies);
     const checks = claimChecks(browser, dependencies);
-    const visit = await visitUntilSettled(intent, checks, deadline, dependencies, answer);
+    const visit = await visitUntilSettled(intent, checks, deadline, dependencies, reply);
 
     if (visit.kind === "member-retired") {
       answer.fail(visit.error);
@@ -599,7 +675,7 @@ const coordinate = async (
 export const createScrapes = (
   dependencies: Omit<
     Dependencies,
-    "random" | "retryRandom" | "closing" | "configuredProxy" | "managedProxy" | "proxyInfo"
+    "random" | "retryRandom" | "closing" | "exits" | "managedProxy" | "proxyInfo"
   > & {
     readonly random?: Dependencies["random"];
     readonly retryRandom?: Dependencies["retryRandom"];
@@ -615,7 +691,7 @@ export const createScrapes = (
   const managers: Dependencies = {
     ...dependencies,
     closing: closingSignal.signal,
-    configuredProxy: proxy === undefined ? undefined : parseProxy(proxy.getProxyConnectionString()),
+    exits: proxyExits(proxy),
     managedProxy: proxy,
     proxyInfo: dependencies.proxyInfo ?? lookupProxyInfo,
     random: dependencies.random ?? randomBytes,
@@ -636,9 +712,10 @@ export const createScrapes = (
     assertOpen();
 
     const answer = createAnswer();
+    const attempts: AttemptReport = { freshExits: 0, total: 0 };
 
     const settled = inScrapeContext(randomUUID(), async () => {
-      await coordinate(intent, deadline, managers, answer);
+      await coordinate(intent, deadline, managers, { answer, attempts });
     });
 
     runs.add(settled);
@@ -650,7 +727,7 @@ export const createScrapes = (
 
     void forgetSettled();
 
-    return { answer: answer.promise, settled };
+    return { answer: answer.promise, attempts: () => ({ ...attempts }), settled };
   };
 
   const drain = async () => {

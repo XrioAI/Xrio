@@ -2,6 +2,7 @@ import { describe, expectTypeOf, it } from "vite-plus/test";
 
 import { isXrioError, XrioClient, XrioError } from "./client.ts";
 import type {
+  AttemptReport,
   BlockEvidence,
   BlockReport,
   BlockVerdict,
@@ -320,6 +321,11 @@ describe("XrioClient types", () => {
     expectTypeOf<
       XrioError<"UNSUPPORTED_CONTENT_TYPE">["details"]["block"]
     >().toEqualTypeOf<BlockReport>();
+  });
+
+  it("reports the attempts and fresh exits behind every result", () => {
+    expectTypeOf<ScrapeResult<"markdown">["attempts"]>().toEqualTypeOf<AttemptReport>();
+    expectTypeOf<AttemptReport>().toEqualTypeOf<{ total: number; freshExits: number }>();
   });
 
   it("reports the identity on every result, narrowed by its mode", () => {

@@ -14,6 +14,7 @@ import { HeldDeadline } from "./lifetime.ts";
 import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { outcomeOf } from "./outcome.ts";
 import type { ProxyObservation } from "./proxy/info.ts";
+import type { SessionHold } from "./sessions/session.ts";
 import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
 import type { Closed } from "./sources/browser/chrome-scope.ts";
@@ -37,8 +38,12 @@ const browserIntent = {
   source: { browserArgs: [], browserPath: "/browser", mode: "headless" },
 } as const;
 
-const documentFor = (html: string): SourceDocument => {
-  const response = { cookies: [], headers: {}, status: 200, url: "https://example.com" };
+const documentFor = (
+  html: string,
+  headers: Record<string, string> = {},
+  status = 200,
+): SourceDocument => {
+  const response = { cookies: [], headers, status, url: "https://example.com" };
 
   return {
     scriptsRan: false,
@@ -61,6 +66,12 @@ interface StubSources {
   readonly start: (...visit: Parameters<Sources["start"]>) => StubVisit;
 }
 
+const challengeHeaders = { "cf-mitigated": "challenge", "content-type": "text/html" };
+
+const blockedDocument = documentFor("<p>Blocked</p>", challengeHeaders, 403);
+
+const blockedAgain = documentFor("<p>Blocked again</p>", challengeHeaders, 403);
+
 interface HarnessOptions {
   readonly bindings?: readonly SessionBinding[];
   readonly config?: Pick<ResolvedConfig, "proxy">;
@@ -75,6 +86,8 @@ interface HarnessOptions {
   readonly throwOnStart?: boolean;
   readonly claimWaits?: boolean;
   readonly releaseHold?: () => void;
+  readonly random?: (size: number) => Uint8Array;
+  readonly device?: SessionHold["device"];
 }
 
 const harness = (options: HarnessOptions = {}) => {
@@ -138,7 +151,7 @@ const harness = (options: HarnessOptions = {}) => {
       },
     },
     proxyInfo: options.proxyInfo,
-    random: fixedRandom,
+    random: options.random ?? fixedRandom,
     retryRandom: options.retryRandom ?? (() => 0),
     sessions: {
       hold: async (_intent, checks, claim) => {
@@ -159,7 +172,7 @@ const harness = (options: HarnessOptions = {}) => {
           bind: (deadline) => new HeldDeadline(deadline, owner.signal),
           binding,
           browserArgs: undefined,
-          device: { kind: "fresh", seed: checks.seed() },
+          device: options.device ?? { kind: "fresh", seed: checks.seed() },
           drawStickyId: () => checks.stickyId?.() ?? "drawn",
           finish: async (visit) => {
             stage("finish");
@@ -1519,5 +1532,383 @@ describe("session exit binding", () => {
     } finally {
       await scrapes.close();
     }
+  });
+});
+
+const answered = (document: SourceDocument): StubVisit => ({
+  closed: Promise.resolve({ exited: true }),
+  document: Promise.resolve(document),
+});
+
+const managedProxy: Pick<ResolvedConfig, "proxy"> = {
+  proxy: { url: "http://user-{session}:secret@proxy.test" },
+};
+
+const SESSION_USER = /^user-\d{8}$/u;
+
+const usernamesOf = (plans: readonly VisitPlan[]) =>
+  plans.map((plan) => plan.proxy?.credentials?.username);
+
+const sessionFailure = () =>
+  new XrioError("NETWORK_ERROR", "Connection failed.", { details: undefined });
+
+const countingRandom = () => {
+  let draws = 0;
+
+  return (size: number) => {
+    draws += 1;
+
+    return new Uint8Array(size).fill(draws);
+  };
+};
+
+const presentedDevicesOf = (plans: readonly VisitPlan[]) =>
+  plans.map((plan) =>
+    plan.kind === "browser"
+      ? { record: plan.identity.chosen.record, seed: plan.identity.chosen.seed }
+      : null,
+  );
+
+const observedExit = async () => await Promise.resolve(proxyObservation);
+
+const stickyBinding = {
+  kind: "proxy",
+  region: { country: "DE", zone: "Europe/Berlin" },
+  stickyId: "stored-id",
+} as const;
+
+const replayedRecord = {
+  device: {
+    cores: 0,
+    fonts: { kind: "system" },
+    gpu: { backend: "swiftshader", persona: null },
+    memoryGb: 0,
+    screen: { height: 1000, width: 1700, workArea: { bottom: 50, left: 0, right: 0, top: 0 } },
+    voices: { kind: "system" },
+    window: { height: 800, kind: "floating", width: 1300, x: 100, y: 60 },
+  },
+  policy: { locale: "en-US", timezone: { kind: "pinned", zone: "UTC" } },
+  schema: 1,
+  seed: "00000000000000a1",
+} as const;
+
+describe("fresh-exit retries", () => {
+  it("retries a blocked page on a new proxy session and moves the client's shared exit", async () => {
+    const { events, plans, scrapes } = harness({
+      config: managedProxy,
+      visits: [answered(blockedDocument)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await run.settled;
+    await scrapes.start(intent, deadline).settled;
+    await scrapes.close();
+
+    const [blocked, fresh] = usernamesOf(plans);
+
+    expect({
+      attempts: run.attempts(),
+      finishes: events.filter((event) => event === "finish").length,
+      verdict: blockedDocument.block.verdict,
+    }).toStrictEqual({ attempts: { freshExits: 1, total: 2 }, finishes: 3, verdict: "blocked" });
+    expect(usernamesOf(plans)).toStrictEqual([expect.stringMatching(SESSION_USER), fresh, fresh]);
+    expect(fresh).toMatch(SESSION_USER);
+    expect(fresh).not.toBe(blocked);
+  });
+
+  it("plans the browser identity again for the fresh exit", async () => {
+    const lookedUp: (string | ProxyEndpoint)[] = [];
+    const observations = [proxyObservation, { ...proxyObservation, locale: "fr-FR" }];
+
+    const { fontLocales, plans, scrapes } = harness({
+      config: managedProxy,
+      proxyInfo: async (endpoint) => {
+        lookedUp.push(endpoint);
+
+        return await Promise.resolve(observations[lookedUp.length - 1]);
+      },
+      visits: [answered(blockedDocument)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await scrapes.close();
+
+    expect(lookedUp).toStrictEqual(plans.map((plan) => plan.proxy));
+    expect({
+      exits: new Set(lookedUp).size,
+      fontLocales,
+      locales: plans.map((plan) =>
+        plan.kind === "browser" ? plan.identity.chosen.surfaces.locale.tag : null,
+      ),
+    }).toStrictEqual({ exits: 2, fontLocales: ["de-DE", "fr-FR"], locales: ["de-DE", "fr-FR"] });
+  });
+
+  it.each([
+    {
+      config: { proxy: { url: "http://user:secret@proxy.test" } },
+      route: undefined,
+      title: "a configured proxy without {session}",
+    },
+    {
+      config: managedProxy,
+      route: parseProxy("http://client:secret@proxy.test"),
+      title: "an explicit proxy",
+    },
+    { config: undefined, route: undefined, title: "a direct route" },
+  ])("answers the blocked page from $title without retrying it", async ({ config, route }) => {
+    const { plans, scrapes } = harness({ config, visits: [answered(blockedDocument)] });
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 2, route }, deadline);
+
+    await expect(run.answer).resolves.toBe(blockedDocument);
+    await scrapes.close();
+
+    expect({ attempts: run.attempts(), plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 0, total: 1 },
+      plans: 1,
+    });
+  });
+
+  it.each([
+    { elapsedMs: 0, reason: "no retries are configured", retries: 0 },
+    { elapsedMs: 4500, reason: "less than a minimum attempt remains", retries: 1 },
+  ])("keeps the blocked page and the shared exit when $reason", async ({ elapsedMs, retries }) => {
+    const { advance, clock } = manualClock();
+    const pending = Promise.withResolvers<SourceDocument>();
+
+    const { events, plans, scrapes } = harness({
+      config: managedProxy,
+      visits: [{ closed: Promise.resolve({ exited: true }), document: pending.promise }],
+    });
+
+    using deadline = startDeadline(5000, undefined, clock);
+    const run = scrapes.start({ ...intent, retries }, deadline);
+
+    await expect.poll(() => events.includes("start")).toBeTruthy();
+    advance(elapsedMs);
+    pending.resolve(blockedDocument);
+
+    await expect(run.answer).resolves.toBe(blockedDocument);
+    await run.settled;
+    using laterDeadline = startDeadline(1000);
+    await scrapes.start(intent, laterDeadline).settled;
+    await scrapes.close();
+
+    expect(run.attempts()).toStrictEqual({ freshExits: 0, total: 1 });
+    expect(plans).toHaveLength(2);
+    expect(plans[1].proxy).toBe(plans[0].proxy);
+  });
+
+  it("answers the last blocked page once the retries are spent", async () => {
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      visits: [answered(blockedDocument), answered(blockedAgain)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(blockedAgain);
+    await scrapes.close();
+
+    expect(run.attempts()).toStrictEqual({ freshExits: 1, total: 2 });
+    expect(new Set(usernamesOf(plans)).size).toBe(2);
+  });
+
+  it("shares the budget with transport retries, which keep the fresh exit's plan", async () => {
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      visits: [answered(blockedDocument), failedVisit(sessionFailure())],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 2 }, deadline);
+
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await scrapes.close();
+
+    expect(run.attempts()).toStrictEqual({ freshExits: 1, total: 3 });
+    expect(plans[2]).toBe(plans[1]);
+    expect(plans[1].proxy).not.toBe(plans[0].proxy);
+  });
+
+  it("answers the blocked page when the fresh exit fails after the last retry", async () => {
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      visits: [answered(blockedDocument), failedVisit(sessionFailure())],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(blockedDocument);
+    await scrapes.close();
+
+    expect({ attempts: run.attempts(), plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 1, total: 2 },
+      plans: 2,
+    });
+  });
+
+  it("answers the blocked page when the fresh exit's lookup fails", async () => {
+    const unavailable = new XrioError("PROXY_INFO_UNAVAILABLE", "Lookup failed.", {
+      details: undefined,
+    });
+
+    let lookups = 0;
+
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      proxyInfo: async () => {
+        lookups += 1;
+
+        if (lookups > 1) {
+          throw unavailable;
+        }
+
+        return await Promise.resolve(proxyObservation);
+      },
+      visits: [answered(blockedDocument)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 2 }, deadline);
+
+    await expect(run.answer).resolves.toBe(blockedDocument);
+    await scrapes.close();
+
+    expect({ attempts: run.attempts(), lookups, plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 1, total: 2 },
+      lookups: 2,
+      plans: 1,
+    });
+  });
+
+  it("answers the blocked page without a fresh exit after incomplete teardown", async () => {
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      visits: [
+        {
+          closed: Promise.resolve({ exited: false, reason: "Still running." }),
+          document: Promise.resolve(blockedDocument),
+        },
+      ],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...intent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(blockedDocument);
+    await scrapes.close();
+
+    expect({ attempts: run.attempts(), plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 0, total: 1 },
+      plans: 1,
+    });
+  });
+
+  it.each([
+    {
+      bindings: [stickyBinding],
+      label: "a named session",
+      session: { kind: "named", name: "account" },
+      username: /^user-stored-id$/u,
+    },
+    {
+      bindings: [stickyBinding],
+      label: "a pool member",
+      session: { kind: "pool", name: "accounts", site: "https://example.com", size: 2 },
+      username: /^user-stored-id$/u,
+    },
+    {
+      bindings: undefined,
+      label: "a session hold without a binding",
+      session: { kind: "named", name: "account" },
+      username: SESSION_USER,
+    },
+  ] as const)(
+    "answers the blocked page of $label without a fresh exit",
+    async ({ bindings, session, username }) => {
+      const { finished, plans, scrapes } = harness({
+        bindings,
+        config: managedProxy,
+        proxyInfo: observedExit,
+        random: countingRandom(),
+        visits: [answered(blockedDocument)],
+      });
+
+      using deadline = startDeadline(5000);
+      const run = scrapes.start({ ...browserIntent, retries: 2, session }, deadline);
+
+      await expect(run.answer).resolves.toBe(blockedDocument);
+      await run.settled;
+      await scrapes.close();
+
+      expect({
+        attempts: run.attempts(),
+        finished: finished.length,
+        seeds: presentedDevicesOf(plans).map((device) => device?.seed),
+        usernames: usernamesOf(plans),
+      }).toStrictEqual({
+        attempts: { freshExits: 0, total: 1 },
+        finished: 1,
+        seeds: ["0101010101010101"],
+        usernames: [expect.stringMatching(username)],
+      });
+    },
+  );
+
+  it("presents a device drawn from a new seed behind the fresh exit", async () => {
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      proxyInfo: observedExit,
+      random: countingRandom(),
+      visits: [answered(blockedDocument)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await scrapes.close();
+
+    expect(
+      presentedDevicesOf(plans).map((device) => ({
+        recordSeed: device?.record?.seed,
+        seed: device?.seed,
+      })),
+    ).toStrictEqual([
+      { recordSeed: "0101010101010101", seed: "0101010101010101" },
+      { recordSeed: "0202020202020202", seed: "0202020202020202" },
+    ]);
+    expect(new Set(usernamesOf(plans)).size).toBe(2);
+  });
+
+  it("keeps a replayed device record behind the fresh exit", async () => {
+    const { plans, scrapes } = harness({
+      config: managedProxy,
+      device: { kind: "record", record: replayedRecord },
+      proxyInfo: observedExit,
+      random: countingRandom(),
+      visits: [answered(blockedDocument)],
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...browserIntent, retries: 1 }, deadline);
+
+    await expect(run.answer).resolves.toBe(secondDocument);
+    await scrapes.close();
+
+    expect(presentedDevicesOf(plans)).toStrictEqual([
+      { record: replayedRecord, seed: "00000000000000a1" },
+      { record: replayedRecord, seed: "00000000000000a1" },
+    ]);
+    expect(new Set(usernamesOf(plans)).size).toBe(2);
   });
 });

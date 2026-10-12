@@ -65,6 +65,7 @@ export type { IdentityMismatch, IdentityTell } from "./humanizer/verify.ts";
 export type { ErrorCode, InvalidOptionsError, XrioErrorCode } from "./errors.ts";
 
 export type {
+  AttemptReport,
   ClientOptions,
   ModeOptions,
   ScrapeFormat,
@@ -150,7 +151,8 @@ export class XrioClient {
     this.#scrapes.assertOpen();
     const intent = resolveScrapeIntent(options, this.#defaults);
     using deadline = startDeadline(intent.timeoutMs, intent.signal);
-    const document = await this.#scrapes.start(intent, deadline).answer;
+    const run = this.#scrapes.start(intent, deadline);
+    const document = await run.answer;
 
     deadline.throwIfExpired();
     const content = formats[intent.format](document);
@@ -158,6 +160,7 @@ export class XrioClient {
 
     const result = {
       ...content,
+      attempts: run.attempts(),
       block: document.block,
       cookies: document.cookies,
       headers: document.headers,

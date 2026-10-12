@@ -188,6 +188,7 @@ describe(XrioClient, () => {
       });
 
       expect(Object.keys(result).toSorted()).toStrictEqual([
+        "attempts",
         "block",
         "cookies",
         "data",
@@ -198,6 +199,7 @@ describe(XrioClient, () => {
         "url",
       ]);
       expect(result).toMatchObject({
+        attempts: { freshExits: 0, total: 1 },
         cookies,
         format,
         headers: {
