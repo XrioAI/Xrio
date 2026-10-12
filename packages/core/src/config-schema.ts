@@ -275,8 +275,7 @@ const PROXY = objectOf(
 
 const SCRAPE = objectOf("Settings that apply to every scrape of the client.", {
   retries: {
-    description:
-      "How many more attempts a scrape makes after NETWORK_ERROR, PROXY_UNREACHABLE, PROXY_CONNECT_FAILED or BROWSER_CRASHED. Defaults to 0. Every attempt shares the scrape's timeoutMs deadline, and HTTP statuses and blocked pages are never retried.",
+    description: `How many more attempts a scrape makes after NETWORK_ERROR, PROXY_UNREACHABLE, PROXY_CONNECT_FAILED or BROWSER_CRASHED, on the same route, or, in a scrape without a session, after a page that reads blocked, on a new proxy session and device when the scrape routes through a proxy.url with a ${SESSION_PLACEHOLDER} placeholder. Defaults to 0. Every attempt shares the scrape's timeoutMs deadline, and HTTP statuses are never retried.`,
     maximum: Number.MAX_SAFE_INTEGER,
     minimum: 0,
     type: "integer",
