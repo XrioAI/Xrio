@@ -1610,9 +1610,10 @@ describe("fresh-exit retries", () => {
     const [blocked, fresh] = usernamesOf(plans);
 
     expect({
+      attempts: run.attempts(),
       finishes: events.filter((event) => event === "finish").length,
       verdict: blockedDocument.block.verdict,
-    }).toStrictEqual({ finishes: 3, verdict: "blocked" });
+    }).toStrictEqual({ attempts: { freshExits: 1, total: 2 }, finishes: 3, verdict: "blocked" });
     expect(usernamesOf(plans)).toStrictEqual([expect.stringMatching(SESSION_USER), fresh, fresh]);
     expect(fresh).toMatch(SESSION_USER);
     expect(fresh).not.toBe(blocked);
@@ -1668,7 +1669,10 @@ describe("fresh-exit retries", () => {
     await expect(run.answer).resolves.toBe(blockedDocument);
     await scrapes.close();
 
-    expect(plans).toHaveLength(1);
+    expect({ attempts: run.attempts(), plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 0, total: 1 },
+      plans: 1,
+    });
   });
 
   it.each([
@@ -1696,6 +1700,7 @@ describe("fresh-exit retries", () => {
     await scrapes.start(intent, laterDeadline).settled;
     await scrapes.close();
 
+    expect(run.attempts()).toStrictEqual({ freshExits: 0, total: 1 });
     expect(plans).toHaveLength(2);
     expect(plans[1].proxy).toBe(plans[0].proxy);
   });
@@ -1712,6 +1717,7 @@ describe("fresh-exit retries", () => {
     await expect(run.answer).resolves.toBe(blockedAgain);
     await scrapes.close();
 
+    expect(run.attempts()).toStrictEqual({ freshExits: 1, total: 2 });
     expect(new Set(usernamesOf(plans)).size).toBe(2);
   });
 
@@ -1727,7 +1733,7 @@ describe("fresh-exit retries", () => {
     await expect(run.answer).resolves.toBe(secondDocument);
     await scrapes.close();
 
-    expect(plans).toHaveLength(3);
+    expect(run.attempts()).toStrictEqual({ freshExits: 1, total: 3 });
     expect(plans[2]).toBe(plans[1]);
     expect(plans[1].proxy).not.toBe(plans[0].proxy);
   });
@@ -1744,7 +1750,10 @@ describe("fresh-exit retries", () => {
     await expect(run.answer).resolves.toBe(blockedDocument);
     await scrapes.close();
 
-    expect(plans).toHaveLength(2);
+    expect({ attempts: run.attempts(), plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 1, total: 2 },
+      plans: 2,
+    });
   });
 
   it("answers the blocked page when the fresh exit's lookup fails", async () => {
@@ -1774,7 +1783,11 @@ describe("fresh-exit retries", () => {
     await expect(run.answer).resolves.toBe(blockedDocument);
     await scrapes.close();
 
-    expect({ lookups, plans: plans.length }).toStrictEqual({ lookups: 2, plans: 1 });
+    expect({ attempts: run.attempts(), lookups, plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 1, total: 2 },
+      lookups: 2,
+      plans: 1,
+    });
   });
 
   it("answers the blocked page without a fresh exit after incomplete teardown", async () => {
@@ -1794,7 +1807,10 @@ describe("fresh-exit retries", () => {
     await expect(run.answer).resolves.toBe(blockedDocument);
     await scrapes.close();
 
-    expect(plans).toHaveLength(1);
+    expect({ attempts: run.attempts(), plans: plans.length }).toStrictEqual({
+      attempts: { freshExits: 0, total: 1 },
+      plans: 1,
+    });
   });
 
   it.each([
@@ -1835,10 +1851,12 @@ describe("fresh-exit retries", () => {
       await scrapes.close();
 
       expect({
+        attempts: run.attempts(),
         finished: finished.length,
         seeds: presentedDevicesOf(plans).map((device) => device?.seed),
         usernames: usernamesOf(plans),
       }).toStrictEqual({
+        attempts: { freshExits: 0, total: 1 },
         finished: 1,
         seeds: ["0101010101010101"],
         usernames: [expect.stringMatching(username)],

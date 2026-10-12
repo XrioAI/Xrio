@@ -33,10 +33,11 @@ import type { ClaimChecks, SessionHold, SessionManager } from "./sessions/sessio
 import type { FontEvidenceStore } from "./sources/browser/font-evidence.ts";
 import type { HostFacts } from "./sources/browser/host-facts.ts";
 import type { AttemptLog, FinishedVisit, SiteVisit, Sources, VisitPlan } from "./sources/visit.ts";
-import type { ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
+import type { AttemptReport, ProxyEndpoint, SessionSummary, SourceDocument } from "./types.ts";
 
 interface ScrapeRun {
   readonly answer: Promise<SourceDocument>;
+  readonly attempts: () => AttemptReport;
   readonly settled: Promise<void>;
 }
 
@@ -63,12 +64,15 @@ interface Dependencies {
 
 interface VisitContext {
   readonly answer: Answer;
+  readonly attempts: AttemptReport;
   readonly intent: ScrapeIntent;
   readonly hold: SessionHold;
   readonly held: HeldDeadline;
   readonly capabilities: HostCapabilities | undefined;
   readonly dependencies: Dependencies;
 }
+
+type ScrapeReply = Pick<VisitContext, "answer" | "attempts">;
 
 interface Visitor {
   readonly proxy: ProxyEndpoint | undefined;
@@ -340,7 +344,9 @@ const visitOnce = async (
   retries: Retries,
   planVisit: () => Promise<VisitPlan>,
 ): Promise<VisitResult> => {
-  const { answer, dependencies, held, hold, intent } = context;
+  const { answer, attempts, dependencies, held, hold, intent } = context;
+
+  attempts.total += 1;
 
   await using slot = await startAttempt(
     async () =>
@@ -473,6 +479,7 @@ const completeVisits = async (context: VisitContext, retries: Retries): Promise<
     if (visit.next.kind === "fresh-exit") {
       visitor = visitorBehind(visit.next.route, visitor, context.dependencies);
       planVisit = planVisits(context, visitor);
+      context.attempts.freshExits += 1;
     }
   }
 };
@@ -573,7 +580,7 @@ const visitInHold = async (
   checks: ClaimChecks,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: Answer,
+  { answer, attempts }: ScrapeReply,
 ): Promise<HeldVisit> => {
   const claimDeadline = deadline.boundTo(dependencies.closing, "client-closed");
 
@@ -587,7 +594,16 @@ const visitInHold = async (
   using _answerLifetime = settleAnswerOnAbort(answer, held);
 
   try {
-    const context = { answer, capabilities: checks.capabilities, dependencies, held, hold, intent };
+    const context = {
+      answer,
+      attempts,
+      capabilities: checks.capabilities,
+      dependencies,
+      held,
+      hold,
+      intent,
+    };
+
     const retryDeadline = held.boundTo(dependencies.closing, "client-closed");
 
     const retries = createRetries(
@@ -616,15 +632,15 @@ const visitUntilSettled = async (
   checks: ClaimChecks,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: Answer,
+  reply: ScrapeReply,
 ): Promise<HeldVisit> => {
   const members = intent.session.kind === "pool" ? intent.session.size : 1;
-  let visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+  let visit = await visitInHold(intent, checks, deadline, dependencies, reply);
 
   // oxlint-disable no-await-in-loop -- A pool claims its next member only after the retired one was released.
   for (let tried = 1; visit.kind === "member-retired" && tried < members; tried += 1) {
     deadline.throwIfExpired();
-    visit = await visitInHold(intent, checks, deadline, dependencies, answer);
+    visit = await visitInHold(intent, checks, deadline, dependencies, reply);
   }
   // oxlint-enable no-await-in-loop
 
@@ -635,14 +651,16 @@ const coordinate = async (
   intent: ScrapeIntent,
   deadline: Deadline,
   dependencies: Dependencies,
-  answer: Answer,
+  reply: ScrapeReply,
 ): Promise<void> => {
+  const { answer } = reply;
+
   reportSkippedCookies(intent.cookies.skipped);
 
   try {
     const browser = await sessionBrowser(intent, deadline, dependencies);
     const checks = claimChecks(browser, dependencies);
-    const visit = await visitUntilSettled(intent, checks, deadline, dependencies, answer);
+    const visit = await visitUntilSettled(intent, checks, deadline, dependencies, reply);
 
     if (visit.kind === "member-retired") {
       answer.fail(visit.error);
@@ -694,9 +712,10 @@ export const createScrapes = (
     assertOpen();
 
     const answer = createAnswer();
+    const attempts: AttemptReport = { freshExits: 0, total: 0 };
 
     const settled = inScrapeContext(randomUUID(), async () => {
-      await coordinate(intent, deadline, managers, answer);
+      await coordinate(intent, deadline, managers, { answer, attempts });
     });
 
     runs.add(settled);
@@ -708,7 +727,7 @@ export const createScrapes = (
 
     void forgetSettled();
 
-    return { answer: answer.promise, settled };
+    return { answer: answer.promise, attempts: () => ({ ...attempts }), settled };
   };
 
   const drain = async () => {

@@ -70,7 +70,10 @@ describe("HTTP transport retries", () => {
       url: server.origin,
     });
 
-    expect(result.data).toBe("<p>Recovered</p>");
+    expect({ attempts: result.attempts, data: result.data }).toStrictEqual({
+      attempts: { freshExits: 0, total: 2 },
+      data: "<p>Recovered</p>",
+    });
     expect(requests).toStrictEqual([
       { authorization: "Bearer fixture", cookie: "session=seed" },
       { authorization: "Bearer fixture", cookie: "session=seed" },
@@ -161,11 +164,13 @@ describe("HTTP transport retries", () => {
     const [blocked, fresh] = proxyUsersOf(proxy);
 
     expect({
+      attempts: result.attempts,
       data: result.data,
       originRequests: requests,
       proxyRequests: proxy.requests.length,
       verdict: result.block.verdict,
     }).toStrictEqual({
+      attempts: { freshExits: 1, total: 2 },
       data: "<p>Recovered</p>",
       originRequests: 2,
       proxyRequests: 2,
@@ -195,9 +200,11 @@ describe("HTTP transport retries", () => {
     const result = await client.scrape({ format: "html", url: "http://origin.test/" });
 
     expect({
+      attempts: result.attempts,
       users: proxyUsersOf(proxy),
       verdict: result.block.verdict,
     }).toStrictEqual({
+      attempts: { freshExits: 0, total: 1 },
       users: ["user"],
       verdict: "blocked",
     });

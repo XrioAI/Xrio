@@ -129,12 +129,18 @@ export interface ResponseDetails {
   url: string;
 }
 
+export interface AttemptReport {
+  total: number;
+  freshExits: number;
+}
+
 export type ScrapeResult<Format extends ScrapeFormat = ScrapeFormat> = {
   [Selected in Format]: ResponseDetails & {
     data: Selected extends "json" ? StructuredContent : string;
     format: Selected;
     block: BlockReport;
     identity: IdentityReport;
+    attempts: AttemptReport;
     session?: SessionSummary;
   };
 }[Format];
