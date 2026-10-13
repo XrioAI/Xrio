@@ -10,6 +10,7 @@ allowBuilds:
   "@vgpu/adapter-node": false
   webgpu: false
 patchedDependencies:
+  "@mdream/js@1.7.2": patches/@mdream__js@1.7.2.patch
   oxlint-plugin-complexity@3.0.1: patches/oxlint-plugin-complexity@3.0.1.patch
   ultracite@7.12.2: patches/ultracite@7.12.2.patch
 minimumReleaseAgeExclude:

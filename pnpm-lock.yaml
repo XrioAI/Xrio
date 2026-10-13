@@ -167,6 +167,7 @@ overrides:
   vitest@*: 5.0.1
 
 patchedDependencies:
+  '@mdream/js@1.7.2': f047c9820b99d9ee56f0aaeff529bb4aac26ebe0964dc4e738f468d1cf2136b8
   oxlint-plugin-complexity@3.0.1: ab7d1530a8b71f3c019fa2c1254ff39ad1926a571ce3e088eb1cbdf4e046485e
   ultracite@7.12.2: 11355ac9913cecac36ee47d5a903c5f59691c116b8e0fb875c9b18071c46b080
 
@@ -277,9 +278,6 @@ importers:
 
   packages/core:
     dependencies:
-      '@mdream/js':
-        specifier: 1.7.2
-        version: 1.7.2
       entities:
         specifier: 8.1.0
         version: 8.1.0
@@ -293,6 +291,9 @@ importers:
         specifier: 3.2.0
         version: 3.2.0
     devDependencies:
+      '@mdream/js':
+        specifier: 1.7.2
+        version: 1.7.2(patch_hash=f047c9820b99d9ee56f0aaeff529bb4aac26ebe0964dc4e738f468d1cf2136b8)
       '@xrio/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -4011,7 +4012,7 @@ snapshots:
       tinyglobby: 0.2.17
       yaml: 2.9.1
 
-  '@mdream/js@1.7.2':
+  '@mdream/js@1.7.2(patch_hash=f047c9820b99d9ee56f0aaeff529bb4aac26ebe0964dc4e738f468d1cf2136b8)':
     dependencies:
       cac: 7.0.0
       pathe: 2.0.3
