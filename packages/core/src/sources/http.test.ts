@@ -20,23 +20,31 @@ import {
   startFixtureServer,
 } from "../testing/fixture-server.ts";
 import type { FixtureServer } from "../testing/fixture-server.ts";
+import { createHttpConnections } from "./http-connections.ts";
 import { loadHttpDocument } from "./http.ts";
 
 const fetchThroughProxy = async (url: string, proxy?: string, locale = "en-US") => {
   using deadline = startDeadline(10_000);
+  const connections = createHttpConnections();
 
-  return await loadHttpDocument(
-    {
-      capabilities: null,
-      cookies: [],
-      headers: {},
-      identity: httpIdentity({ locale }),
-      kind: "http",
-      proxy: proxy === undefined ? undefined : parseProxy(proxy),
-      url: new URL(url),
-    },
-    deadline,
-  );
+  try {
+    return await loadHttpDocument(
+      {
+        capabilities: null,
+        cookies: [],
+        headers: {},
+        identity: httpIdentity({ locale }),
+        kind: "http",
+        pinnedExit: false,
+        proxy: proxy === undefined ? undefined : parseProxy(proxy),
+        url: new URL(url),
+      },
+      deadline,
+      connections,
+    );
+  } finally {
+    await connections.close();
+  }
 };
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;

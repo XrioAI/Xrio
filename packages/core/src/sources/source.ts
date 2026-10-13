@@ -1,6 +1,7 @@
 import { createBrowsers } from "./browser/browsers.ts";
 import type { RetireSteps } from "./browser/chrome-scope.ts";
 import type { BrowserDriver } from "./browser/port.ts";
+import { createHttpConnections } from "./http-connections.ts";
 import { loadHttpDocument } from "./http.ts";
 import type { Sources } from "./visit.ts";
 
@@ -9,9 +10,12 @@ export const createSources = (
   retire: Partial<RetireSteps> = {},
 ): Sources => {
   const browsers = createBrowsers(driver, retire);
+  const connections = createHttpConnections();
 
   return {
-    close: browsers.close,
+    close: async () => {
+      await Promise.all([browsers.close(), connections.close()]);
+    },
     start: (plan, slot, deadline, relay) => {
       if (plan.kind === "browser") {
         return browsers.start(plan, slot, deadline, relay);
@@ -21,7 +25,7 @@ export const createSources = (
         slot.assertHeld();
         deadline.throwIfExpired();
 
-        return await loadHttpDocument(plan, deadline);
+        return await loadHttpDocument(plan, deadline, connections);
       };
 
       const document = load();

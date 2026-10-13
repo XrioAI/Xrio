@@ -165,6 +165,7 @@ const plannedVisit = async (
       headers: intent.source.headers,
       identity: httpIdentity(identityForVisit(intent.identity, device)),
       kind: "http",
+      pinnedExit: dependencies.exits.pinsExit(proxy),
       proxy,
       url: intent.url,
     };

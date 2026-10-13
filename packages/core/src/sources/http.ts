@@ -1,5 +1,5 @@
-import { createSession, RequestError } from "wreq-js";
-import type { CreateSessionOptions, Response as ClientResponse, Session } from "wreq-js";
+import { RequestError } from "wreq-js";
+import type { Response as ClientResponse, Session } from "wreq-js";
 
 import { classifyResponse } from "../blocks/classify.ts";
 import type { Deadline } from "../deadline.ts";
@@ -7,11 +7,10 @@ import { redactUrl, XrioError } from "../errors.ts";
 import type { HttpInputs } from "../humanizer/humanizer.ts";
 import type { HttpIdentityReport } from "../humanizer/report.ts";
 import { requestHeaderOrder } from "../humanizer/request-headers.ts";
-import { startRelay } from "../proxy/relay.ts";
-import type { Relay } from "../proxy/relay.ts";
 import type { SourceDocument } from "../types.ts";
 import { isHtmlContentType, unsupportedContentType } from "./content-type.ts";
 import { decodeBody } from "./decode.ts";
+import type { ConnectionProfile, HttpConnections, Lane } from "./http-connections.ts";
 import { networkFailure } from "./net-error.ts";
 import { responseDetailsFrom } from "./response.ts";
 import type { VisitPlan } from "./visit.ts";
@@ -19,7 +18,7 @@ import type { VisitPlan } from "./visit.ts";
 const chromeProfile = (
   { browser, headerOrder, headers, os }: HttpInputs,
   callerHeaders: Readonly<Record<string, string>>,
-) =>
+): ConnectionProfile =>
   ({
     browser,
     defaultHeaders: { Connection: "keep-alive", ...headers },
@@ -37,7 +36,7 @@ const chromeProfile = (
       origHeaders: requestHeaderOrder(headerOrder, callerHeaders),
     },
     os,
-  }) satisfies CreateSessionOptions;
+  }) satisfies ConnectionProfile;
 
 const MAX_REDIRECTS = 20;
 
@@ -156,7 +155,7 @@ const readDocument = async (
   };
 };
 
-const translateRequestError = (error: RequestError, url: URL, relay: Relay): XrioError => {
+const translateRequestError = (error: RequestError, url: URL, lane: Lane): XrioError => {
   const failure = FAILURE_AFTER_REQUEST_URI.exec(error.message)?.groups?.failure ?? "";
 
   if (failure === "") {
@@ -168,7 +167,7 @@ const translateRequestError = (error: RequestError, url: URL, relay: Relay): Xri
 
   if (TUNNEL_FAILURE.test(failure)) {
     return (
-      relay.failureFor(url.hostname) ??
+      lane.failureFor(url.hostname) ??
       new XrioError("NETWORK_ERROR", `Could not open a tunnel to ${url.host}.`, {
         cause: error,
         details: undefined,
@@ -183,7 +182,7 @@ const fetchOnce = async (
   session: Session,
   url: URL,
   deadline: Deadline,
-  relay: Relay,
+  lane: Lane,
   headers: Readonly<Record<string, string>>,
 ): Promise<ClientResponse> => {
   deadline.throwIfExpired();
@@ -194,12 +193,13 @@ const fetchOnce = async (
       headers,
       redirect: "manual",
       signal: deadline.signal,
+      transport: lane.transport,
     });
   } catch (error) {
-    throw error instanceof RequestError ? translateRequestError(error, url, relay) : error;
+    throw error instanceof RequestError ? translateRequestError(error, url, lane) : error;
   }
 
-  const relayFailure = url.protocol === "http:" ? relay.failureFor(url.hostname) : undefined;
+  const relayFailure = url.protocol === "http:" ? lane.failureFor(url.hostname) : undefined;
 
   if (relayFailure !== undefined) {
     await response.body?.cancel();
@@ -241,11 +241,11 @@ const fetchFollowingRedirects = async (
   session: Session,
   url: URL,
   deadline: Deadline,
-  relay: Relay,
+  lane: Lane,
   headers: Readonly<Record<string, string>>,
   requestUrls: string[] = [],
 ): Promise<FollowedResponse> => {
-  const response = await fetchOnce(session, url, deadline, relay, headers);
+  const response = await fetchOnce(session, url, deadline, lane, headers);
   const location = redirectTarget(response);
   const redirects = requestUrls.length;
 
@@ -273,33 +273,36 @@ const fetchFollowingRedirects = async (
     session,
     next,
     deadline,
-    relay,
+    lane,
     next.origin === url.origin ? headers : {},
     requestUrls,
   );
 };
 
 export const loadHttpDocument = async (
-  { capabilities, identity, proxy, url, headers, cookies }: Extract<VisitPlan, { kind: "http" }>,
+  plan: Extract<VisitPlan, { kind: "http" }>,
   deadline: Deadline,
+  connections: HttpConnections,
 ): Promise<SourceDocument> => {
+  const { capabilities, identity, url, headers, cookies } = plan;
   const { inputs, report } = identity;
+  const profile = chromeProfile(inputs, headers);
 
-  await using relay = await startRelay(proxy, deadline, "token");
+  await using lane = await connections.lend(plan, profile, deadline);
 
-  await using session = await createSession({
-    ...chromeProfile(inputs, headers),
-    proxy: relay.url,
-    timeout: 0,
-  });
+  await using session = await lane.startSession(profile.defaultHeaders);
 
   for (const { name, setCookieHeader } of cookies) {
     session.setCookie(name, setCookieHeader.slice(setCookieHeader.indexOf("=") + 1), url);
   }
 
-  return await readDocument(
-    await fetchFollowingRedirects(session, url, deadline, relay, headers),
+  const document = await readDocument(
+    await fetchFollowingRedirects(session, url, deadline, lane, headers),
     deadline,
     () => report(capabilities),
   );
+
+  lane.keep();
+
+  return document;
 };

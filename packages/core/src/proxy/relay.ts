@@ -94,6 +94,8 @@ interface ClientAdmission {
 export interface Relay extends AsyncDisposable {
   readonly url: string;
   readonly failureFor: (hostname: string) => XrioError | undefined;
+  readonly lendTo: (deadline: Deadline) => void;
+  readonly rest: () => void;
 }
 
 const unbracketed = (hostname: string): string => hostname.replaceAll(IPV6_BRACKETS, "");
@@ -378,7 +380,7 @@ class ProxyRelay {
   readonly #deadline: Deadline;
   readonly #proxyAuthorization: string | undefined;
   readonly #clientAuthorization: Buffer | undefined;
-  readonly #sockets = new Set<Duplex>();
+  readonly #sockets: Set<Duplex>;
   readonly #hostFailures = new Map<string, XrioError>();
   #proxyFailure: XrioError | undefined;
   #held: HeldTunnel | undefined;
@@ -387,10 +389,12 @@ class ProxyRelay {
     upstream: ProxyEndpoint | undefined,
     deadline: Deadline,
     clientAuthorization: Buffer | undefined,
+    sockets: Set<Duplex>,
   ) {
     this.#upstream = upstream;
     this.#deadline = deadline;
     this.#clientAuthorization = clientAuthorization;
+    this.#sockets = sockets;
 
     const credentials = upstream?.credentials;
 
@@ -913,11 +917,30 @@ export const startRelay = async (
   firstUrl?: URL,
 ): Promise<Relay> => {
   const { authorization, userinfo } = clientAdmissionFor(admission);
-  const relay = new ProxyRelay(upstream, deadline, authorization);
+  const sockets = new Set<Duplex>();
+  let relay = new ProxyRelay(upstream, deadline, authorization, sockets);
+  let holdsProcess = true;
   const server = createServer();
+
+  server.keepAliveTimeout = 0;
+
+  const holdProcess = (hold: boolean) => {
+    holdsProcess = hold;
+    server[hold ? "ref" : "unref"]();
+
+    for (const socket of sockets) {
+      if (socket instanceof Socket) {
+        socket[hold ? "ref" : "unref"]();
+      }
+    }
+  };
 
   server.on("connection", (socket: Socket) => {
     relay.track(socket);
+
+    if (!holdsProcess) {
+      socket.unref();
+    }
   });
   server.on("connect", (request: IncomingMessage, client: Duplex, head: Buffer) => {
     if (!relay.admits(request)) {
@@ -953,6 +976,13 @@ export const startRelay = async (
       await closed;
     },
     failureFor: (hostname) => relay.failureFor(hostname),
+    lendTo: (next) => {
+      relay = new ProxyRelay(upstream, next, authorization, sockets);
+      holdProcess(true);
+    },
+    rest: () => {
+      holdProcess(false);
+    },
     url: `http://${userinfo}127.0.0.1:${port}`,
   };
 };
