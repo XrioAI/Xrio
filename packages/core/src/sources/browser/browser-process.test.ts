@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
+import { permissionsOf, underUserPrivateGroupUmask } from "../../testing/file-modes.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import { plannedScrapes } from "../../testing/planned-scrapes.ts";
@@ -21,6 +22,7 @@ import {
   removeScratchDir,
   spawnChrome,
   sweepAbandonedScratch,
+  writeAtomically,
 } from "./browser-process.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { waitForGroupExit } from "./group-lifetime.ts";
@@ -469,6 +471,28 @@ describe("the scratch root", () => {
       await expect(ensureScratchRoot(root, uid + 1)).rejects.toThrow(
         `${root} must belong to this user with mode 0700.`,
       );
+    });
+  });
+});
+
+describe(writeAtomically, () => {
+  it("creates every missing parent with mode 0700 under a group-writable umask", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const cache = path.join(directory, "cache");
+      const file = path.join(cache, "xrio", "host", "facts.json");
+
+      await underUserPrivateGroupUmask(async () => {
+        await writeAtomically(file, "{}");
+      });
+
+      const modes = await Promise.all(
+        [cache, path.join(cache, "xrio"), path.join(cache, "xrio", "host")].map(permissionsOf),
+      );
+
+      expect({ contents: await readFile(file, "utf-8"), modes }).toStrictEqual({
+        contents: "{}",
+        modes: ["700", "700", "700"],
+      });
     });
   });
 });
