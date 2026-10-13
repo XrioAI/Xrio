@@ -368,6 +368,7 @@ describe("XrioClient types", () => {
     expectTypeOf<"flag-infobar">().toExtend<IdentityTell>();
     expectTypeOf<"form-factor-battery-skew">().not.toExtend<IdentityTell>();
     expectTypeOf<"noise-unhonored">().toExtend<IdentityTell>();
+    expectTypeOf<"battery-drift">().toExtend<IdentityTell>();
     expectTypeOf<BrowserIdentityReport["surfaces"]["noise"]>().toEqualTypeOf<
       | { readonly enabled: true; readonly reason: "software-gpu" | "pinned" }
       | {

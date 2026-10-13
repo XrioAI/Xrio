@@ -180,7 +180,7 @@ const boundedCoverage = (
     : observedCoverage();
 };
 
-const batteryStateOf = (afterCapture: AfterCapture): ObservedIdentity["batteryState"] => {
+export const batteryStateOf = (afterCapture: AfterCapture): ObservedIdentity["batteryState"] => {
   if (afterCapture.kind !== "secure" || afterCapture.batteryState.kind !== "state") {
     return null;
   }

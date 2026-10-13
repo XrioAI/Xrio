@@ -5,6 +5,7 @@ import { deviceDigest } from "./contracts.ts";
 import type {
   AfterCapture,
   BatteryReading,
+  BatteryStatus,
   ClientHints,
   FontEvidence,
   Observation,
@@ -16,7 +17,7 @@ import { FONT_PROBE_FAMILIES, FONT_SENTINEL_FAMILIES } from "./fonts.ts";
 import type { FontRead } from "./fonts.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import { presentedScreen, recordOf } from "./record.ts";
-import { coverageOf, observedOf } from "./report.ts";
+import { batteryStateOf, coverageOf, observedOf } from "./report.ts";
 import type { BrowserIdentityReport } from "./report.ts";
 import type { SurfaceName } from "./surfaces.ts";
 
@@ -36,9 +37,9 @@ const AFTER_CAPTURE_READ_CAP_MS = 100;
 
 type ReadField = Exclude<keyof Observation, "product" | "afterCapture">;
 
-export type ObservedField = ReadField | "deviceMemory";
+export type ObservedField = ReadField | "deviceMemory" | "batteryState";
 
-export type Observed = Observation[ReadField];
+export type Observed = Observation[ReadField] | BatteryStatus;
 
 export type Matcher =
   | { readonly kind: "equals"; readonly value: Observed }
@@ -95,11 +96,12 @@ export type IdentityTell =
   | FactTell
   | "fonts-drift"
   | "hardware-drift"
+  | "battery-drift"
   | AfterCaptureTell;
 
 type ObservedTell = Exclude<
   IdentityTell,
-  FactTell | "fonts-drift" | "hardware-drift" | AfterCaptureTell
+  FactTell | "fonts-drift" | "hardware-drift" | "battery-drift" | AfterCaptureTell
 >;
 
 export type FontEvidenceOutcome =
@@ -318,8 +320,16 @@ export const readAfterCapture = (text: string): AfterCapture => {
 const deviceMemoryOf = ({ afterCapture }: Observation): number | null =>
   afterCapture.kind === "secure" ? afterCapture.deviceMemory : null;
 
-const observedValue = (observation: Observation, field: ObservedField): Observed =>
-  field === "deviceMemory" ? deviceMemoryOf(observation) : observation[field];
+const observedValue = (observation: Observation, field: ObservedField): Observed => {
+  if (field === "deviceMemory") {
+    return deviceMemoryOf(observation);
+  }
+
+  return field === "batteryState" ? batteryStateOf(observation.afterCapture) : observation[field];
+};
+
+const isAfterCaptureField = (field: ObservedField): boolean =>
+  field === "deviceMemory" || field === "batteryState";
 
 const languageOf = (locale: string): string => locale.split("-")[0] ?? locale;
 
@@ -411,7 +421,7 @@ const mismatchOf = (
     return undefined;
   }
 
-  if (field === "deviceMemory" && deviceMemoryOf(observation) === null) {
+  if (isAfterCaptureField(field) && observedValue(observation, field) === null) {
     return undefined;
   }
 
@@ -475,6 +485,9 @@ const fontEvidenceOutcome = (
 
 const hardwareDriftOf = (notes: readonly IdentityMismatch[]): readonly "hardware-drift"[] =>
   notes.some(({ surface }) => surface === "hardware") ? ["hardware-drift"] : [];
+
+const batteryDriftOf = (notes: readonly IdentityMismatch[]): readonly "battery-drift"[] =>
+  notes.some(({ surface }) => surface === "battery") ? ["battery-drift"] : [];
 
 const SWIFTSHADER_NAME = /swiftshader/iu;
 
@@ -574,6 +587,7 @@ export const evaluate = (
         ...tells,
         ...(drifted ? ["fonts-drift" as const] : []),
         ...hardwareDriftOf(notes),
+        ...batteryDriftOf(notes),
         ...afterCaptureTellsOf(claims, observation.afterCapture),
       ],
     },

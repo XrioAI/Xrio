@@ -13,9 +13,9 @@ import {
   SWIFTSHADER_RENDERER,
   swiftShaderHost,
 } from "../testing/gl-fork.ts";
-import { forkWithKnobs } from "../testing/hardware-fork.ts";
+import { forkWithKnobs, HARDWARE_AND_NOISE_KNOBS } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
-import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
+import type { FontEvidence, HostCapabilities, KnobRegistry, Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import {
@@ -707,6 +707,109 @@ describe("the announced persona's after-capture tells", () => {
       afterCaptureTells(announcedPlan(), { kind: "insecure" }),
       afterCaptureTells(announcedPlan(), { kind: "failed" }),
     ]).toStrictEqual([[], [], [], []]);
+  });
+});
+
+const BATTERY_FORK_KNOBS: KnobRegistry = {
+  ...HARDWARE_AND_NOISE_KNOBS,
+  "battery-status": { origin: "def", value: null },
+};
+
+const batteryPlan = (knobs = BATTERY_FORK_KNOBS) =>
+  planFor({
+    capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR], { knobs })),
+    pins: { ...noPins, hardware: { gpuPolicy: "announce" } },
+  });
+
+const batteryReportOf = (
+  plan: ReturnType<typeof batteryPlan>,
+  afterCapture: Observation["afterCapture"],
+) => {
+  const battery = {
+    ...plan,
+    expected: plan.expected.filter(({ surface }) => surface === "battery"),
+  };
+
+  const { mismatches, report } = evaluate(battery, { ...linuxHeadless, afterCapture });
+
+  return {
+    mismatches,
+    notes: report.notes.filter(({ surface }) => surface === "battery"),
+    tells: report.tells.filter((tell) => tell === "battery-drift"),
+  };
+};
+
+const DISCHARGING_STATE = {
+  charging: false,
+  chargingTime: null,
+  dischargingTime: 9000,
+  kind: "state",
+  level: 0.8,
+} as const;
+
+describe("the battery expectation", () => {
+  it("expects the drawn full battery and holds when the page shows it", () => {
+    expect(
+      batteryReportOf(batteryPlan(), readingWith({ batteryState: BATTERYLESS_STATE })),
+    ).toStrictEqual({ mismatches: [], notes: [], tells: [] });
+  });
+
+  it("notes a page that shows another battery and tells battery-drift, never failing the scrape", () => {
+    expect(
+      batteryReportOf(batteryPlan(), readingWith({ batteryState: DISCHARGING_STATE })),
+    ).toStrictEqual({
+      mismatches: [],
+      notes: [
+        {
+          expected: { charging: true, chargingTime: 0, dischargingTime: null, level: 1 },
+          field: "batteryState",
+          observed: { charging: false, chargingTime: null, dischargingTime: 9000, level: 0.8 },
+          surface: "battery",
+        },
+      ],
+      tells: ["battery-drift"],
+    });
+  });
+
+  it.each([
+    { batteryState: { ...BATTERYLESS_STATE, chargingTime: 60 }, why: "another charging time" },
+    {
+      batteryState: { ...BATTERYLESS_STATE, dischargingTime: 20_000 },
+      why: "another discharging time",
+    },
+  ])("tells battery-drift for a page with $why", ({ batteryState }) => {
+    expect(batteryReportOf(batteryPlan(), readingWith({ batteryState })).tells).toStrictEqual([
+      "battery-drift",
+    ]);
+  });
+
+  it.each([
+    { afterCapture: readingWith({ batteryState: { kind: "none" } }), why: "no battery API" },
+    {
+      afterCapture: readingWith({ batteryState: { kind: "timed-out" } }),
+      why: "a battery read that timed out",
+    },
+    {
+      afterCapture: readingWith({ batteryState: { kind: "failed" } }),
+      why: "a battery read that failed",
+    },
+    { afterCapture: { kind: "insecure" } as const, why: "a non-secure page" },
+    { afterCapture: { kind: "not-navigated" } as const, why: "the pre-navigation read" },
+  ])("judges nothing for $why", ({ afterCapture }) => {
+    expect(batteryReportOf(batteryPlan(), afterCapture)).toStrictEqual({
+      mismatches: [],
+      notes: [],
+      tells: [],
+    });
+  });
+
+  it("judges nothing where Chrome keeps its own battery", () => {
+    expect(
+      batteryReportOf(
+        batteryPlan(HARDWARE_AND_NOISE_KNOBS),
+        readingWith({ batteryState: DISCHARGING_STATE }),
+      ),
+    ).toStrictEqual({ mismatches: [], notes: [], tells: [] });
   });
 });
 

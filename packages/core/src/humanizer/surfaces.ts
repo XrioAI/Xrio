@@ -705,7 +705,14 @@ const resolveBattery = (
   const status = { charging, chargingTime, dischargingTime, level };
 
   return {
-    expected: [],
+    expected: [
+      {
+        compatibility: false,
+        field: "batteryState",
+        matcher: equals(status),
+        severity: "note",
+      },
+    ],
     inputs: [{ name: "--xrio-battery-status", sink: "switch", value: batteryStatusOf(status) }],
     value: { ...status, source: "drawn", state },
   };

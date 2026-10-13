@@ -1562,8 +1562,17 @@ describe("the battery surface", () => {
   ])(
     "draws a $value.state battery for a laptop persona over SwiftShader for the seed $seed",
     ({ seed, status, value }) => {
+      const { charging, chargingTime, dischargingTime, level } = value;
+
       expect(laptopBatteryOf(seed)).toStrictEqual({
-        expected: [],
+        expected: [
+          {
+            compatibility: false,
+            field: "batteryState",
+            matcher: { kind: "equals", value: { charging, chargingTime, dischargingTime, level } },
+            severity: "note",
+          },
+        ],
         inputs: [{ name: "--xrio-battery-status", sink: "switch", value: status }],
         value,
       });
