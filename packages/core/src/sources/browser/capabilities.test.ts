@@ -20,7 +20,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -37,6 +37,8 @@ import {
 } from "../../testing/fake-font-stack.ts";
 import type { FakeFontStack } from "../../testing/fake-font-stack.ts";
 import {
+  announceNextDump,
+  announceNextRenderProbe,
   dumpsRun,
   fakeForkPath,
   hangDumpFor,
@@ -48,6 +50,7 @@ import {
   trapExecuted,
 } from "../../testing/fake-fork.ts";
 import type { FakeForkScenario } from "../../testing/fake-fork.ts";
+import { manualClock } from "../../testing/manual-clock.ts";
 import { sweepAbandonedScratch } from "./browser-process.ts";
 import { createCapabilityProbe, createProbeWork } from "./capabilities.ts";
 import { waitForGroupExit } from "./group-lifetime.ts";
@@ -117,13 +120,6 @@ const clockAt = (start: number) => {
     },
     now: () => now,
   };
-};
-
-const dumpStarted = async (executable: string, runs: number): Promise<void> => {
-  if ((await dumpsRun(executable)) < runs) {
-    await delay(10);
-    await dumpStarted(executable, runs);
-  }
 };
 
 const packageOf = async (executable: string) => await realpath(path.dirname(executable));
@@ -849,9 +845,10 @@ describe("hostCapabilities", () => {
 
       await hangDumpFor(executable, 0.5);
 
+      const dumpStarted = announceNextDump(executable);
       const pending = probeWith()(executable);
 
-      await dumpStarted(executable, 1);
+      await dumpStarted();
 
       const entries = await readdir(scratch());
 
@@ -878,9 +875,10 @@ describe("hostCapabilities", () => {
       await replaceDump(executable, "not a dump\n");
       await hangDumpFor(executable, 0.5);
 
+      const dumpStarted = announceNextDump(executable);
       const failing = failureOf(probeWith()(executable));
 
-      await dumpStarted(executable, 2);
+      await dumpStarted();
       await writeFile(path.join(scratch(), file), stored);
       await expect(failing).resolves.toMatchObject({ code: "BROWSER_LAUNCH_FAILED" });
       await expect(readFile(path.join(scratch(), file), "utf-8")).resolves.toBe(stored);
@@ -1496,13 +1494,6 @@ const readyForkIn = async (root: string) => {
   return executable;
 };
 
-const renderProbeStarted = async (executable: string, runs: number): Promise<void> => {
-  if ((await renderProbesRun(executable)) < runs) {
-    await delay(10);
-    await renderProbeStarted(executable, runs);
-  }
-};
-
 const rendererFilesIn = async (root: string) => {
   const entries = await readdir(path.join(root, "scratch"));
 
@@ -1782,9 +1773,10 @@ describe("hostCapabilities host renderer", () => {
     await rm(page);
     execFileSync("/usr/bin/mkfifo", [page]);
 
+    const probeStarted = announceNextRenderProbe(executable);
     const reading = rendererProbeIn(root, { now: clock.now })(executable);
 
-    await renderProbeStarted(executable, 2);
+    await probeStarted();
 
     const [file = ""] = await rendererFilesIn(root);
     const learnedMeanwhile = { format: 1, kind: "learned", learnedAt: clock.now(), ...NVIDIA };
@@ -1833,12 +1825,49 @@ describe("hostCapabilities host renderer", () => {
 
     await rm(page);
     execFileSync("/usr/bin/mkfifo", [page]);
-    using deadline = startDeadline(2000);
+    const { advance, clock } = manualClock();
+    using deadline = startDeadline(2000, undefined, clock);
+    const probeStarted = announceNextRenderProbe(executable);
 
-    const answered = await probe(executable, deadline, undefined, work);
+    let settled = false;
+
+    const answering = probe(executable, deadline, undefined, work).finally(() => {
+      settled = true;
+    });
+
+    await probeStarted();
+
+    advance(999);
+    await nextTurn();
+    expect(settled).toBeFalsy();
+
+    advance(1);
+
+    const answered = await answering;
 
     expect([answered.fork?.dialect, answered.hostRenderer]).toStrictEqual(["xrio", undefined]);
-    expect(deadline.remainingMs()).toBeGreaterThan(500);
+    expect(deadline.remainingMs()).toBe(1000);
+
+    await setHostRenderer(executable, null);
+    await work.settled();
+  });
+
+  it("keeps learning after answering within its deadline, for later scrapes", async () => {
+    const executable = await readyForkIn(root);
+    const work = createProbeWork();
+    const page = path.join(path.dirname(executable), "renderer-page.html");
+
+    await rm(page);
+    execFileSync("/usr/bin/mkfifo", [page]);
+
+    const { advance, clock } = manualClock();
+    using deadline = startDeadline(2000, undefined, clock);
+    const probeStarted = announceNextRenderProbe(executable);
+    const answering = rendererProbeIn(root)(executable, deadline, undefined, work);
+
+    await probeStarted();
+    advance(1000);
+    await answering;
 
     await setHostRenderer(executable, AMD);
     await work.settled();

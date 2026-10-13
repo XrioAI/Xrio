@@ -1,15 +1,16 @@
 import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { startDeadline } from "../../deadline.ts";
 import type { Deadline } from "../../deadline.ts";
 import type { FontEvidence, HostCapabilities } from "../../humanizer/contracts.ts";
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import { CHECKED_FONT_STACK } from "../../testing/fake-font-stack.ts";
+import { manualClock } from "../../testing/manual-clock.ts";
 import { createFontEvidenceStore } from "./font-evidence.ts";
 import type { FontClaim } from "./font-evidence.ts";
 
@@ -18,6 +19,15 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 const UNPROVEN_TTL_MS = 60_000;
+
+const QUEUED_OBSERVED_TURNS = 20;
+
+const eventLoopTurns = async (turns: number): Promise<void> => {
+  if (turns > 0) {
+    await nextTurn();
+    await eventLoopTurns(turns - 1);
+  }
+};
 
 const GATHERED: FontEvidenceOutcome = {
   digest: "384a83ee",
@@ -277,7 +287,7 @@ describe("the fonts evidence store, keys", () => {
 });
 
 describe("the fonts evidence store, concurrent launches", () => {
-  const { claimOn, evidenceOn, files, storeWith } = useEvidenceHarness();
+  const { binary, claimOn, evidenceOn, files, storeWith } = useEvidenceHarness();
 
   it("stops queuing claims for 60 s once a gatherer reports an unproven stack, and never stores it", async () => {
     const clock = clockAt(1_000_000);
@@ -304,12 +314,32 @@ describe("the fonts evidence store, concurrent launches", () => {
     clock.advance(1);
 
     const owner = await claimOn(store);
-    const queued = claimOn(store);
-    const early = await Promise.race([queued.then(() => "claimed"), delay(50, "waiting")]);
+    const queuing = manualClock();
+    using queuedDeadline = startDeadline(20_000, undefined, queuing.clock);
+    let queuedSettled = false;
+
+    const queued = store.claim(binary(), WITH_STACK, "en-US", queuedDeadline).then((claim) => {
+      queuedSettled = true;
+
+      return claim;
+    });
+
+    await vi.waitFor(() => {
+      expect(queuing.pendingTimers()).toBe(2);
+    });
+    await eventLoopTurns(QUEUED_OBSERVED_TURNS);
+
+    const settledBehindOwner = queuedSettled;
 
     await owner.settle(GATHERED);
-    await queued;
-    expect([quiet.evidence, early]).toStrictEqual([undefined, "waiting"]);
+
+    const claimed = await queued;
+
+    expect([quiet.evidence, settledBehindOwner, claimed.evidence?.digest]).toStrictEqual([
+      undefined,
+      false,
+      "384a83ee",
+    ]);
   });
 
   it("shares one gatherer among concurrent claims, which then get its evidence", async () => {
@@ -346,11 +376,28 @@ describe("the fonts evidence store, concurrent launches", () => {
   });
 
   it("stops waiting for a gatherer that never settles, and gathers without owning the key", async () => {
-    const store = storeWith({ gathererWaitMs: 50 });
+    const { advance, clock, pendingTimers } = manualClock();
+    using deadline = startDeadline(60_000, undefined, clock);
+    const store = storeWith({ gathererWaitMs: 30_000 });
 
     await claimOn(store);
 
-    const stranded = await claimOn(store);
+    let settled = false;
+
+    const waiting = store.claim(binary(), WITH_STACK, "en-US", deadline).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(pendingTimers()).toBe(2);
+    });
+    advance(29_999);
+    await eventLoopTurns(QUEUED_OBSERVED_TURNS);
+    expect(settled).toBeFalsy();
+
+    advance(1);
+
+    const stranded = await waiting;
 
     await stranded.settle(GATHERED);
 

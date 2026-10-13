@@ -19,13 +19,17 @@ import type {
   HardwareOptions,
   HostConfig,
   HttpIdentityReport,
+  IdentityCoverage,
   IdentityMismatch,
   IdentityReport,
   IdentityTell,
   InvalidOptionsError,
+  ModeOptions,
+  ObservedIdentity,
   ScrapeFormat,
   ScrapeOptions,
   ScrapeResult,
+  ScreenSize,
   StructuredContent,
   XrioErrorCode,
   XrioConfig,
@@ -454,5 +458,190 @@ describe("XrioClient types", () => {
     });
     // @ts-expect-error Codes are a closed set.
     void isXrioError(error, "ERR_INVALID_URL");
+  });
+});
+
+describe("XrioClient option and identity types", () => {
+  it("pairs each mode option with the browser path it needs", () => {
+    expectTypeOf<ModeOptions["mode"]>().toEqualTypeOf<"http" | "headless" | "headed" | undefined>();
+    expectTypeOf<ModeOptions["browserPath"]>().toEqualTypeOf<string | undefined>();
+
+    const http = { mode: "http" } satisfies ModeOptions;
+    const headless = { browserPath: "/chrome", mode: "headless" } satisfies ModeOptions;
+    const headed = { browserPath: "/chrome", mode: "headed" } satisfies ModeOptions;
+    const defaultMode = { browserPath: "/chrome" } satisfies ModeOptions;
+
+    // @ts-expect-error A mode or a browser path is required.
+    const neither = {} satisfies ModeOptions;
+    // @ts-expect-error A browser mode needs a browser path.
+    const headlessWithoutPath = { mode: "headless" } satisfies ModeOptions;
+    // @ts-expect-error A browser mode needs a browser path.
+    const headedWithoutPath = { mode: "headed" } satisfies ModeOptions;
+    // @ts-expect-error HTTP mode takes no browser path.
+    const httpWithPath = { browserPath: "/chrome", mode: "http" } satisfies ModeOptions;
+    // @ts-expect-error HTTP mode takes no selector to wait for.
+    const httpWaiting = { mode: "http", waitFor: { selector: "#ready" } } satisfies ModeOptions;
+    // @ts-expect-error Browser modes are headless and headed.
+    const unknownMode = { browserPath: "/chrome", mode: "firefox" } satisfies ModeOptions;
+
+    void [http, headless, headed, defaultMode];
+    void [neither, headlessWithoutPath, headedWithoutPath, httpWithPath, httpWaiting, unknownMode];
+  });
+
+  it("describes a screen by its width and height", () => {
+    expectTypeOf<ScreenSize>().toEqualTypeOf<{ width: number; height: number }>();
+    expectTypeOf<DisplayOptions["screen"]>().toEqualTypeOf<
+      ScreenSize | readonly (ScreenSize & { weight: number })[] | undefined
+    >();
+
+    const screen = { height: 1080, width: 1920 } satisfies ScreenSize;
+    // @ts-expect-error A screen needs a height.
+    const noHeight = { width: 1920 } satisfies ScreenSize;
+    // @ts-expect-error A screen size is a number of pixels.
+    const textual = { height: "1080", width: 1920 } satisfies ScreenSize;
+
+    void [screen, noHeight, textual];
+  });
+
+  it("covers every surface with a coverage state", () => {
+    expectTypeOf<keyof IdentityCoverage>().toEqualTypeOf<CoveredSurface>();
+    expectTypeOf<IdentityCoverage[CoveredSurface]>().toEqualTypeOf<Coverage>();
+    expectTypeOf<CoveredSurface>().toEqualTypeOf<
+      | "timezone"
+      | "languages"
+      | "userAgent"
+      | "clientHints"
+      | "requestHeaders"
+      | "platform"
+      | "screen"
+      | "workArea"
+      | "devicePixelRatio"
+      | "colorDepth"
+      | "window"
+      | "colorScheme"
+      | "reducedMotion"
+      | "pointer"
+      | "cores"
+      | "deviceMemory"
+      | "webglStrings"
+      | "webglPixels"
+      | "webgpu"
+      | "fonts"
+      | "voices"
+      | "mediaDevices"
+      | "battery"
+      | "webrtc"
+      | "dns"
+      | "automation"
+      | "storageQuota"
+      | "permissions"
+    >();
+    expectTypeOf<Coverage["state"]>().toEqualTypeOf<"observed" | "cached" | "unchecked">();
+    expectTypeOf<
+      Extract<Coverage, { state: "unchecked" }>["reason"]
+    >().toEqualTypeOf<CoverageReason>();
+
+    const everySurface: Record<CoveredSurface, Coverage> = {
+      automation: { state: "observed" },
+      battery: { state: "observed" },
+      clientHints: { state: "observed" },
+      colorDepth: { state: "observed" },
+      colorScheme: { state: "observed" },
+      cores: { state: "observed" },
+      deviceMemory: { state: "observed" },
+      devicePixelRatio: { state: "observed" },
+      dns: { reason: "lanes-only", state: "unchecked" },
+      fonts: { ageMs: 5, key: "fonts", state: "cached" },
+      languages: { state: "observed" },
+      mediaDevices: { state: "observed" },
+      permissions: { state: "observed" },
+      platform: { state: "observed" },
+      pointer: { state: "observed" },
+      reducedMotion: { state: "observed" },
+      requestHeaders: { state: "observed" },
+      screen: { state: "observed" },
+      storageQuota: { state: "observed" },
+      timezone: { state: "observed" },
+      userAgent: { state: "observed" },
+      voices: { state: "observed" },
+      webglPixels: { state: "observed" },
+      webglStrings: { state: "observed" },
+      webgpu: { state: "observed" },
+      webrtc: { state: "observed" },
+      window: { state: "observed" },
+      workArea: { state: "observed" },
+    };
+
+    const coverage: IdentityCoverage = everySurface;
+    // @ts-expect-error A coverage names every surface.
+    const partial: IdentityCoverage = { timezone: { state: "observed" } };
+
+    void [coverage, partial];
+  });
+
+  it("nests what the browser reported about itself", () => {
+    expectTypeOf<ObservedIdentity["timeZone"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<ObservedIdentity["offsets"]>().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<ObservedIdentity["languages"]>().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<ObservedIdentity["webdriver"]>().toEqualTypeOf<boolean>();
+    expectTypeOf<ObservedIdentity["screen"]>().toEqualTypeOf<{
+      readonly width: number;
+      readonly height: number;
+      readonly availWidth: number;
+      readonly availHeight: number;
+      readonly availLeft: number;
+      readonly availTop: number;
+      readonly colorDepth: number;
+      readonly devicePixelRatio: number;
+    }>();
+    expectTypeOf<ObservedIdentity["window"]>().toEqualTypeOf<{
+      readonly outerWidth: number;
+      readonly outerHeight: number;
+      readonly screenX: number;
+      readonly screenY: number;
+    }>();
+    expectTypeOf<ObservedIdentity["webgl"]>().toEqualTypeOf<{
+      readonly vendor: string | null;
+      readonly renderer: string | null;
+      readonly extensions: readonly string[] | null;
+    }>();
+    expectTypeOf<ObservedIdentity["webgpuAdapter"]>().toEqualTypeOf<{
+      readonly vendor: string;
+      readonly architecture: string;
+    } | null>();
+    expectTypeOf<ObservedIdentity["batteryState"]>().toEqualTypeOf<{
+      readonly charging: boolean;
+      readonly level: number;
+    } | null>();
+    expectTypeOf<NonNullable<ObservedIdentity["clientHints"]>["brands"]>().toEqualTypeOf<
+      readonly { readonly brand: string; readonly version: string }[] | null
+    >();
+    expectTypeOf<NonNullable<ObservedIdentity["clientHints"]>["mobile"]>().toEqualTypeOf<
+      boolean | null
+    >();
+    expectTypeOf<ObservedIdentity["deviceMemory"]>().toEqualTypeOf<number | null>();
+    expectTypeOf<BrowserIdentityReport["observed"]>().toEqualTypeOf<ObservedIdentity>();
+    expectTypeOf<BrowserIdentityReport["coverage"]>().toEqualTypeOf<IdentityCoverage>();
+  });
+
+  it("takes a scrape's url, format, timeout and signal", () => {
+    expectTypeOf<ScrapeOptions["url"]>().toEqualTypeOf<string>();
+    expectTypeOf<ScrapeOptions["timeoutMs"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<ScrapeOptions["signal"]>().toEqualTypeOf<AbortSignal | undefined>();
+    expectTypeOf<ScrapeOptions<"markdown">["format"]>().toEqualTypeOf<"markdown">();
+
+    // @ts-expect-error A scrape needs a url.
+    const noUrl: ScrapeOptions = { format: "html", mode: "http" };
+    // @ts-expect-error A scrape needs a format.
+    const noFormat: ScrapeOptions = { mode: "http", url: "https://example.test/" };
+
+    const textTimeout: ScrapeOptions = {
+      format: "html",
+      // @ts-expect-error A timeout is a number of milliseconds.
+      timeoutMs: "5s",
+      url: "https://example.test/",
+    };
+
+    void [noUrl, noFormat, textTimeout];
   });
 });

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 
 import { hostCacheRoot } from "../../cache-dir.ts";
 import { untilDeadline } from "../../deadline.ts";
@@ -227,21 +226,28 @@ export const createFontEvidenceStore = (
   };
 
   const gathererSettled = async (gatherer: Promise<null>, deadline: Deadline): Promise<boolean> => {
-    const waiting = new AbortController();
+    const gaveUp = Promise.withResolvers<false>();
+
+    const giveUp = () => {
+      gaveUp.resolve(false);
+    };
+
+    const cancelTimer = deadline.clock.setTimer(options.gathererWaitMs, giveUp);
+
+    options.signal.addEventListener("abort", giveUp, { once: true });
+
+    if (options.signal.aborted) {
+      giveUp();
+    }
 
     try {
       return await untilDeadline(
-        async () =>
-          await Promise.race([
-            gatherer.then(() => true),
-            delay(options.gathererWaitMs, false, {
-              signal: AbortSignal.any([waiting.signal, options.signal]),
-            }).catch(() => false),
-          ]),
+        async () => await Promise.race([gatherer.then(() => true), gaveUp.promise]),
         deadline,
       );
     } finally {
-      waiting.abort();
+      cancelTimer();
+      options.signal.removeEventListener("abort", giveUp);
     }
   };
 

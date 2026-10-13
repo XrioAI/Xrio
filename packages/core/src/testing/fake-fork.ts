@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { constants, openSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,6 +85,10 @@ const RENDERER_PAGE_FILE = "renderer-page.html";
 
 const RENDERER_PROBES_FILE = "renderer-probes";
 
+const DUMP_STARTED_FILE = "dump-started";
+
+const PROBE_STARTED_FILE = "probe-started";
+
 const quoted = (value: string): string => `'${value.replaceAll("'", String.raw`'\''`)}'`;
 
 const forkScript = (directory: string, overrides: { readonly version?: string }): string =>
@@ -90,16 +97,25 @@ const forkScript = (directory: string, overrides: { readonly version?: string })
     `HANG=${quoted(path.join(directory, "hang"))}`,
     `DUMPS=${quoted(path.join(directory, "dumps"))}`,
     `PROBES=${quoted(path.join(directory, RENDERER_PROBES_FILE))}`,
+    `DUMP_STARTED=${quoted(path.join(directory, DUMP_STARTED_FILE))}`,
+    `PROBE_STARTED=${quoted(path.join(directory, PROBE_STARTED_FILE))}`,
     `PAGE=${quoted(path.join(directory, RENDERER_PAGE_FILE))}`,
+    "announce() {",
+    '  if [ -p "$1" ] && /bin/mv "$1" "$1.sent" 2>/dev/null; then',
+    '    echo started 1<> "$1.sent"',
+    '    /bin/rm -f "$1.sent"',
+    "  fi",
+    "}",
     'for arg in "$@"; do',
     '  if [ "$arg" = "--dump-dom" ]; then',
     '    printf \'%s\\n\' "$*" >> "$PROBES"',
+    '    announce "$PROBE_STARTED"',
     `    if [ -e "$PAGE" ]; then /bin/cat "$PAGE"; else printf '%s' ${quoted(NO_RENDERER_PAGE)}; fi`,
     "    exit 0",
     "  fi",
     "done",
     'case "$1" in',
-    `  --xrio-dump-config) echo dump >> "$DUMPS"; [ -e "$HANG" ] && /bin/sleep "$(/bin/cat "$HANG")"; exec /bin/cat ${quoted(path.join(directory, "dump.txt"))} ;;`,
+    `  --xrio-dump-config) echo dump >> "$DUMPS"; announce "$DUMP_STARTED"; [ -e "$HANG" ] && /bin/sleep "$(/bin/cat "$HANG")"; exec /bin/cat ${quoted(path.join(directory, "dump.txt"))} ;;`,
     `  --version) echo ${quoted(`Chromium ${overrides.version ?? FAKE_FORK_VERSION}`)}; exit 0 ;;`,
     "esac",
     `exec /usr/bin/env XRIO_FAKE_SCENARIO=fork XRIO_FAKE_PACKAGE=${quoted(directory)} ${quoted(process.execPath)} ${quoted(FAKE_CHROME)} "$@"`,
@@ -245,3 +261,46 @@ export const renderProbesRun = async (executable: string): Promise<number> => {
 
   return lines.length;
 };
+
+const ANNOUNCEMENT_WAIT_MS = 20_000;
+
+const startReadBy = async (announcement: number, what: string): Promise<void> => {
+  const reader = new Socket({ fd: announcement, readable: true, writable: false });
+  const started = Promise.withResolvers<null>();
+
+  const timer = setTimeout(() => {
+    started.reject(
+      new Error(`The fake fork did not start ${what} within ${ANNOUNCEMENT_WAIT_MS} ms.`),
+    );
+  }, ANNOUNCEMENT_WAIT_MS);
+
+  reader.once("data", () => {
+    started.resolve(null);
+  });
+  reader.once("error", started.reject);
+
+  try {
+    await started.promise;
+  } finally {
+    clearTimeout(timer);
+    reader.destroy();
+  }
+};
+
+const announcedStart = (executable: string, file: string, what: string): (() => Promise<void>) => {
+  const announcement = path.join(path.dirname(executable), file);
+
+  execFileSync("/usr/bin/mkfifo", [announcement]);
+
+  const descriptor = openSync(announcement, constants.O_RDWR);
+
+  return async () => {
+    await startReadBy(descriptor, what);
+  };
+};
+
+export const announceNextDump = (executable: string): (() => Promise<void>) =>
+  announcedStart(executable, DUMP_STARTED_FILE, "a config dump");
+
+export const announceNextRenderProbe = (executable: string): (() => Promise<void>) =>
+  announcedStart(executable, PROBE_STARTED_FILE, "a renderer probe");

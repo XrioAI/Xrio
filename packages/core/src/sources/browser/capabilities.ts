@@ -909,13 +909,18 @@ const rendererWithin = async (
     return await learning;
   }
 
-  const gaveUp = Promise.withResolvers<undefined>();
-  const timer = setTimeout(gaveUp.resolve, Math.floor(deadline.remainingMs() / 2), undefined);
+  const gaveUp = Promise.withResolvers<null>();
+
+  const cancelTimer = deadline.clock.setTimer(Math.floor(deadline.remainingMs() / 2), () => {
+    gaveUp.resolve(null);
+  });
 
   try {
-    return await Promise.race([learning, gaveUp.promise]);
+    const renderer = await Promise.race([learning, gaveUp.promise]);
+
+    return renderer ?? undefined;
   } finally {
-    clearTimeout(timer);
+    cancelTimer();
   }
 };
 

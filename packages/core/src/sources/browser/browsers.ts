@@ -1,5 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
-
 import type { Deadline } from "../../deadline.ts";
 import { publishInternalEvent, timeStage } from "../../diagnostics.ts";
 import { clientClosed, isXrioError, XrioError } from "../../errors.ts";
@@ -13,6 +11,7 @@ import {
 } from "../../humanizer/verify.ts";
 import type { FontEvidenceOutcome } from "../../humanizer/verify.ts";
 import type { HeldDeadline } from "../../lifetime.ts";
+import { pollAfter } from "../../poll.ts";
 import { startRelay } from "../../proxy/relay.ts";
 import type { Relay } from "../../proxy/relay.ts";
 import type { Slot } from "../../slot.ts";
@@ -135,7 +134,7 @@ const observeLaunch = async (
       return first;
     }
 
-    await delay(UNSIZED_RETRY_MS, undefined, { signal: reading.signal });
+    await pollAfter(UNSIZED_RETRY_MS, reading);
 
     return await readOnce();
   } catch (error) {
