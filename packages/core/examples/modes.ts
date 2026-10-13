@@ -1,37 +1,35 @@
-// From the repository root: vp node packages/core/examples/modes.ts
-import { XrioClient } from "../src/client.ts";
+// Run: XRIO_BROWSER_PATH=/absolute/path/to/chrome node modes.ts
+import { XrioClient } from "@xrio/core";
 
-// All modes accept html, markdown, and json. Replace the paths with real Chrome executables.
-await using client = new XrioClient({ browserPath: "/path/to/chrome", mode: "headless" });
+const browserPath = process.env.XRIO_BROWSER_PATH;
 
-const url = "https://example.com";
-
-try {
-  // Omitting mode inherits BOTH headless mode and the client's browserPath.
-  await client.scrape({ format: "json", url });
-} catch (error) {
-  console.error(error);
+if (browserPath === undefined || browserPath === "") {
+  throw new Error("Set XRIO_BROWSER_PATH to a Chrome/Chromium 150+ executable.");
 }
 
+const client = new XrioClient({ browserPath, mode: "headless" });
+
 try {
-  // An explicit browser-mode override must provide its own browserPath.
-  await client.scrape({
-    browserPath: "/path/to/another/chrome",
-    format: "markdown",
-    mode: "headed",
+  const url = "https://example.com";
+
+  // Inherit the client's mode and path; wait for rendered content before capture.
+  const rendered = await client.scrape({
+    format: "json",
     url,
+    waitFor: { selector: "p" },
   });
-} catch (error) {
-  console.error(error);
+
+  console.log(rendered.data.metadata.title, rendered.block.verdict);
+
+  // An explicit browser-mode override supplies its own path. Headed needs a display.
+  const visible = await client.scrape({ browserPath, format: "markdown", mode: "headed", url });
+
+  console.log(visible.data);
+
+  // An HTTP override does not change the client's headless default.
+  const direct = await client.scrape({ format: "html", mode: "http", url });
+
+  console.log(direct.data);
+} finally {
+  await client.close();
 }
-
-// An HTTP override does not change the client's headless default.
-const result = await client.scrape({ format: "html", mode: "http", url });
-
-console.log(result.data);
-
-// TypeScript rejects these configurations:
-// new XrioClient({ mode: "headless" }); // browserPath is required.
-// new XrioClient({ mode: "http", browserPath: "/path/to/chrome" }); // HTTP has no browserPath.
-// client.scrape({ url }); // format is required.
-// client.scrape({ url, format: "html", mode: "headed" }); // Overrides require their own path.

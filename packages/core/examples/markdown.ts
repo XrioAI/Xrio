@@ -1,10 +1,14 @@
-// From the repository root: vp node packages/core/examples/markdown.ts
-import { XrioClient } from "../src/client.ts";
+// Run: node markdown.ts
+import { XrioClient } from "@xrio/core";
 
 const client = new XrioClient({ mode: "http" });
 
-const url = "https://example.com";
+try {
+  const url = "https://example.com";
 
-const result = await client.scrape({ format: "markdown", url });
+  const result = await client.scrape({ format: "markdown", url });
 
-console.log(result.data);
+  console.log(result.data);
+} finally {
+  await client.close();
+}

@@ -1,5 +1,5 @@
-// From the repository root: vp node packages/core/examples/cancellation.ts
-import { XrioClient } from "../src/client.ts";
+// Run: node cancellation.ts
+import { XrioClient } from "@xrio/core";
 
 const client = new XrioClient({ mode: "http" });
 
@@ -17,11 +17,12 @@ try {
 
   console.log(result.data);
 } catch (error) {
-  if (!controller.signal.aborted) {
+  if (!controller.signal.aborted || error !== controller.signal.reason) {
     throw error;
   }
 
   console.log("Scrape cancelled.");
 } finally {
   clearTimeout(cancellation);
+  await client.close();
 }
