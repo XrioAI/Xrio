@@ -134,13 +134,15 @@ In browser modes `locale` sets `navigator.languages`, the `Accept-Language` head
 
 ```json
 {
-  "$schema": "./node_modules/@xrio/core/xrio.schema.json",
+  "$schema": "https://xrio.com/xrio.schema.json",
   "proxy": { "url": "http://customer-session-{session}:password@proxy.example:8080" },
   "host": { "locale": "de-DE", "timezone": "Europe/Berlin" }
 }
 ```
 
-The package ships `xrio.schema.json`, a JSON Schema (draft-07) for the whole file. Point `$schema` at it from an `xrio.config.json`, as above, and editors complete field names, offer the measured locales, memory sizes, GPU policies and noise settings, and show each field's description on hover. A schema cannot run Xrio's checks, so a config that passes it can still reject when the client loads it: a timezone Intl does not know, a window that does not fit the screens Xrio can draw, a switch Xrio manages in `browserArgs`, a proxy URL that does not parse and a session placeholder that is not alone in the credentials. Everything the schema rejects, the loader rejects too. The schema is generated from the same tables the loader reads, and the repository's tests fail when `xrio.schema.json` is stale. A `.ts` or `.mjs` config can set `$schema` too, though its `satisfies XrioConfig` already types it.
+The public `https://xrio.com/xrio.schema.json` URL serves a JSON Schema (draft-07) for the whole file. Point `$schema` at it from an `xrio.config.json`, as above, and editors complete field names, offer the measured locales, memory sizes, GPU policies and noise settings, and show each field's description on hover without needing a local package installation. The hosted schema follows the latest landing deployment and may describe options unavailable in older packages. For an exact match to your installed version, use `"$schema": "./node_modules/@xrio/core/xrio.schema.json"`; the package continues to ship that file.
+
+A schema cannot run Xrio's checks, so a config that passes it can still reject when the client loads it: a timezone Intl does not know, a window that does not fit the screens Xrio can draw, a switch Xrio manages in `browserArgs`, a proxy URL that does not parse and a session placeholder that is not alone in the credentials. For a matching package version, everything the schema rejects, the loader rejects too. The schema is generated from the same tables the loader reads, and the repository's tests fail when `xrio.schema.json` is stale. A `.ts` or `.mjs` config can set `$schema` too, though its `satisfies XrioConfig` already types it.
 
 [`examples/xrio.config.json`](examples/xrio.config.json) sets every field the schema describes except `host.hardware.gpu`. That field must name a GL persona of your fork package, and a scrape on stock Chrome rejects when it is set. A test fails when the schema gains a field that the example does not set.
 

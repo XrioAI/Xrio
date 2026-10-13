@@ -16,6 +16,7 @@ node_modules/
 # next.js
 /.next/
 /out/
+/public/xrio.schema.json
 
 # production
 /build
