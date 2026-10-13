@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/@xrio/core/xrio.schema.json",
+  "$schema": "https://xrio.com/xrio.schema.json",
   "proxy": {
     "url": "http://customer-{session}:password@proxy.example:8080",
     "session": { "format": "alphanumeric", "length": 12 }

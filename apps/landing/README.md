@@ -17,6 +17,11 @@ vp run web:dev
 Open the URL printed by Next.js (normally http://localhost:3000; another port is
 chosen if it is occupied). Edit `apps/landing/src/app/page.tsx` and its components.
 
+The Next.js config copies `packages/core/xrio.schema.json` into `public/` during
+development startup and production builds to serve `/xrio.schema.json`. The
+generated copy is ignored by Git; update the core schema and restart the dev
+server or rebuild to refresh it.
+
 Vite+ uses the root's pinned pnpm version. Dependencies belong in the app's
 `package.json`; the workspace has one root `pnpm-lock.yaml`:
 
