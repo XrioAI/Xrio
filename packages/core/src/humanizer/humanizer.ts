@@ -1,7 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 
-import type { BrowserProfile, EmulationOS } from "wreq-js";
-
 import { deviceDigest, hostDigest, refuseUnreplayable } from "./contracts.ts";
 import type {
   DeviceRecord,
@@ -172,8 +170,8 @@ const HTTP_HEADER_ORDER = [
 ] as const;
 
 export interface HttpInputs {
-  readonly browser: BrowserProfile;
-  readonly os: EmulationOS;
+  readonly browser: `chrome_${(typeof HTTP_PROFILE)["chromeMajor"]}`;
+  readonly os: (typeof HTTP_PROFILE)["platform"];
   readonly headers: Readonly<Record<string, string>>;
   readonly headerOrder: readonly string[];
 }

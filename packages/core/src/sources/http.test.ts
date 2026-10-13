@@ -4,6 +4,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import type { Socket } from "node:net";
 import { inspect } from "node:util";
+import { brotliCompressSync, constants, gzipSync, zstdCompressSync } from "node:zlib";
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { resolveProfile } from "wreq-js";
@@ -86,19 +87,33 @@ const startRawOrigin = async (answer: (socket: Socket, requestHead: string) => v
   return { origin: `http://127.0.0.1:${port}`, server };
 };
 
-const charsetPages = new Map(
+const inflatedBody = Buffer.alloc(MAX_BODY_BYTES + 1, "a");
+
+const fixedPages = new Map(
   Object.entries({
+    "/bomb/br": {
+      bytes: brotliCompressSync(inflatedBody, { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }),
+      headers: { "content-encoding": "br", "content-type": "text/html" },
+    },
+    "/bomb/gzip": {
+      bytes: gzipSync(inflatedBody),
+      headers: { "content-encoding": "gzip", "content-type": "text/html" },
+    },
+    "/bomb/zstd": {
+      bytes: zstdCompressSync(inflatedBody),
+      headers: { "content-encoding": "zstd", "content-type": "text/html" },
+    },
     "/charset/header-shift-jis": {
       bytes: Buffer.concat([
         Buffer.from("<p>"),
         Buffer.from([0x93, 0xfa, 0x96, 0x7b]),
         Buffer.from("</p>"),
       ]),
-      contentType: "text/html; charset=Shift_JIS",
+      headers: { "content-type": "text/html; charset=Shift_JIS" },
     },
     "/charset/latin1": {
       bytes: Buffer.from([0x3c, 0x70, 0x3e, 0x80, 0x3c, 0x2f, 0x70, 0x3e]),
-      contentType: 'text/html; charset="iso-8859-1"',
+      headers: { "content-type": 'text/html; charset="iso-8859-1"' },
     },
     "/charset/meta-windows-1251": {
       bytes: Buffer.concat([
@@ -108,11 +123,19 @@ const charsetPages = new Map(
         Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
         Buffer.from("</p></body></html>"),
       ]),
-      contentType: "text/html",
+      headers: { "content-type": "text/html" },
     },
     "/charset/utf-16-bom": {
       bytes: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("<p>Hi</p>", "utf16le")]),
-      contentType: "text/html; charset=windows-1252",
+      headers: { "content-type": "text/html; charset=windows-1252" },
+    },
+    "/preview/shift-jis": {
+      bytes: Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]),
+      headers: { "content-type": "text/plain; charset=Shift_JIS" },
+    },
+    "/preview/windows-1251": {
+      bytes: Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+      headers: { "content-type": 'application/json; charset="windows-1251"' },
     },
   }),
 );
@@ -130,11 +153,11 @@ const writeLargeBody = (response: ServerResponse) => {
 
 const routes = (request: IncomingMessage, response: ServerResponse) => {
   const url = new URL(request.url ?? "/", "http://fixture.test");
-  const charsetPage = charsetPages.get(url.pathname);
+  const fixedPage = fixedPages.get(url.pathname);
   const remaining = HOP.exec(url.pathname)?.groups?.remaining;
 
-  if (charsetPage !== undefined) {
-    response.writeHead(200, { "content-type": charsetPage.contentType }).end(charsetPage.bytes);
+  if (fixedPage !== undefined) {
+    response.writeHead(200, fixedPage.headers).end(fixedPage.bytes);
   } else if (url.pathname === "/no-content-html") {
     response.writeHead(204, { "content-type": "text/html" }).end();
   } else if (url.pathname === "/xhtml") {
@@ -200,7 +223,7 @@ describe("http mode", () => {
     { expected: "<p>Hi</p>", path: "/charset/utf-16-bom" },
     { expected: "<p>€</p>", path: "/charset/latin1" },
   ])("decodes $path with WHATWG rules", async ({ expected, path }) => {
-    const result = await client.scrape({ format: "html", url: `${origin}${path}` });
+    const result = await client.scrape({ format: "html", url: `${fixture.origin}${path}` });
 
     expect(result.data).toContain(expected);
   });
@@ -542,6 +565,38 @@ describe("http mode edge responses", () => {
 
       expect(requestHeads.map(headerNames)).toStrictEqual([CHROME_HTTP1_HEADER_ORDER]);
       expect(requestHeads[0]).toContain(`\r\nAccept-Language: ${header}\r\n`);
+    },
+  );
+});
+
+describe("http mode body limits", () => {
+  const client = new XrioClient({ mode: "http" });
+
+  it.each(["gzip", "br", "zstd"])(
+    "rejects a %s body that inflates past 32 MiB from a small wire body",
+    async (encoding) => {
+      await using fixture = await startFixtureServer(routes);
+
+      await expect(
+        client.scrape({ format: "html", url: `${fixture.origin}/bomb/${encoding}` }),
+      ).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
+    },
+  );
+
+  it.each([
+    { expected: "日本語", path: "/preview/shift-jis" },
+    { expected: "Привет", path: "/preview/windows-1251" },
+  ])(
+    "decodes the unsupported-content preview of $path with its declared charset",
+    async ({ expected, path }) => {
+      await using fixture = await startFixtureServer(routes);
+
+      await expect(
+        client.scrape({ format: "html", url: `${fixture.origin}${path}` }),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_CONTENT_TYPE",
+        details: { body: expected },
+      });
     },
   );
 });
