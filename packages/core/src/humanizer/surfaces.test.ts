@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -16,6 +17,7 @@ import { forkWithKnobs, HARDWARE_KNOBS } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
 import { NOISE_KNOBS } from "../testing/noise-fork.ts";
 import type {
+  BatteryStatus,
   DeviceRecord,
   FontStack,
   GpuChoice,
@@ -29,6 +31,7 @@ import { fontConfigOf } from "./fonts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityIntent } from "./intent.ts";
 import { chromeAcceptLanguages } from "./owned-inputs.ts";
+import type { LaunchInput } from "./owned-inputs.ts";
 import { EMISSION_ORDER, identityForVisit, resolveSurfaces } from "./surfaces.ts";
 import type { IdentityContext, SurfaceChoices } from "./surfaces.ts";
 
@@ -1185,7 +1188,7 @@ const THIRD_HARDWARE = { ...RENOIR, name: "basharsx4-amd-third" };
 describe("a GL persona under the announce policy", () => {
   it("presents a hardware persona over SwiftShader and expects its renderer", () => {
     expect(announcedGpuOf(swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])))).toStrictEqual({
-      claims: { laptop: true, vendor: "AMD" },
+      claims: { vendor: "AMD" },
       expected: [
         webglContext,
         {
@@ -1465,24 +1468,221 @@ describe("the default GPU policy", () => {
   });
 });
 
-describe("the battery's launch inputs", () => {
+const FULL_STATUS = '{"charging":true,"charging_time":0,"discharging_time":"Infinity","level":1}';
+
+const DISCHARGING_STATUS =
+  '{"charging":false,"charging_time":"Infinity","discharging_time":16695,"level":0.6}';
+
+const CHARGING_STATUS =
+  '{"charging":true,"charging_time":3526,"discharging_time":"Infinity","level":0.49}';
+
+const LAPTOP_FORK = forkWithGl([HIDE_ONLY, RENOIR], { knobs: KIT_KNOBS });
+
+const DESKTOP_FORK = forkWithGl([{ ...RENOIR, formFactor: "desktop" }], { knobs: KIT_KNOBS });
+
+const UNKNOBBED_FORK = forkWithGl([HIDE_ONLY, RENOIR], {
+  knobs: Object.fromEntries(Object.entries(KIT_KNOBS).filter(([key]) => key !== "battery-status")),
+});
+
+const batteryOf = (overrides: Partial<IdentityContext>) =>
+  resolveSurfaces(contextOf(overrides)).battery;
+
+const batterySwitchesOf = (plan: ReturnType<typeof planIdentity>): string[] =>
+  plan.inputs.switches.filter((entry) => entry.startsWith("--xrio-battery-status="));
+
+const laptopBatteryOf = (seed: string) =>
+  batteryOf({ capabilities: swiftShaderHost(LAPTOP_FORK), device: { kind: "fresh", seed } });
+
+const forkSecondsOf = (time: number | null): number | "Infinity" => time ?? "Infinity";
+
+const sendsStatus = (
+  [input]: readonly LaunchInput[],
+  { charging, chargingTime, dischargingTime, level }: BatteryStatus,
+): boolean =>
+  input?.sink === "switch" &&
+  input.value !== undefined &&
+  isDeepStrictEqual(JSON.parse(input.value), {
+    charging,
+    charging_time: forkSecondsOf(chargingTime),
+    discharging_time: forkSecondsOf(dischargingTime),
+    level,
+  });
+
+const isForkTime = (time: number | null): boolean =>
+  time === null || (Number.isInteger(time) && time >= 0);
+
+const refusedByFork = ({ inputs, value }: ReturnType<typeof batteryOf>): boolean =>
+  value.source !== "drawn" ||
+  !sendsStatus(inputs, value) ||
+  value.level <= 0 ||
+  value.level > 1 ||
+  !isForkTime(value.chargingTime) ||
+  !isForkTime(value.dischargingTime);
+
+const BATTERY_SEEDS = 1000;
+
+describe("the battery surface", () => {
   it.each([
-    swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])),
-    gpuHost(forkWithGl([HIDE_ONLY, RENOIR]), RENOIR_RENDERER),
-  ])("sends no battery-status switch or knob under either policy", (capabilities) => {
-    const names = (gpuPolicy: "matched" | "announce") => {
-      const resolutions = resolveSurfaces(
-        contextOf({ capabilities, pins: { ...noPins, hardware: { gpuPolicy } } }),
-      );
+    {
+      seed: fixedSeed,
+      status: FULL_STATUS,
+      value: {
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: null,
+        level: 1,
+        source: "drawn",
+        state: "full",
+      },
+    },
+    {
+      seed: "0000000000000002",
+      status: DISCHARGING_STATUS,
+      value: {
+        charging: false,
+        chargingTime: null,
+        dischargingTime: 16_695,
+        level: 0.6,
+        source: "drawn",
+        state: "discharging",
+      },
+    },
+    {
+      seed: "0000000000000009",
+      status: CHARGING_STATUS,
+      value: {
+        charging: true,
+        chargingTime: 3526,
+        dischargingTime: null,
+        level: 0.49,
+        source: "drawn",
+        state: "charging",
+      },
+    },
+  ])(
+    "draws a $value.state battery for a laptop persona over SwiftShader for the seed $seed",
+    ({ seed, status, value }) => {
+      const { charging, chargingTime, dischargingTime, level } = value;
 
-      return EMISSION_ORDER.flatMap((surface) =>
-        resolutions[surface].inputs.map(({ name }) => name),
-      );
-    };
+      expect(laptopBatteryOf(seed)).toStrictEqual({
+        expected: [
+          {
+            compatibility: false,
+            field: "batteryState",
+            matcher: { kind: "equals", value: { charging, chargingTime, dischargingTime, level } },
+            severity: "note",
+          },
+        ],
+        inputs: [{ name: "--xrio-battery-status", sink: "switch", value: status }],
+        value,
+      });
+    },
+  );
 
+  it("sends the battery switch once, through the launch's switches, even for a full battery", () => {
     expect(
-      [names("matched"), names("announce")].flat().filter((name) => /battery/iu.test(name)),
-    ).toStrictEqual([]);
+      batterySwitchesOf(planIdentity(contextOf({ capabilities: swiftShaderHost(LAPTOP_FORK) }))),
+    ).toStrictEqual([`--xrio-battery-status=${FULL_STATUS}`]);
+  });
+
+  it.each([
+    {
+      capabilities: gpuHost(LAPTOP_FORK, RENOIR_RENDERER),
+      name: "a laptop persona matched on a native GPU",
+      pins: { ...noPins, hardware: { gpuPolicy: "matched" } } as const,
+    },
+    {
+      capabilities: gpuHost(LAPTOP_FORK, RENOIR_RENDERER),
+      name: "a laptop persona presented on a native GPU under announce",
+      pins: announcing,
+    },
+    { capabilities: swiftShaderHost(DESKTOP_FORK), name: "a desktop persona", pins: announcing },
+    {
+      capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY], { knobs: KIT_KNOBS })),
+      name: "no persona",
+      pins: announcing,
+    },
+    {
+      capabilities: { permittedCpus: 32, platform: "linux" } as const,
+      name: "stock Chrome",
+      pins: announcing,
+    },
+    {
+      capabilities: swiftShaderHost(UNKNOBBED_FORK),
+      name: "a laptop persona on a fork without the battery-status knob",
+      pins: announcing,
+    },
+  ])("keeps Chrome's own battery and sends nothing for $name", ({ capabilities, pins }) => {
+    const plan = planIdentity(contextOf({ capabilities, pins }));
+
+    expect({
+      battery: batteryOf({ capabilities, pins }),
+      switches: batterySwitchesOf(plan),
+    }).toStrictEqual({
+      battery: { expected: [], inputs: [], value: { source: "host" } },
+      switches: [],
+    });
+  });
+
+  it("presents the laptop persona on the native GPU it keeps the host battery for", () => {
+    expect(
+      planIdentity(contextOf({ capabilities: gpuHost(LAPTOP_FORK, RENOIR_RENDERER) })).chosen
+        .surfaces.gpu,
+    ).toStrictEqual({ backend: "native", persona: { kind: "hardware", name: RENOIR.name } });
+  });
+
+  it("draws the battery from the browser's seed, the same for one seed and apart for others", () => {
+    expect(laptopBatteryOf("0000000000000009")).toStrictEqual(laptopBatteryOf("0000000000000009"));
+    expect(
+      new Set(
+        ["0000000000000002", "0000000000000003", "0000000000000009"].map((seed) =>
+          JSON.stringify(laptopBatteryOf(seed).value),
+        ),
+      ).size,
+    ).toBe(3);
+  });
+
+  it("sends a status the fork's parser accepts, in every state, for 1,000 seeds", () => {
+    const drawn = Array.from({ length: BATTERY_SEEDS }, (_, index) =>
+      laptopBatteryOf((index + 1).toString(16).padStart(16, "0")),
+    );
+
+    const states = new Set(
+      drawn.map(({ value }) => (value.source === "drawn" ? value.state : value.source)),
+    );
+
+    expect({ refused: drawn.filter(refusedByFork), states: [...states].toSorted() }).toStrictEqual({
+      refused: [],
+      states: ["charging", "discharging", "full"],
+    });
+  });
+
+  it("replays a record with the battery its seed draws, and keeps the battery out of the record", () => {
+    const capabilities = swiftShaderHost(LAPTOP_FORK);
+    const device = { kind: "fresh", seed: "0000000000000009" } as const;
+    const drawn = planIdentity(contextOf({ capabilities, device })).chosen;
+
+    const unsent = planIdentity(
+      contextOf({ capabilities: swiftShaderHost(UNKNOBBED_FORK), device }),
+    ).chosen;
+
+    if (drawn.record === null) {
+      throw new Error("A headless plan records its device.");
+    }
+
+    const replayed = planIdentity(
+      contextOf({ capabilities, device: { kind: "record", record: drawn.record } }),
+    );
+
+    expect({
+      digest: drawn.digests.device,
+      record: drawn.record,
+      switches: batterySwitchesOf(replayed),
+    }).toStrictEqual({
+      digest: unsent.digests.device,
+      record: unsent.record,
+      switches: [`--xrio-battery-status=${CHARGING_STATUS}`],
+    });
   });
 });
 
@@ -1490,18 +1690,8 @@ const claimsOf = (capabilities: HostCapabilities, pins: IdentityIntent = announc
   planIdentity(contextOf({ capabilities, pins })).claims;
 
 describe("the persona claims an announce plan hands to the after-capture read", () => {
-  it("names the persona's GPU vendor and form factor under announce", () => {
+  it("names the persona's GPU vendor under announce", () => {
     expect(claimsOf(swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR])))).toStrictEqual({
-      laptop: true,
-      vendor: "AMD",
-    });
-  });
-
-  it("reports a desktop persona as no laptop", () => {
-    const desktop = { ...RENOIR, formFactor: "desktop" } as const;
-
-    expect(claimsOf(swiftShaderHost(forkWithGl([desktop])))).toStrictEqual({
-      laptop: false,
       vendor: "AMD",
     });
   });
@@ -1515,7 +1705,6 @@ describe("the persona claims an announce plan hands to the after-capture read", 
     { brand: undefined, vendor: "  " },
   ])("reads the vendor brand of $vendor as $brand", ({ brand, vendor }) => {
     expect(claimsOf(swiftShaderHost(forkWithGl([{ ...RENOIR, vendor }])))).toStrictEqual({
-      laptop: true,
       vendor: brand,
     });
   });
@@ -1552,7 +1741,7 @@ describe("the persona claims an announce plan hands to the after-capture read", 
       }),
     );
 
-    expect(plan.claims).toStrictEqual({ laptop: true, vendor: "AMD" });
+    expect(plan.claims).toStrictEqual({ vendor: "AMD" });
   });
 });
 
@@ -2748,6 +2937,7 @@ describe("the chosen identity", () => {
       seed: fixedSeed,
       surfaces: {
         automation: null,
+        battery: { source: "host" },
         fonts: { reason: null, source: "host" },
         gpu: { backend: "native", persona: null },
         hardware: { cores: 0, memoryGb: 0, source: "host" },

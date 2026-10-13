@@ -54,6 +54,7 @@ export interface IdentityPlan {
 
 const choicesOf = (resolutions: Resolutions): SurfaceChoices => ({
   automation: resolutions.automation.value,
+  battery: resolutions.battery.value,
   fonts: resolutions.fonts.value,
   gpu: resolutions.gpu.value,
   hardware: resolutions.hardware.value,

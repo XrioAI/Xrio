@@ -366,13 +366,26 @@ describe("XrioClient types", () => {
     }>();
     expectTypeOf<"fork-commit-unreadable">().toExtend<IdentityTell>();
     expectTypeOf<"flag-infobar">().toExtend<IdentityTell>();
+    expectTypeOf<"form-factor-battery-skew">().not.toExtend<IdentityTell>();
     expectTypeOf<"noise-unhonored">().toExtend<IdentityTell>();
+    expectTypeOf<"battery-drift">().toExtend<IdentityTell>();
     expectTypeOf<BrowserIdentityReport["surfaces"]["noise"]>().toEqualTypeOf<
       | { readonly enabled: true; readonly reason: "software-gpu" | "pinned" }
       | {
           readonly enabled: false;
           readonly reason: "native-gpu" | "pinned" | "unhonored" | "host-hardware";
         }
+    >();
+    expectTypeOf<BrowserIdentityReport["surfaces"]["battery"]>().toEqualTypeOf<
+      | {
+          readonly source: "drawn";
+          readonly state: "full" | "discharging" | "charging";
+          readonly charging: boolean;
+          readonly level: number;
+          readonly chargingTime: number | null;
+          readonly dischargingTime: number | null;
+        }
+      | { readonly source: "host" }
     >();
     expectTypeOf<keyof BrowserIdentityReport["coverage"]>().toEqualTypeOf<CoveredSurface>();
     expectTypeOf<CoverageReason>().toEqualTypeOf<
@@ -412,6 +425,7 @@ describe("XrioClient types", () => {
       | "gpu"
       | "hardware"
       | "noise"
+      | "battery"
       | "window"
       | "screen"
       | "fonts"
@@ -612,6 +626,8 @@ describe("XrioClient option and identity types", () => {
     expectTypeOf<ObservedIdentity["batteryState"]>().toEqualTypeOf<{
       readonly charging: boolean;
       readonly level: number;
+      readonly chargingTime: number | null;
+      readonly dischargingTime: number | null;
     } | null>();
     expectTypeOf<NonNullable<ObservedIdentity["clientHints"]>["brands"]>().toEqualTypeOf<
       readonly { readonly brand: string; readonly version: string }[] | null

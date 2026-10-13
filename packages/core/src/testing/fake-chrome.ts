@@ -469,9 +469,63 @@ const identityReply = (observation: { [key: string]: Json }): Json => ({
   result: { type: "string", value: JSON.stringify(observation) },
 });
 
+type ForkSeconds = number | "Infinity";
+
+interface ForkBattery {
+  readonly charging: boolean;
+  readonly level: number;
+  readonly charging_time: ForkSeconds;
+  readonly discharging_time: ForkSeconds;
+}
+
+const HOST_BATTERY = {
+  charging: true,
+  chargingTime: 0,
+  dischargingTime: null,
+  kind: "state",
+  level: 1,
+} as const;
+
+const isForkSeconds = (value: unknown): value is ForkSeconds =>
+  value === "Infinity" || typeof value === "number";
+
+const isForkBattery = (value: unknown): value is ForkBattery =>
+  typeof value === "object" &&
+  value !== null &&
+  "charging" in value &&
+  typeof value.charging === "boolean" &&
+  "level" in value &&
+  typeof value.level === "number" &&
+  "charging_time" in value &&
+  isForkSeconds(value.charging_time) &&
+  "discharging_time" in value &&
+  isForkSeconds(value.discharging_time);
+
+const pageSeconds = (time: ForkSeconds): number | null => (time === "Infinity" ? null : time);
+
+const presentedBattery = () => {
+  const status = switchValue("--xrio-battery-status");
+
+  if (scenario !== "fork" || status === undefined) {
+    return HOST_BATTERY;
+  }
+
+  const parsed: unknown = JSON.parse(status);
+
+  return isForkBattery(parsed)
+    ? {
+        charging: parsed.charging,
+        chargingTime: pageSeconds(parsed.charging_time),
+        dischargingTime: pageSeconds(parsed.discharging_time),
+        kind: "state",
+        level: parsed.level,
+      }
+    : HOST_BATTERY;
+};
+
 const SECURE_CONTEXT_READING = {
   battery: true,
-  batteryState: { charging: true, kind: "state", level: 1 },
+  batteryState: presentedBattery(),
   clientHints: {
     architecture: "x86",
     bitness: "64",

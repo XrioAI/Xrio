@@ -105,7 +105,6 @@ export type GpuChoice =
 
 export interface PersonaClaims {
   readonly vendor: string | undefined;
-  readonly laptop: boolean;
 }
 
 export interface PresentedDevice {
@@ -270,8 +269,15 @@ export type WebGpuAdapterReading =
   | { readonly kind: "timed-out" }
   | { readonly kind: "failed" };
 
+export interface BatteryStatus {
+  readonly charging: boolean;
+  readonly level: number;
+  readonly chargingTime: number | null;
+  readonly dischargingTime: number | null;
+}
+
 export type BatteryReading =
-  | { readonly kind: "state"; readonly charging: boolean; readonly level: number }
+  | ({ readonly kind: "state" } & BatteryStatus)
   | { readonly kind: "none" }
   | { readonly kind: "timed-out" }
   | { readonly kind: "failed" };

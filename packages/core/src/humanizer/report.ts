@@ -1,6 +1,7 @@
 import type {
   AfterCapture,
   BatteryReading,
+  BatteryStatus,
   ClientHints,
   FontEvidence,
   HostCapabilities,
@@ -92,7 +93,7 @@ export interface ObservedIdentity {
   readonly deviceMemory: number | null;
   readonly clientHints: ClientHints | null;
   readonly battery: boolean | null;
-  readonly batteryState: { readonly charging: boolean; readonly level: number } | null;
+  readonly batteryState: BatteryStatus | null;
   readonly webgpu: boolean | null;
   readonly webgpuAdapter: { readonly vendor: string; readonly architecture: string } | null;
   readonly webgl: {
@@ -179,10 +180,15 @@ const boundedCoverage = (
     : observedCoverage();
 };
 
-const batteryStateOf = (afterCapture: AfterCapture): ObservedIdentity["batteryState"] =>
-  afterCapture.kind === "secure" && afterCapture.batteryState.kind === "state"
-    ? { charging: afterCapture.batteryState.charging, level: afterCapture.batteryState.level }
-    : null;
+export const batteryStateOf = (afterCapture: AfterCapture): ObservedIdentity["batteryState"] => {
+  if (afterCapture.kind !== "secure" || afterCapture.batteryState.kind !== "state") {
+    return null;
+  }
+
+  const { charging, chargingTime, dischargingTime, level } = afterCapture.batteryState;
+
+  return { charging, chargingTime, dischargingTime, level };
+};
 
 const webgpuAdapterOf = (afterCapture: AfterCapture): ObservedIdentity["webgpuAdapter"] =>
   afterCapture.kind === "secure" && afterCapture.webgpuAdapter.kind === "adapter"

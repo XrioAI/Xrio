@@ -33,7 +33,13 @@ const linuxClientHints = {
 const headlessLinux: Observation = {
   afterCapture: {
     battery: true,
-    batteryState: { charging: true, kind: "state", level: 1 },
+    batteryState: {
+      charging: true,
+      chargingTime: 0,
+      dischargingTime: null,
+      kind: "state",
+      level: 1,
+    },
     clientHints: linuxClientHints,
     deviceMemory: 8,
     kind: "secure",
@@ -240,7 +246,7 @@ describe("the identity report", () => {
         observed: {
           anyPointer: "fine",
           battery: true,
-          batteryState: { charging: true, level: 1 },
+          batteryState: { charging: true, chargingTime: 0, dischargingTime: null, level: 1 },
           clientHints: linuxClientHints,
           colorScheme: "light",
           deviceMemory: 8,
@@ -280,6 +286,7 @@ describe("the identity report", () => {
         seed: fixedSeed,
         surfaces: {
           automation: null,
+          battery: { source: "host" },
           fonts: { reason: "no fontstack/ beside the binary", source: "host" },
           gpu: { backend: "swiftshader", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },
@@ -521,6 +528,7 @@ describe("the identity report", () => {
         seed: fixedSeed,
         surfaces: {
           automation: null,
+          battery: { source: "host" },
           fonts: { reason: null, source: "host" },
           gpu: { backend: "native", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },
@@ -574,7 +582,7 @@ describe("the secure-context surfaces' coverage", () => {
 
 const secureWith = (webgpuAdapter: WebGpuAdapterReading): Observation["afterCapture"] => ({
   battery: true,
-  batteryState: { charging: true, kind: "state", level: 1 },
+  batteryState: { charging: true, chargingTime: 0, dischargingTime: null, kind: "state", level: 1 },
   clientHints: linuxClientHints,
   deviceMemory: 8,
   kind: "secure",
@@ -677,8 +685,14 @@ describe("the battery state's report", () => {
 
   it.each([
     {
-      battery: { charging: false, kind: "state", level: 0.5 } as const,
-      observed: { charging: false, level: 0.5 },
+      battery: {
+        charging: false,
+        chargingTime: null,
+        dischargingTime: 9000,
+        kind: "state",
+        level: 0.5,
+      } as const,
+      observed: { charging: false, chargingTime: null, dischargingTime: 9000, level: 0.5 },
     },
     { battery: { kind: "none" } as const, observed: null },
   ])("is observed for a $battery.kind reading", ({ battery, observed }) => {
@@ -781,7 +795,13 @@ describe("a secure origin whose individual reads gave nothing", () => {
       ...headlessLinux,
       afterCapture: {
         battery: true,
-        batteryState: { charging: true, kind: "state", level: 1 },
+        batteryState: {
+          charging: true,
+          chargingTime: 0,
+          dischargingTime: null,
+          kind: "state",
+          level: 1,
+        },
         clientHints: null,
         deviceMemory: null,
         kind: "secure",

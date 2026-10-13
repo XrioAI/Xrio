@@ -5,6 +5,7 @@ import { deviceDigest } from "./contracts.ts";
 import type {
   AfterCapture,
   BatteryReading,
+  BatteryStatus,
   ClientHints,
   FontEvidence,
   Observation,
@@ -16,7 +17,7 @@ import { FONT_PROBE_FAMILIES, FONT_SENTINEL_FAMILIES } from "./fonts.ts";
 import type { FontRead } from "./fonts.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import { presentedScreen, recordOf } from "./record.ts";
-import { coverageOf, observedOf } from "./report.ts";
+import { batteryStateOf, coverageOf, observedOf } from "./report.ts";
 import type { BrowserIdentityReport } from "./report.ts";
 import type { SurfaceName } from "./surfaces.ts";
 
@@ -36,9 +37,9 @@ const AFTER_CAPTURE_READ_CAP_MS = 100;
 
 type ReadField = Exclude<keyof Observation, "product" | "afterCapture">;
 
-export type ObservedField = ReadField | "deviceMemory";
+export type ObservedField = ReadField | "deviceMemory" | "batteryState";
 
-export type Observed = Observation[ReadField];
+export type Observed = Observation[ReadField] | BatteryStatus;
 
 export type Matcher =
   | { readonly kind: "equals"; readonly value: Observed }
@@ -67,7 +68,7 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
-type AfterCaptureTell = "gpu-contradiction" | "form-factor-battery-skew";
+type AfterCaptureTell = "gpu-contradiction";
 
 export type FactTell =
   | "host-zone-utc"
@@ -95,11 +96,12 @@ export type IdentityTell =
   | FactTell
   | "fonts-drift"
   | "hardware-drift"
+  | "battery-drift"
   | AfterCaptureTell;
 
 type ObservedTell = Exclude<
   IdentityTell,
-  FactTell | "fonts-drift" | "hardware-drift" | AfterCaptureTell
+  FactTell | "fonts-drift" | "hardware-drift" | "battery-drift" | AfterCaptureTell
 >;
 
 export type FontEvidenceOutcome =
@@ -265,7 +267,12 @@ const isBatteryReading = (value: unknown): value is BatteryReading => {
 
   switch (fields.get("kind")) {
     case "state": {
-      return isFlag(fields.get("charging")) && isNumber(fields.get("level"));
+      return (
+        isFlag(fields.get("charging")) &&
+        isNumber(fields.get("level")) &&
+        isNumberOrNull(fields.get("chargingTime")) &&
+        isNumberOrNull(fields.get("dischargingTime"))
+      );
     }
 
     case "none":
@@ -313,8 +320,16 @@ export const readAfterCapture = (text: string): AfterCapture => {
 const deviceMemoryOf = ({ afterCapture }: Observation): number | null =>
   afterCapture.kind === "secure" ? afterCapture.deviceMemory : null;
 
-const observedValue = (observation: Observation, field: ObservedField): Observed =>
-  field === "deviceMemory" ? deviceMemoryOf(observation) : observation[field];
+const observedValue = (observation: Observation, field: ObservedField): Observed => {
+  if (field === "deviceMemory") {
+    return deviceMemoryOf(observation);
+  }
+
+  return field === "batteryState" ? batteryStateOf(observation.afterCapture) : observation[field];
+};
+
+const isAfterCaptureField = (field: ObservedField): boolean =>
+  field === "deviceMemory" || field === "batteryState";
 
 const languageOf = (locale: string): string => locale.split("-")[0] ?? locale;
 
@@ -406,7 +421,7 @@ const mismatchOf = (
     return undefined;
   }
 
-  if (field === "deviceMemory" && deviceMemoryOf(observation) === null) {
+  if (isAfterCaptureField(field) && observedValue(observation, field) === null) {
     return undefined;
   }
 
@@ -471,9 +486,10 @@ const fontEvidenceOutcome = (
 const hardwareDriftOf = (notes: readonly IdentityMismatch[]): readonly "hardware-drift"[] =>
   notes.some(({ surface }) => surface === "hardware") ? ["hardware-drift"] : [];
 
-const SWIFTSHADER_NAME = /swiftshader/iu;
+const batteryDriftOf = (notes: readonly IdentityMismatch[]): readonly "battery-drift"[] =>
+  notes.some(({ surface }) => surface === "battery") ? ["battery-drift"] : [];
 
-const BATTERYLESS = { charging: true, level: 1 } as const;
+const SWIFTSHADER_NAME = /swiftshader/iu;
 
 const ATI_BRAND = /^ati\b/u;
 
@@ -498,11 +514,6 @@ const contradictsClaims = (
   SWIFTSHADER_NAME.test(adapter.architecture) ||
   (vendor !== undefined && namesAnother(adapter.vendor, vendor));
 
-const showsNoBattery = (reading: BatteryReading): boolean =>
-  reading.kind === "state" &&
-  reading.charging === BATTERYLESS.charging &&
-  reading.level === BATTERYLESS.level;
-
 const afterCaptureTellsOf = (
   claims: PersonaClaims | null,
   afterCapture: AfterCapture,
@@ -511,14 +522,11 @@ const afterCaptureTellsOf = (
     return [];
   }
 
-  const { batteryState, webgpuAdapter } = afterCapture;
+  const { webgpuAdapter } = afterCapture;
 
-  return [
-    ...(webgpuAdapter.kind === "adapter" && contradictsClaims(claims, webgpuAdapter)
-      ? ["gpu-contradiction" as const]
-      : []),
-    ...(claims.laptop && showsNoBattery(batteryState) ? ["form-factor-battery-skew" as const] : []),
-  ];
+  return webgpuAdapter.kind === "adapter" && contradictsClaims(claims, webgpuAdapter)
+    ? ["gpu-contradiction"]
+    : [];
 };
 
 export const evaluate = (
@@ -579,6 +587,7 @@ export const evaluate = (
         ...tells,
         ...(drifted ? ["fonts-drift" as const] : []),
         ...hardwareDriftOf(notes),
+        ...batteryDriftOf(notes),
         ...afterCaptureTellsOf(claims, observation.afterCapture),
       ],
     },
@@ -751,10 +760,13 @@ const AFTER_CAPTURE_SOURCE = `async (boundMs) => {
   };
   const batteryRead = async () => {
     try {
-      const { charging, level } = await navigator.getBattery();
+      const { charging, chargingTime, dischargingTime, level } = await navigator.getBattery();
+      const times = [chargingTime, dischargingTime];
 
-      return typeof charging === "boolean" && typeof level === "number"
-        ? { kind: "state", charging, level }
+      return typeof charging === "boolean" &&
+        typeof level === "number" &&
+        times.every((time) => typeof time === "number")
+        ? { kind: "state", charging, level, chargingTime, dischargingTime }
         : { kind: "failed" };
     } catch {
       return { kind: "failed" };

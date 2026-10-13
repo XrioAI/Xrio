@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { CHROME_MIN_WINDOW } from "./contracts.ts";
 import type {
+  BatteryStatus,
   DisplayTables,
   HardwareTables,
   Insets,
@@ -11,6 +12,7 @@ import type {
   WindowState,
 } from "./contracts.ts";
 import {
+  BATTERY_STATES,
   DESKTOP_LAYOUTS,
   DESKTOP_SCREENS,
   MACHINE_CLASSES,
@@ -87,6 +89,78 @@ export const drawNoiseSeed = (seed: Seed): string => {
   const nonzero = drawn === 0n ? NONZERO_KIT_SEED : drawn;
 
   return `0x${nonzero.toString(16).padStart(SEED_BYTES * 2, "0")}`;
+};
+
+export type BatteryState = (typeof BATTERY_STATES)[number]["state"];
+
+export interface DrawnBattery extends BatteryStatus {
+  readonly state: BatteryState;
+}
+
+interface Range {
+  readonly min: number;
+  readonly max: number;
+}
+
+const PERCENT = 100;
+
+const SECONDS_PER_HOUR = 3600;
+
+const DISCHARGING_PERCENT: Range = { max: 95, min: 20 };
+
+const FULL_CHARGE_HOURS: Range = { max: 10, min: 4 };
+
+const CHARGING_PERCENT: Range = { max: 95, min: 10 };
+
+const RECHARGE_HOURS: Range = { max: 3, min: 1 };
+
+const FULL_BATTERY: BatteryStatus = {
+  charging: true,
+  chargingTime: 0,
+  dischargingTime: null,
+  level: 1,
+};
+
+const percentOf = (seed: Seed, purpose: string, { max, min }: Range): number =>
+  between(seed, purpose, min, max);
+
+const secondsOf = (seed: Seed, purpose: string, { max, min }: Range): number =>
+  between(seed, purpose, min * SECONDS_PER_HOUR, max * SECONDS_PER_HOUR);
+
+const dischargingBattery = (seed: Seed): BatteryStatus => {
+  const percent = percentOf(seed, "battery-discharging-level", DISCHARGING_PERCENT);
+  const fullCharge = secondsOf(seed, "battery-full-charge", FULL_CHARGE_HOURS);
+
+  return {
+    charging: false,
+    chargingTime: null,
+    dischargingTime: Math.round((percent * fullCharge) / PERCENT),
+    level: percent / PERCENT,
+  };
+};
+
+const chargingBattery = (seed: Seed): BatteryStatus => {
+  const percent = percentOf(seed, "battery-charging-level", CHARGING_PERCENT);
+  const recharge = secondsOf(seed, "battery-recharge", RECHARGE_HOURS);
+
+  return {
+    charging: true,
+    chargingTime: Math.round(((PERCENT - percent) * recharge) / PERCENT),
+    dischargingTime: null,
+    level: percent / PERCENT,
+  };
+};
+
+const BATTERY_DRAWS: Readonly<Record<BatteryState, (seed: Seed) => BatteryStatus>> = {
+  charging: chargingBattery,
+  discharging: dischargingBattery,
+  full: () => FULL_BATTERY,
+};
+
+export const drawBattery = (seed: Seed): DrawnBattery => {
+  const { state } = pick(BATTERY_STATES, seed, "battery-state");
+
+  return { ...BATTERY_DRAWS[state](seed), state };
 };
 
 type MachineClass = (typeof MACHINE_CLASSES)[number];

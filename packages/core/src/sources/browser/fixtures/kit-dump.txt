@@ -1,4 +1,5 @@
 xrio-knobs: 77 knobs
+[def] battery-status = <unset>
 [set] config-file = /opt/synthetic-fork/xrio-config.json
 [def] device-memory = <unset>
 [set] dump-config = 
@@ -74,5 +75,4 @@ xrio-knobs: 77 knobs
 [def] synthetic-knob-54 = 162
 [def] synthetic-knob-55 = 165
 [def] synthetic-knob-56 = 168
-[def] synthetic-knob-57 = 171
 [umb] synthetic-umbrella-knob = true

@@ -13,9 +13,9 @@ import {
   SWIFTSHADER_RENDERER,
   swiftShaderHost,
 } from "../testing/gl-fork.ts";
-import { forkWithKnobs } from "../testing/hardware-fork.ts";
+import { forkWithKnobs, HARDWARE_AND_NOISE_KNOBS } from "../testing/hardware-fork.ts";
 import { noPins } from "../testing/no-pins.ts";
-import type { FontEvidence, HostCapabilities, Observation } from "./contracts.ts";
+import type { FontEvidence, HostCapabilities, KnobRegistry, Observation } from "./contracts.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityContext } from "./surfaces.ts";
 import {
@@ -481,7 +481,7 @@ const hardwarePlan = () =>
 
 const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
   battery: true,
-  batteryState: { charging: true, kind: "state", level: 1 },
+  batteryState: { charging: true, chargingTime: 0, dischargingTime: null, kind: "state", level: 1 },
   clientHints: null,
   deviceMemory,
   kind: "secure",
@@ -498,13 +498,25 @@ const announcedPlan = (persona = RENOIR) => {
   return { ...plan, expected: [] };
 };
 
-const BATTERYLESS_STATE = { charging: true, kind: "state", level: 1 } as const;
+const BATTERYLESS_STATE = {
+  charging: true,
+  chargingTime: 0,
+  dischargingTime: null,
+  kind: "state",
+  level: 1,
+} as const;
 
 const readingWith = (
   overrides: Partial<Extract<Observation["afterCapture"], { kind: "secure" }>>,
 ): Observation["afterCapture"] => ({
   battery: true,
-  batteryState: { charging: false, kind: "state", level: 0.8 },
+  batteryState: {
+    charging: false,
+    chargingTime: null,
+    dischargingTime: 9000,
+    kind: "state",
+    level: 0.8,
+  },
   clientHints: null,
   deviceMemory: 8,
   kind: "secure",
@@ -518,7 +530,7 @@ const afterCaptureTells = (
   afterCapture: Observation["afterCapture"],
 ) =>
   evaluate(plan, { ...linuxHeadless, afterCapture }).report.tells.filter(
-    (tell) => tell === "gpu-contradiction" || tell === "form-factor-battery-skew",
+    (tell) => tell === "gpu-contradiction",
   );
 
 describe("the announced persona's after-capture tells", () => {
@@ -664,47 +676,13 @@ describe("the announced persona's after-capture tells", () => {
     ).toStrictEqual([]);
   });
 
-  it("tells form-factor-battery-skew for a laptop persona on a batteryless page", () => {
-    expect(
-      afterCaptureTells(announcedPlan(), readingWith({ batteryState: BATTERYLESS_STATE })),
-    ).toStrictEqual(["form-factor-battery-skew"]);
-  });
+  it("tells nothing of a laptop persona's page that shows a charging, full battery, as a plugged-in laptop does", () => {
+    const { tells } = evaluate(announcedPlan(), {
+      ...linuxHeadless,
+      afterCapture: readingWith({ batteryState: BATTERYLESS_STATE }),
+    }).report;
 
-  it.each([
-    {
-      batteryState: { charging: false, kind: "state", level: 1 } as const,
-      why: "discharging at full",
-    },
-    {
-      batteryState: { charging: true, kind: "state", level: 0.99 } as const,
-      why: "charging below full",
-    },
-    { batteryState: { kind: "none" } as const, why: "no battery API" },
-    { batteryState: { kind: "timed-out" } as const, why: "a battery read that timed out" },
-    { batteryState: { kind: "failed" } as const, why: "a battery read that failed" },
-  ])("tells no form-factor-battery-skew for a battery $why", ({ batteryState }) => {
-    expect(afterCaptureTells(announcedPlan(), readingWith({ batteryState }))).toStrictEqual([]);
-  });
-
-  it("tells no form-factor-battery-skew for a desktop persona", () => {
-    expect(
-      afterCaptureTells(
-        announcedPlan({ ...RENOIR, formFactor: "desktop" }),
-        readingWith({ batteryState: BATTERYLESS_STATE }),
-      ),
-    ).toStrictEqual([]);
-  });
-
-  it("tells both when the page contradicts the persona twice", () => {
-    expect(
-      afterCaptureTells(
-        announcedPlan(),
-        readingWith({
-          batteryState: BATTERYLESS_STATE,
-          webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
-        }),
-      ),
-    ).toStrictEqual(["gpu-contradiction", "form-factor-battery-skew"]);
+    expect(tells.filter((tell) => tell.includes("battery"))).toStrictEqual([]);
   });
 
   it("judges nothing without an announced persona, a secure origin or a launch that sent one", () => {
@@ -729,6 +707,109 @@ describe("the announced persona's after-capture tells", () => {
       afterCaptureTells(announcedPlan(), { kind: "insecure" }),
       afterCaptureTells(announcedPlan(), { kind: "failed" }),
     ]).toStrictEqual([[], [], [], []]);
+  });
+});
+
+const BATTERY_FORK_KNOBS: KnobRegistry = {
+  ...HARDWARE_AND_NOISE_KNOBS,
+  "battery-status": { origin: "def", value: null },
+};
+
+const batteryPlan = (knobs = BATTERY_FORK_KNOBS) =>
+  planFor({
+    capabilities: swiftShaderHost(forkWithGl([HIDE_ONLY, RENOIR], { knobs })),
+    pins: { ...noPins, hardware: { gpuPolicy: "announce" } },
+  });
+
+const batteryReportOf = (
+  plan: ReturnType<typeof batteryPlan>,
+  afterCapture: Observation["afterCapture"],
+) => {
+  const battery = {
+    ...plan,
+    expected: plan.expected.filter(({ surface }) => surface === "battery"),
+  };
+
+  const { mismatches, report } = evaluate(battery, { ...linuxHeadless, afterCapture });
+
+  return {
+    mismatches,
+    notes: report.notes.filter(({ surface }) => surface === "battery"),
+    tells: report.tells.filter((tell) => tell === "battery-drift"),
+  };
+};
+
+const DISCHARGING_STATE = {
+  charging: false,
+  chargingTime: null,
+  dischargingTime: 9000,
+  kind: "state",
+  level: 0.8,
+} as const;
+
+describe("the battery expectation", () => {
+  it("expects the drawn full battery and holds when the page shows it", () => {
+    expect(
+      batteryReportOf(batteryPlan(), readingWith({ batteryState: BATTERYLESS_STATE })),
+    ).toStrictEqual({ mismatches: [], notes: [], tells: [] });
+  });
+
+  it("notes a page that shows another battery and tells battery-drift, never failing the scrape", () => {
+    expect(
+      batteryReportOf(batteryPlan(), readingWith({ batteryState: DISCHARGING_STATE })),
+    ).toStrictEqual({
+      mismatches: [],
+      notes: [
+        {
+          expected: { charging: true, chargingTime: 0, dischargingTime: null, level: 1 },
+          field: "batteryState",
+          observed: { charging: false, chargingTime: null, dischargingTime: 9000, level: 0.8 },
+          surface: "battery",
+        },
+      ],
+      tells: ["battery-drift"],
+    });
+  });
+
+  it.each([
+    { batteryState: { ...BATTERYLESS_STATE, chargingTime: 60 }, why: "another charging time" },
+    {
+      batteryState: { ...BATTERYLESS_STATE, dischargingTime: 20_000 },
+      why: "another discharging time",
+    },
+  ])("tells battery-drift for a page with $why", ({ batteryState }) => {
+    expect(batteryReportOf(batteryPlan(), readingWith({ batteryState })).tells).toStrictEqual([
+      "battery-drift",
+    ]);
+  });
+
+  it.each([
+    { afterCapture: readingWith({ batteryState: { kind: "none" } }), why: "no battery API" },
+    {
+      afterCapture: readingWith({ batteryState: { kind: "timed-out" } }),
+      why: "a battery read that timed out",
+    },
+    {
+      afterCapture: readingWith({ batteryState: { kind: "failed" } }),
+      why: "a battery read that failed",
+    },
+    { afterCapture: { kind: "insecure" } as const, why: "a non-secure page" },
+    { afterCapture: { kind: "not-navigated" } as const, why: "the pre-navigation read" },
+  ])("judges nothing for $why", ({ afterCapture }) => {
+    expect(batteryReportOf(batteryPlan(), afterCapture)).toStrictEqual({
+      mismatches: [],
+      notes: [],
+      tells: [],
+    });
+  });
+
+  it("judges nothing where Chrome keeps its own battery", () => {
+    expect(
+      batteryReportOf(
+        batteryPlan(HARDWARE_AND_NOISE_KNOBS),
+        readingWith({ batteryState: DISCHARGING_STATE }),
+      ),
+    ).toStrictEqual({ mismatches: [], notes: [], tells: [] });
   });
 });
 
@@ -1434,7 +1515,7 @@ describe("the zone check run against the host's Intl", () => {
 
 const SWIFTSHADER_ADAPTER = { info: { architecture: "swiftshader", vendor: "google" } };
 
-const BATTERYLESS = { charging: true, level: 1 };
+const BATTERYLESS = { charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1 };
 
 const batteryOffering = (getBattery: () => Promise<object | null>) => getBattery;
 
@@ -1509,7 +1590,13 @@ describe("the after-capture read", () => {
       readAfterCapture(await readAfterCaptureIn(true, { ...securePage, deviceMemory: 8 })),
     ).toStrictEqual({
       battery: true,
-      batteryState: { charging: true, kind: "state", level: 1 },
+      batteryState: {
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: null,
+        kind: "state",
+        level: 1,
+      },
       clientHints: {
         architecture: "x86",
         bitness: "64",
@@ -1705,15 +1792,27 @@ describe("the after-capture read", () => {
 describe("the after-capture battery read", () => {
   it.each([
     {
-      expected: { charging: false, kind: "state", level: 0.42 },
+      expected: {
+        charging: false,
+        chargingTime: null,
+        dischargingTime: 9000,
+        kind: "state",
+        level: 0.42,
+      },
       getBattery: batteryOffering(
-        async () => await Promise.resolve({ charging: false, level: 0.42 }),
+        async () =>
+          await Promise.resolve({
+            charging: false,
+            chargingTime: Infinity,
+            dischargingTime: 9000,
+            level: 0.42,
+          }),
       ),
       kind: "discharging",
       timers: realTimers,
     },
     {
-      expected: { charging: true, kind: "state", level: 1 },
+      expected: { charging: true, chargingTime: 0, dischargingTime: null, kind: "state", level: 1 },
       getBattery: batteryOffering(async () => await Promise.resolve(BATTERYLESS)),
       kind: "batteryless",
       timers: realTimers,
@@ -1736,6 +1835,12 @@ describe("the after-capture battery read", () => {
       expected: { kind: "failed" },
       getBattery: batteryOffering(async () => await Promise.resolve({ charging: "yes", level: 1 })),
       kind: "malformed",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(async () => await Promise.resolve({ charging: true, level: 1 })),
+      kind: "timeless",
       timers: realTimers,
     },
     {
