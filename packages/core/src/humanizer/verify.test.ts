@@ -481,7 +481,7 @@ const hardwarePlan = () =>
 
 const secure = (deviceMemory: number | null): Observation["afterCapture"] => ({
   battery: true,
-  batteryState: { charging: true, kind: "state", level: 1 },
+  batteryState: { charging: true, chargingTime: 0, dischargingTime: null, kind: "state", level: 1 },
   clientHints: null,
   deviceMemory,
   kind: "secure",
@@ -498,13 +498,25 @@ const announcedPlan = (persona = RENOIR) => {
   return { ...plan, expected: [] };
 };
 
-const BATTERYLESS_STATE = { charging: true, kind: "state", level: 1 } as const;
+const BATTERYLESS_STATE = {
+  charging: true,
+  chargingTime: 0,
+  dischargingTime: null,
+  kind: "state",
+  level: 1,
+} as const;
 
 const readingWith = (
   overrides: Partial<Extract<Observation["afterCapture"], { kind: "secure" }>>,
 ): Observation["afterCapture"] => ({
   battery: true,
-  batteryState: { charging: false, kind: "state", level: 0.8 },
+  batteryState: {
+    charging: false,
+    chargingTime: null,
+    dischargingTime: 9000,
+    kind: "state",
+    level: 0.8,
+  },
   clientHints: null,
   deviceMemory: 8,
   kind: "secure",
@@ -672,11 +684,23 @@ describe("the announced persona's after-capture tells", () => {
 
   it.each([
     {
-      batteryState: { charging: false, kind: "state", level: 1 } as const,
+      batteryState: {
+        charging: false,
+        chargingTime: null,
+        dischargingTime: 20_000,
+        kind: "state",
+        level: 1,
+      } as const,
       why: "discharging at full",
     },
     {
-      batteryState: { charging: true, kind: "state", level: 0.99 } as const,
+      batteryState: {
+        charging: true,
+        chargingTime: 300,
+        dischargingTime: null,
+        kind: "state",
+        level: 0.99,
+      } as const,
       why: "charging below full",
     },
     { batteryState: { kind: "none" } as const, why: "no battery API" },
@@ -1434,7 +1458,7 @@ describe("the zone check run against the host's Intl", () => {
 
 const SWIFTSHADER_ADAPTER = { info: { architecture: "swiftshader", vendor: "google" } };
 
-const BATTERYLESS = { charging: true, level: 1 };
+const BATTERYLESS = { charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1 };
 
 const batteryOffering = (getBattery: () => Promise<object | null>) => getBattery;
 
@@ -1509,7 +1533,13 @@ describe("the after-capture read", () => {
       readAfterCapture(await readAfterCaptureIn(true, { ...securePage, deviceMemory: 8 })),
     ).toStrictEqual({
       battery: true,
-      batteryState: { charging: true, kind: "state", level: 1 },
+      batteryState: {
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: null,
+        kind: "state",
+        level: 1,
+      },
       clientHints: {
         architecture: "x86",
         bitness: "64",
@@ -1705,15 +1735,27 @@ describe("the after-capture read", () => {
 describe("the after-capture battery read", () => {
   it.each([
     {
-      expected: { charging: false, kind: "state", level: 0.42 },
+      expected: {
+        charging: false,
+        chargingTime: null,
+        dischargingTime: 9000,
+        kind: "state",
+        level: 0.42,
+      },
       getBattery: batteryOffering(
-        async () => await Promise.resolve({ charging: false, level: 0.42 }),
+        async () =>
+          await Promise.resolve({
+            charging: false,
+            chargingTime: Infinity,
+            dischargingTime: 9000,
+            level: 0.42,
+          }),
       ),
       kind: "discharging",
       timers: realTimers,
     },
     {
-      expected: { charging: true, kind: "state", level: 1 },
+      expected: { charging: true, chargingTime: 0, dischargingTime: null, kind: "state", level: 1 },
       getBattery: batteryOffering(async () => await Promise.resolve(BATTERYLESS)),
       kind: "batteryless",
       timers: realTimers,
@@ -1736,6 +1778,12 @@ describe("the after-capture battery read", () => {
       expected: { kind: "failed" },
       getBattery: batteryOffering(async () => await Promise.resolve({ charging: "yes", level: 1 })),
       kind: "malformed",
+      timers: realTimers,
+    },
+    {
+      expected: { kind: "failed" },
+      getBattery: batteryOffering(async () => await Promise.resolve({ charging: true, level: 1 })),
+      kind: "timeless",
       timers: realTimers,
     },
     {

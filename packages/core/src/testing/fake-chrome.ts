@@ -471,7 +471,7 @@ const identityReply = (observation: { [key: string]: Json }): Json => ({
 
 const SECURE_CONTEXT_READING = {
   battery: true,
-  batteryState: { charging: true, kind: "state", level: 1 },
+  batteryState: { charging: true, chargingTime: 0, dischargingTime: null, kind: "state", level: 1 },
   clientHints: {
     architecture: "x86",
     bitness: "64",

@@ -612,6 +612,8 @@ describe("XrioClient option and identity types", () => {
     expectTypeOf<ObservedIdentity["batteryState"]>().toEqualTypeOf<{
       readonly charging: boolean;
       readonly level: number;
+      readonly chargingTime: number | null;
+      readonly dischargingTime: number | null;
     } | null>();
     expectTypeOf<NonNullable<ObservedIdentity["clientHints"]>["brands"]>().toEqualTypeOf<
       readonly { readonly brand: string; readonly version: string }[] | null

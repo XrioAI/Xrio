@@ -265,7 +265,12 @@ const isBatteryReading = (value: unknown): value is BatteryReading => {
 
   switch (fields.get("kind")) {
     case "state": {
-      return isFlag(fields.get("charging")) && isNumber(fields.get("level"));
+      return (
+        isFlag(fields.get("charging")) &&
+        isNumber(fields.get("level")) &&
+        isNumberOrNull(fields.get("chargingTime")) &&
+        isNumberOrNull(fields.get("dischargingTime"))
+      );
     }
 
     case "none":
@@ -751,10 +756,13 @@ const AFTER_CAPTURE_SOURCE = `async (boundMs) => {
   };
   const batteryRead = async () => {
     try {
-      const { charging, level } = await navigator.getBattery();
+      const { charging, chargingTime, dischargingTime, level } = await navigator.getBattery();
+      const times = [chargingTime, dischargingTime];
 
-      return typeof charging === "boolean" && typeof level === "number"
-        ? { kind: "state", charging, level }
+      return typeof charging === "boolean" &&
+        typeof level === "number" &&
+        times.every((time) => typeof time === "number")
+        ? { kind: "state", charging, level, chargingTime, dischargingTime }
         : { kind: "failed" };
     } catch {
       return { kind: "failed" };
