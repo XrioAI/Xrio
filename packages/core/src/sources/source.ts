@@ -12,9 +12,9 @@ export const createSources = (
 
   return {
     close: browsers.close,
-    start: (plan, slot, deadline) => {
+    start: (plan, slot, deadline, relay) => {
       if (plan.kind === "browser") {
-        return browsers.start(plan, slot, deadline);
+        return browsers.start(plan, slot, deadline, relay);
       }
 
       const load = async () => {

@@ -61,6 +61,8 @@ const TEST_CERT_SPKI = createHash("sha256")
   .update(new X509Certificate(TEST_ONLY_CERT).publicKey.export({ format: "der", type: "spki" }))
   .digest("base64");
 
+const TRUST_TEST_CERT = [`--ignore-certificate-errors-spki-list=${TEST_CERT_SPKI}`];
+
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 const WEBSOCKET_TEXT_FRAME = 0x81;
@@ -323,12 +325,17 @@ let client: PlannedScrapes | undefined;
 // These transport tests fix metadata; coordinator and public-client tests cover lookup failures.
 const testProxyInfo = async () => await Promise.resolve(proxyObservation);
 
-const scrape = async (url: string, proxy?: string, timeoutMs = SCRAPE_TIMEOUT_MS) => {
+const scrape = async (
+  url: string,
+  proxy?: string,
+  timeoutMs = SCRAPE_TIMEOUT_MS,
+  browserArgs: readonly string[] = [],
+) => {
   client ??= plannedScrapes(cdpDriver, 1, { proxyInfo: testProxyInfo });
   using deadline = startDeadline(timeoutMs);
 
   const document = await client.capture({
-    browserArgs: [],
+    browserArgs,
     browserPath: chromePath(),
     deadline,
     mode: "headless",
@@ -618,6 +625,45 @@ describe.runIf(RUNS_HEADLESS)("a headless scrape through a proxy returns the pag
     expect(webrtcReportOf(result.data)).toStrictEqual({ candidates: [], channel: "connecting" });
   });
 
+  it("through the tunnel the relay opened for the target while it planned", async () => {
+    await using proxy = await startFakeHttpProxy({
+      requireCredentials: credentials,
+      tunnelTo: tlsFixturePort,
+    });
+
+    const result = await scrape(
+      "https://fixture.test/page",
+      withUserinfo(proxy.url, credentials),
+      SCRAPE_TIMEOUT_MS,
+      TRUST_TEST_CERT,
+    );
+
+    expect([result.status, result.data]).toStrictEqual([200, FIXTURE_HTML]);
+    expect(requestsFor(proxy, "fixture.test")).toStrictEqual([
+      { authority: "fixture.test:443", authorization: basic(credentials) },
+    ]);
+  });
+
+  it("when the proxy refused the tunnel the relay opened while it planned", async () => {
+    await using proxy = await startFakeHttpProxy({
+      refuseFirstConnects: 1,
+      tunnelTo: tlsFixturePort,
+    });
+
+    const result = await scrape(
+      "https://fixture.test/page",
+      proxy.url,
+      SCRAPE_TIMEOUT_MS,
+      TRUST_TEST_CERT,
+    );
+
+    expect([result.status, result.data]).toStrictEqual([200, FIXTURE_HTML]);
+    expect(requestsFor(proxy, "fixture.test")).toStrictEqual([
+      { authority: "fixture.test:443", authorization: undefined },
+      { authority: "fixture.test:443", authorization: undefined },
+    ]);
+  });
+
   it("with .local host candidates and an open data channel on a direct scrape", async () => {
     const result = await scrape(`http://127.0.0.1:${fixturePort}/webrtc?run=${runId()}`);
     const { candidates, channel } = webrtcReportOf(result.data);
@@ -808,6 +854,11 @@ describe.runIf(RUNS_HEADLESS)("the proxy password", () => {
       tunnelTo: fixturePort,
     });
 
+    await using tlsProxy = await startFakeHttpProxy({
+      requireCredentials: `user:${password}`,
+      tunnelTo: tlsFixturePort,
+    });
+
     await using socksProxy = await startFakeSocksProxy({
       requireCredentials: "user:another",
       tunnelTo: fixturePort,
@@ -819,6 +870,12 @@ describe.runIf(RUNS_HEADLESS)("the proxy password", () => {
     try {
       observed.push(
         await scrape("http://fixture.test/page", withUserinfo(httpProxy.url, `user:${password}`)),
+        await scrape(
+          "https://fixture.test/page",
+          withUserinfo(tlsProxy.url, `user:${password}`),
+          SCRAPE_TIMEOUT_MS,
+          TRUST_TEST_CERT,
+        ),
         await failureOf(
           "http://fixture.test/page",
           withUserinfo(socksProxy.url, `user:${password}`),
@@ -837,7 +894,13 @@ describe.runIf(RUNS_HEADLESS)("the proxy password", () => {
     expect(
       observed.filter((value) => inspect(value, { depth: Infinity }).includes(password)),
     ).toStrictEqual([]);
-    expect(proxyServers.map((arg) => RELAY_PROXY_SERVER.test(arg))).toStrictEqual([true, true]);
+    expect({
+      proxyServers: proxyServers.map((arg) => RELAY_PROXY_SERVER.test(arg)),
+      tunnels: requestsFor(tlsProxy, "fixture.test"),
+    }).toStrictEqual({
+      proxyServers: [true, true, true],
+      tunnels: [{ authority: "fixture.test:443", authorization: basic(`user:${password}`) }],
+    });
   });
 
   it("never shows in a launch failure whose stderr tail holds Chrome's whole argv", async () => {

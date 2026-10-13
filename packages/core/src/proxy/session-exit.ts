@@ -58,6 +58,24 @@ const proxiedBinding = (
         stickyId: stickyId ?? binding.stickyId,
       };
 
+const stickyProxy = (
+  routed: ProxyEndpoint,
+  manager: ProxyManager | undefined,
+  stickyId: string | undefined,
+): ProxyEndpoint =>
+  manager === undefined || stickyId === undefined
+    ? routed
+    : parseProxy(manager.connectionFor(stickyId));
+
+export const firstExitProxy = ({
+  binding,
+  manager,
+  proxy,
+}: Pick<ExitRoute, "binding" | "manager" | "proxy">): ProxyEndpoint | undefined =>
+  proxy === undefined || switchesRouteKind(binding, proxy)
+    ? undefined
+    : stickyProxy(proxy, manager, binding?.stickyId);
+
 const directExit = (binding: SessionBinding | undefined): SessionExit => ({
   binding: binding === undefined ? undefined : { kind: "direct", stickyId: binding.stickyId },
   kind: "bound",
@@ -79,17 +97,13 @@ export const bindSessionExit = async (
     return directExit(binding);
   }
 
-  let proxy = routed;
   let stickyId = binding?.stickyId;
 
   // oxlint-disable no-await-in-loop -- Each sticky id is observed before the next one is drawn.
   for (let redraws = 0; ; redraws += 1) {
     deadline.throwIfExpired();
 
-    if (manager !== undefined && stickyId !== undefined) {
-      proxy = parseProxy(manager.connectionFor(stickyId));
-    }
-
+    const proxy = stickyProxy(routed, manager, stickyId);
     const observation = await observe(proxy, deadline);
     const region = regionOf(observation);
 

@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { inspect } from "node:util";
 
@@ -30,14 +31,16 @@ const proxyEndpoint = (url: string) => {
 const withCredentials = (url: string, credentials: string) =>
   url.replace("://", `://${credentials}@`);
 
-const echo = createServer({ allowHalfOpen: true }, (socket) => {
+const echoBack = (socket: Socket) => {
   socket.on("data", (chunk: Buffer) => {
     socket.write(chunk);
   });
   socket.once("end", () => {
     socket.end("bye");
   });
-});
+};
+
+const createEcho = () => createServer({ allowHalfOpen: true }, echoBack);
 
 const readAll = async (socket: Socket): Promise<string> => {
   const chunks: Buffer[] = [];
@@ -75,7 +78,25 @@ const sendConnect = async (
 
 const statusOf = (reply: string) => Number(reply.slice("HTTP/1.1 ".length, "HTTP/1.1 ".length + 3));
 
+const exchange = async (relayUrl: string, authority: string): Promise<string> => {
+  const socket = await sendConnect(relayUrl, authority, "hello");
+  const received = readAll(socket);
+
+  await vi.waitFor(() => {
+    expect(socket.bytesRead).toBeGreaterThan(0);
+  });
+  socket.end();
+
+  return await received;
+};
+
+const authoritiesSeenBy = (fake: { requests: { authority: string }[] }) =>
+  fake.requests.map(({ authority }) => authority);
+
+const ESTABLISHED_HELLO = "HTTP/1.1 200 Connection Established\r\n\r\nhellobye";
+
 describe(startRelay, () => {
+  const echo = createEcho();
   let echoPort: number;
 
   beforeAll(async () => {
@@ -319,5 +340,286 @@ describe(startRelay, () => {
     const reply = await readAll(await sendConnect(forged.href, `127.0.0.1:${echoPort}`));
 
     expect(statusOf(reply)).toBe(407);
+  });
+});
+
+describe("a relay told its first URL", () => {
+  const echo = createEcho();
+  let echoPort: number;
+
+  beforeAll(async () => {
+    echoPort = await listenOnLoopback(echo);
+  });
+
+  afterAll(() => {
+    echo.close();
+  });
+
+  it("hands the tunnel it held for its first URL to the first CONNECT there", async () => {
+    await using fake = await startFakeHttpProxy({
+      requireCredentials: "user:secret",
+      tunnelTo: echoPort,
+    });
+
+    const proxy = proxyEndpoint(withCredentials(fake.url, "user:secret"));
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test/page");
+    await using relay = await startRelay(proxy, deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect(fake.answeredConnects).toBe(1);
+    });
+
+    await expect(exchange(relay.url, "origin.test:443")).resolves.toBe(ESTABLISHED_HELLO);
+    expect(fake.requests).toStrictEqual([
+      { authority: "origin.test:443", authorization: `Basic ${btoa("user:secret")}` },
+    ]);
+  });
+
+  it("keeps its held tunnel past CONNECTs to other authorities, and hands it over only once", async () => {
+    await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test:8443/");
+    await using relay = await startRelay(proxyEndpoint(fake.url), deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect(fake.answeredConnects).toBe(1);
+    });
+
+    await expect(exchange(relay.url, "other.test:443")).resolves.toBe(ESTABLISHED_HELLO);
+    await expect(exchange(relay.url, "origin.test:8443")).resolves.toBe(ESTABLISHED_HELLO);
+
+    const afterHandover = authoritiesSeenBy(fake);
+
+    await expect(exchange(relay.url, "origin.test:8443")).resolves.toBe(ESTABLISHED_HELLO);
+    expect([afterHandover, authoritiesSeenBy(fake)]).toStrictEqual([
+      ["origin.test:8443", "other.test:443"],
+      ["origin.test:8443", "other.test:443", "origin.test:8443"],
+    ]);
+  });
+
+  it("dials afresh at once when its held tunnel is still opening, and drops it when it lands", async () => {
+    const proxyAnswers = Promise.withResolvers<null>();
+
+    await using fake = await startFakeHttpProxy({
+      holdFirstConnectUntil: proxyAnswers.promise,
+      tunnelTo: echoPort,
+    });
+
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test/");
+    await using relay = await startRelay(proxyEndpoint(fake.url), deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect(authoritiesSeenBy(fake)).toStrictEqual(["origin.test:443"]);
+    });
+
+    const received = await exchange(relay.url, "origin.test:443");
+    const whileHeldWaits = [fake.answeredConnects, authoritiesSeenBy(fake)];
+
+    proxyAnswers.resolve(null);
+
+    await vi.waitFor(() => {
+      expect([fake.answeredConnects, fake.openConnections]).toStrictEqual([2, 0]);
+    });
+    expect([received, whileHeldWaits, relay.failureFor("origin.test")]).toStrictEqual([
+      ESTABLISHED_HELLO,
+      [1, ["origin.test:443", "origin.test:443"]],
+      undefined,
+    ]);
+  });
+
+  it("replays the client's bytes on a fresh tunnel when the held one closes before answering", async () => {
+    let accepted = 0;
+
+    const closesFirst = createServer({ allowHalfOpen: true }, (socket) => {
+      accepted += 1;
+
+      if (accepted === 1) {
+        socket.once("data", () => {
+          socket.destroy();
+        });
+      } else {
+        echoBack(socket);
+      }
+    });
+
+    try {
+      const tunnelTo = await listenOnLoopback(closesFirst);
+      await using fake = await startFakeHttpProxy({ tunnelTo });
+      using deadline = startDeadline(10_000);
+      const firstUrl = new URL("https://origin.test/");
+      await using relay = await startRelay(proxyEndpoint(fake.url), deadline, "loopback", firstUrl);
+
+      await vi.waitFor(() => {
+        expect(fake.answeredConnects).toBe(1);
+      });
+
+      await expect(exchange(relay.url, "origin.test:443")).resolves.toBe(ESTABLISHED_HELLO);
+      await vi.waitFor(() => {
+        expect(fake.openConnections).toBe(0);
+      });
+      expect([accepted, authoritiesSeenBy(fake), relay.failureFor("origin.test")]).toStrictEqual([
+        2,
+        ["origin.test:443", "origin.test:443"],
+        undefined,
+      ]);
+    } finally {
+      closesFirst.close();
+    }
+  });
+
+  it("dials afresh after its held tunnel was refused, recording nothing for the refusal", async () => {
+    await using fake = await startFakeHttpProxy({ refuseFirstConnects: 1, tunnelTo: echoPort });
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test/");
+    await using relay = await startRelay(proxyEndpoint(fake.url), deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect([fake.requests.length, fake.openConnections]).toStrictEqual([1, 0]);
+    });
+
+    await expect(exchange(relay.url, "origin.test:443")).resolves.toBe(ESTABLISHED_HELLO);
+    expect([relay.failureFor("origin.test"), authoritiesSeenBy(fake)]).toStrictEqual([
+      undefined,
+      ["origin.test:443", "origin.test:443"],
+    ]);
+  });
+
+  it("records the client's CONNECT failure but not its held tunnel's", async () => {
+    await using fake = await startFakeHttpProxy({
+      requireCredentials: "user:right",
+      tunnelTo: echoPort,
+    });
+
+    const proxy = proxyEndpoint(withCredentials(fake.url, "user:wrong"));
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test/");
+    await using relay = await startRelay(proxy, deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect([fake.requests.length, fake.openConnections]).toStrictEqual([1, 0]);
+    });
+
+    const failureBeforeClient = relay.failureFor("other.test");
+    const reply = await readAll(await sendConnect(relay.url, "origin.test:443"));
+
+    expect([failureBeforeClient, statusOf(reply)]).toStrictEqual([undefined, 502]);
+    expect(relay.failureFor("other.test")).toMatchObject({ code: "PROXY_AUTH_FAILED" });
+  });
+
+  it("closes the tunnel it held once the deadline aborts, before the relay closes", async () => {
+    await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
+    const controller = new AbortController();
+    using deadline = startDeadline(10_000, controller.signal);
+    const firstUrl = new URL("https://origin.test/");
+    await using _relay = await startRelay(proxyEndpoint(fake.url), deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect(fake.openConnections).toBe(1);
+    });
+    controller.abort();
+
+    await vi.waitFor(() => {
+      expect(fake.openConnections).toBe(0);
+    });
+  });
+
+  it("closes the tunnel it held when it closes", async () => {
+    await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test/");
+
+    {
+      await using _relay = await startRelay(
+        proxyEndpoint(fake.url),
+        deadline,
+        "loopback",
+        firstUrl,
+      );
+
+      await vi.waitFor(() => {
+        expect(fake.openConnections).toBe(1);
+      });
+    }
+
+    await vi.waitFor(() => {
+      expect(fake.openConnections).toBe(0);
+    });
+  });
+
+  it("closes the tunnel it held when the client that took it has already hung up", async () => {
+    const proxyAnswers = Promise.withResolvers<null>();
+
+    await using fake = await startFakeHttpProxy({
+      connectDelayMs: 300,
+      holdFirstConnectUntil: proxyAnswers.promise,
+      tunnelTo: echoPort,
+    });
+
+    using deadline = startDeadline(10_000);
+    const firstUrl = new URL("https://origin.test/");
+    await using relay = await startRelay(proxyEndpoint(fake.url), deadline, "loopback", firstUrl);
+
+    await vi.waitFor(() => {
+      expect(fake.requests).toHaveLength(1);
+    });
+
+    const client = await sendConnect(relay.url, "origin.test:443");
+
+    await vi.waitFor(() => {
+      expect(fake.requests).toHaveLength(2);
+    });
+    client.destroy();
+    await delay(50);
+    proxyAnswers.resolve(null);
+
+    await vi.waitFor(() => {
+      expect([fake.answeredConnects, fake.openConnections]).toStrictEqual([2, 0]);
+    });
+  });
+
+  it("stops waiting for the proxy handshake of the tunnel it held once it closes", async () => {
+    const { clock, pendingTimers } = manualClock();
+    const accepted = Promise.withResolvers<null>();
+
+    const silent = createServer((socket) => {
+      socket.resume();
+      accepted.resolve(null);
+    });
+
+    try {
+      const port = await listenOnLoopback(silent);
+      using deadline = startDeadline(60_000, undefined, clock);
+      const proxy = proxyEndpoint(`https://127.0.0.1:${port}`);
+      const firstUrl = new URL("https://origin.test/");
+      const relay = await startRelay(proxy, deadline, "loopback", firstUrl);
+
+      await accepted.promise;
+      const whileDialing = pendingTimers();
+
+      await relay[Symbol.asyncDispose]();
+
+      await vi.waitFor(() => {
+        expect([whileDialing, pendingTimers()]).toStrictEqual([2, 1]);
+      });
+    } finally {
+      silent.close();
+    }
+  });
+
+  it.each([
+    "http://origin.test/",
+    "https://127.0.0.1/",
+    "https://localhost:8443/",
+    "https://[::1]/",
+  ])("holds no tunnel for the first URL %s", async (firstUrl) => {
+    await using fake = await startFakeHttpProxy({ tunnelTo: echoPort });
+    using deadline = startDeadline(10_000);
+    const proxy = proxyEndpoint(fake.url);
+    await using relay = await startRelay(proxy, deadline, "loopback", new URL(firstUrl));
+
+    await expect(exchange(relay.url, "origin.test:443")).resolves.toBe(ESTABLISHED_HELLO);
+    expect(authoritiesSeenBy(fake)).toStrictEqual(["origin.test:443"]);
   });
 });

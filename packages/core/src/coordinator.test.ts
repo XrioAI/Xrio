@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { once } from "node:events";
+import { connect } from "node:net";
+
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createAdmission } from "./admission.ts";
 import type { Admission } from "./admission.ts";
@@ -16,6 +19,7 @@ import { HeldDeadline } from "./lifetime.ts";
 import { parseProxy, resolveClientOptions, resolveScrapeIntent } from "./options.ts";
 import { outcomeOf } from "./outcome.ts";
 import type { ProxyObservation } from "./proxy/info.ts";
+import type { Relay } from "./proxy/relay.ts";
 import type { SessionHold } from "./sessions/session.ts";
 import type { SessionBinding } from "./sessions/store.ts";
 import { Slot } from "./slot.ts";
@@ -215,12 +219,12 @@ const harness = (options: HarnessOptions = {}) => {
         await options.sources?.close();
         await Promise.resolve();
       },
-      start: (plan, slot, held) => {
+      start: (plan, slot, held, relay) => {
         stage("start");
         plans.push(plan);
 
         if (options.sources !== undefined) {
-          return { argv: Promise.resolve(null), ...options.sources.start(plan, slot, held) };
+          return { argv: Promise.resolve(null), ...options.sources.start(plan, slot, held, relay) };
         }
 
         if (options.throwOnStart === true) {
@@ -1987,5 +1991,295 @@ describe("headless stock Chrome's user agent", () => {
       switches: [],
       userAgent: undefined,
     });
+  });
+});
+
+const connectReplyThrough = async (relay: Relay | undefined, authority: string) => {
+  if (relay === undefined) {
+    throw new Error("Expected the visit's proxy relay.");
+  }
+
+  const socket = connect({ host: "127.0.0.1", port: Number(new URL(relay.url).port) });
+
+  try {
+    await once(socket, "connect");
+    socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
+    const pieces: readonly unknown[] = await once(socket, "data");
+    const [reply] = pieces;
+
+    if (!Buffer.isBuffer(reply)) {
+      throw new TypeError("The relay answered CONNECT with text instead of bytes.");
+    }
+
+    return reply.toString("latin1");
+  } finally {
+    socket.destroy();
+  }
+};
+
+const tunnelsThrough = (username: string | undefined) =>
+  ["origin.test:443", "other.test:443"].map((authority) => ({
+    authority,
+    authorization: `Basic ${btoa(`${username}:secret`)}`,
+  }));
+
+interface RelayedVisit {
+  readonly connectsBefore: number;
+  readonly document: SourceDocument;
+}
+
+const relayingSources = (
+  proxy: { readonly requests: readonly unknown[] },
+  replies: string[],
+  visits: readonly RelayedVisit[],
+): StubSources => {
+  let started = 0;
+
+  return {
+    close: async () => {
+      await Promise.resolve();
+    },
+    start: (_plan, _slot, _held, relay) => {
+      const { connectsBefore, document: answer } = visits[started];
+
+      started += 1;
+
+      const visit = async () => {
+        await vi.waitFor(() => {
+          expect(proxy.requests).toHaveLength(connectsBefore);
+        });
+        replies.push(await connectReplyThrough(relay, "other.test:443"));
+
+        return answer;
+      };
+
+      const document = visit();
+
+      return { closed: document.then(() => ({ exited: true })), document };
+    },
+  };
+};
+
+describe("the browser visit's proxy relay", () => {
+  const originIntent = {
+    ...browserIntent,
+    url: new URL("https://origin.test/"),
+  };
+
+  const ESTABLISHED = "HTTP/1.1 200 Connection Established\r\n\r\n";
+
+  it("opens its tunnel to the target during the exit lookup, then hands it to the first CONNECT", async () => {
+    await using origin = await startFixtureServer((_request, response) => {
+      response.end();
+    });
+
+    await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+    const authorities = () => proxy.requests.map(({ authority }) => authority);
+    const replies: string[] = [];
+
+    const { scrapes } = harness({
+      proxyInfo: async () => {
+        await vi.waitFor(() => {
+          expect([authorities(), proxy.answeredConnects]).toStrictEqual([["origin.test:443"], 1]);
+        });
+
+        return proxyObservation;
+      },
+      sources: {
+        close: async () => {
+          await Promise.resolve();
+        },
+        start: (_plan, _slot, _held, relay) => {
+          const visit = async () => {
+            replies.push(await connectReplyThrough(relay, "origin.test:443"));
+
+            return firstDocument;
+          };
+
+          const document = visit();
+
+          return { closed: document.then(() => ({ exited: true })), document };
+        },
+      },
+    });
+
+    using deadline = startDeadline(5000);
+
+    try {
+      await scrapes.start({ ...originIntent, route: parseProxy(proxy.url) }, deadline).answer;
+    } finally {
+      await scrapes.close();
+    }
+
+    expect([replies, authorities()]).toStrictEqual([[ESTABLISHED], ["origin.test:443"]]);
+  });
+
+  it("closes the tunnel it opened when planning fails", async () => {
+    await using origin = await startFixtureServer((_request, response) => {
+      response.end();
+    });
+
+    await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+    const failure = new XrioError("PROXY_INFO_UNAVAILABLE", "No exit.", { details: undefined });
+
+    const { plans, scrapes } = harness({
+      proxyInfo: async () => {
+        await vi.waitFor(() => {
+          expect(proxy.openConnections).toBe(1);
+        });
+
+        throw failure;
+      },
+    });
+
+    using deadline = startDeadline(5000);
+
+    try {
+      await expect(
+        scrapes.start({ ...originIntent, route: parseProxy(proxy.url) }, deadline).answer,
+      ).rejects.toBe(failure);
+    } finally {
+      await scrapes.close();
+    }
+
+    await vi.waitFor(() => {
+      expect(proxy.openConnections).toBe(0);
+    });
+    expect(plans).toStrictEqual([]);
+  });
+
+  it("forwards a managed session through its sticky id's proxy, opened during the exit lookup", async () => {
+    await using origin = await startFixtureServer((_request, response) => {
+      response.end();
+    });
+
+    await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+    const replies: string[] = [];
+
+    const { plans, scrapes } = harness({
+      bindings: [stickyBinding],
+      config: { proxy: { url: proxy.url.replace("://", "://account-{session}:secret@") } },
+      proxyInfo: async () => {
+        await vi.waitFor(() => {
+          expect(proxy.answeredConnects).toBe(1);
+        });
+
+        return proxyObservation;
+      },
+      sources: relayingSources(proxy, replies, [{ connectsBefore: 1, document: firstDocument }]),
+    });
+
+    using deadline = startDeadline(5000);
+
+    try {
+      await scrapes.start(
+        { ...originIntent, session: { kind: "named", name: "account" } },
+        deadline,
+      ).answer;
+    } finally {
+      await scrapes.close();
+    }
+
+    expect({
+      replies,
+      requests: proxy.requests,
+      users: usernamesOf(plans),
+    }).toStrictEqual({
+      replies: [ESTABLISHED],
+      requests: tunnelsThrough("account-stored-id"),
+      users: ["account-stored-id"],
+    });
+  });
+
+  it("forwards through the sticky id drawn after the stored one left its region", async () => {
+    await using origin = await startFixtureServer((_request, response) => {
+      response.end();
+    });
+
+    await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+    const replies: string[] = [];
+    let lookups = 0;
+
+    const { plans, scrapes } = harness({
+      bindings: [stickyBinding],
+      config: { proxy: { url: proxy.url.replace("://", "://account-{session}:secret@") } },
+      proxyInfo: async () => {
+        lookups += 1;
+
+        if (lookups > 1) {
+          return proxyObservation;
+        }
+
+        await vi.waitFor(() => {
+          expect(proxy.answeredConnects).toBe(1);
+        });
+
+        return { ...proxyObservation, country: "AT", timezone: "Europe/Vienna" };
+      },
+      sources: relayingSources(proxy, replies, [{ connectsBefore: 2, document: firstDocument }]),
+    });
+
+    using deadline = startDeadline(5000);
+
+    try {
+      await scrapes.start(
+        { ...originIntent, session: { kind: "named", name: "account" } },
+        deadline,
+      ).answer;
+    } finally {
+      await scrapes.close();
+    }
+
+    const [drawn] = usernamesOf(plans);
+    const [stored] = tunnelsThrough("account-stored-id");
+
+    expect({ lookups, replies, requests: proxy.requests }).toStrictEqual({
+      lookups: 2,
+      replies: [ESTABLISHED],
+      requests: [stored, ...tunnelsThrough(drawn)],
+    });
+    expect(drawn).toMatch(/^account-\d{8}$/u);
+  });
+
+  it("forwards a fresh-exit retry through the fresh exit", async () => {
+    await using origin = await startFixtureServer((_request, response) => {
+      response.end();
+    });
+
+    await using proxy = await startFakeHttpProxy({ tunnelTo: Number(new URL(origin.origin).port) });
+    const replies: string[] = [];
+
+    const { plans, scrapes } = harness({
+      config: { proxy: { url: proxy.url.replace("://", "://user-{session}:secret@") } },
+      proxyInfo: observedExit,
+      sources: relayingSources(proxy, replies, [
+        { connectsBefore: 1, document: blockedDocument },
+        { connectsBefore: 3, document: firstDocument },
+      ]),
+    });
+
+    using deadline = startDeadline(5000);
+    const run = scrapes.start({ ...originIntent, retries: 1 }, deadline);
+
+    try {
+      await expect(run.answer).resolves.toBe(firstDocument);
+    } finally {
+      await scrapes.close();
+    }
+
+    const [blocked, fresh] = usernamesOf(plans);
+
+    expect({
+      attempts: run.attempts(),
+      replies,
+      requests: proxy.requests,
+      users: [blocked, fresh],
+    }).toStrictEqual({
+      attempts: { freshExits: 1, total: 2 },
+      replies: [ESTABLISHED, ESTABLISHED],
+      requests: [...tunnelsThrough(blocked), ...tunnelsThrough(fresh)],
+      users: [expect.stringMatching(SESSION_USER), expect.stringMatching(SESSION_USER)],
+    });
+    expect(fresh).not.toBe(blocked);
   });
 });

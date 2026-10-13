@@ -18,6 +18,8 @@ export interface FakeProxy extends AsyncDisposable {
 export interface FakeProxyBehaviour {
   readonly tunnelTo: number;
   readonly connectStatus?: number;
+  readonly refuseFirstConnects?: number;
+  readonly holdFirstConnectUntil?: Promise<unknown>;
   readonly requireCredentials?: string;
   readonly silent?: boolean;
   readonly secure?: boolean;
@@ -70,14 +72,23 @@ const pipeBothWays = (left: Socket, right: Socket) => {
   right.pipe(left);
 };
 
-const answerConnect = async (socket: Socket, upstream: Socket, head: Buffer, delayMs: number) => {
+const answerConnect = async (
+  socket: Socket,
+  upstream: Socket,
+  head: Buffer,
+  delayMs: number,
+  gate: Promise<unknown> | undefined,
+) => {
   await delay(delayMs);
+  await gate;
   socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
   upstream.write(head);
   pipeBothWays(socket, upstream);
 };
 
-export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise<FakeProxy> => {
+export const startFakeHttpProxy = async (
+  behaviour: FakeProxyBehaviour,
+): Promise<FakeProxy & { readonly answeredConnects: number }> => {
   const requests: FakeProxy["requests"] = [];
 
   const server =
@@ -89,11 +100,25 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
       : createServer();
 
   const sockets = trackSockets(server);
+  let connects = 0;
+  let answeredConnects = 0;
 
   const isAuthorized = (request: IncomingMessage) =>
     behaviour.requireCredentials === undefined ||
     request.headers["proxy-authorization"] ===
       `Basic ${Buffer.from(behaviour.requireCredentials).toString("base64")}`;
+
+  const connectStatusFor = (request: IncomingMessage) => {
+    connects += 1;
+
+    if (!isAuthorized(request)) {
+      return 407;
+    }
+
+    return connects <= (behaviour.refuseFirstConnects ?? 0)
+      ? 502
+      : (behaviour.connectStatus ?? 200);
+  };
 
   server.on("connect", (request: IncomingMessage, socket: Socket, head: Buffer) => {
     requests.push({
@@ -110,7 +135,13 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
       return;
     }
 
-    const status = isAuthorized(request) ? (behaviour.connectStatus ?? 200) : 407;
+    const status = connectStatusFor(request);
+    const gate = connects === 1 ? behaviour.holdFirstConnectUntil : undefined;
+
+    const answer = async (upstream: Socket) => {
+      await answerConnect(socket, upstream, head, behaviour.connectDelayMs ?? 0, gate);
+      answeredConnects += 1;
+    };
 
     if (status !== 200) {
       socket.end(`HTTP/1.1 ${status} Fake\r\nContent-Length: 0\r\n\r\n`);
@@ -121,7 +152,7 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
     const upstream = connect(
       { allowHalfOpen: true, host: "127.0.0.1", port: behaviour.tunnelTo },
       () => {
-        void answerConnect(socket, upstream, head, behaviour.connectDelayMs ?? 0);
+        void answer(upstream);
       },
     );
 
@@ -168,6 +199,9 @@ export const startFakeHttpProxy = async (behaviour: FakeProxyBehaviour): Promise
 
   return {
     [Symbol.asyncDispose]: disposeServer(server, sockets),
+    get answeredConnects() {
+      return answeredConnects;
+    },
     get openConnections() {
       return sockets.size;
     },

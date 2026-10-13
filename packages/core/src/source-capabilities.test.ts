@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { startDeadline } from "./deadline.ts";
 import { httpIdentity, planIdentity } from "./humanizer/humanizer.ts";
 import { HeldDeadline } from "./lifetime.ts";
+import { parseProxy } from "./options.ts";
 import { Slot } from "./slot.ts";
 import type { BrowserDriver } from "./sources/browser/port.ts";
 import { createSources } from "./sources/source.ts";
@@ -69,6 +70,29 @@ describe("source capabilities", () => {
     const visit = sources.start(plan, slot, held);
 
     await expect(visit.document).rejects.toThrow("The admission slot has been released.");
+    await expect(visit.closed).resolves.toStrictEqual({ exited: true });
+    expect(launches).toStrictEqual([]);
+    await sources.close();
+  });
+
+  it("refuses a proxied browser plan that arrives without its relay, before launching Chrome", async () => {
+    const launches: string[] = [];
+
+    const driver: BrowserDriver = {
+      launch: async () => {
+        launches.push("launch");
+
+        return await Promise.reject(new Error("Chrome must not launch."));
+      },
+    };
+
+    const sources = createSources(driver);
+    using deadline = startDeadline(1000);
+    const held = new HeldDeadline(deadline, new AbortController().signal);
+    const proxied = { ...browserPlan, proxy: parseProxy("http://proxy.test:8080") };
+    const visit = sources.start(proxied, new Slot(), held);
+
+    await expect(visit.document).rejects.toThrow("A proxied browser visit needs its proxy relay.");
     await expect(visit.closed).resolves.toStrictEqual({ exited: true });
     expect(launches).toStrictEqual([]);
     await sources.close();

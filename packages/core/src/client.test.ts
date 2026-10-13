@@ -553,9 +553,22 @@ describe("the identity report's secrets", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["abort", "timeout"] as const)(
-    "closes metadata sockets and prevents browser launch on %s",
-    async (ending) => {
+  it.each([
+    { ending: "abort", tunnels: ["ipwho.is:443"], url: "http://target.invalid" },
+    { ending: "timeout", tunnels: ["ipwho.is:443"], url: "http://target.invalid" },
+    {
+      ending: "abort",
+      tunnels: ["ipwho.is:443", "target.invalid:443"],
+      url: "https://target.invalid",
+    },
+    {
+      ending: "timeout",
+      tunnels: ["ipwho.is:443", "target.invalid:443"],
+      url: "https://target.invalid",
+    },
+  ] as const)(
+    "closes every proxy socket and prevents browser launch on $ending for $url",
+    async ({ ending, tunnels, url }) => {
       await using proxy = await startFakeHttpProxy({ silent: true, tunnelTo: 0 });
 
       await using client = new XrioClient({
@@ -571,12 +584,12 @@ describe("the identity report's secrets", () => {
         format: "html",
         signal: controller.signal,
         timeoutMs: ending === "abort" ? 5000 : 500,
-        url: "http://target.invalid",
+        url,
       });
 
       const settled = Promise.allSettled([pending]);
       await vi.waitFor(() => {
-        expect(proxy.requests).toHaveLength(1);
+        expect(proxy.requests).toHaveLength(tunnels.length);
       });
       const closing = client.close();
 
@@ -590,7 +603,7 @@ describe("the identity report's secrets", () => {
       await vi.waitFor(() => {
         expect(proxy.openConnections).toBe(0);
       });
-      expect(proxy.requests.map(({ authority }) => authority)).toStrictEqual(["ipwho.is:443"]);
+      expect(proxy.requests.map(({ authority }) => authority).toSorted()).toStrictEqual(tunnels);
     },
   );
 

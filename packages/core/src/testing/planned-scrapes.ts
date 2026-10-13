@@ -58,8 +58,8 @@ export const plannedScrapes = (
 
   const sources: Sources = {
     close: runtime.close,
-    start: (plan, slot, deadline) => {
-      const visit = runtime.start(plan, slot, deadline);
+    start: (plan, slot, deadline, relay) => {
+      const visit = runtime.start(plan, slot, deadline, relay);
       const session = sessionOf.get(deadline);
 
       if (session !== undefined) {
