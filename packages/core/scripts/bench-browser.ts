@@ -1,193 +1,108 @@
-import { createHash } from "node:crypto";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
-import type { ChannelListener } from "node:diagnostics_channel";
-import { readFile, writeFile } from "node:fs/promises";
-import { parseArgs } from "node:util";
+import { writeFile } from "node:fs/promises";
 
-import { startDeadline } from "../src/deadline.ts";
-import { readHostZone } from "../src/humanizer/host-zone.ts";
-import { planIdentity } from "../src/humanizer/humanizer.ts";
-import { createCapabilityProbe } from "../src/sources/browser/capabilities.ts";
-import { cdpDriver } from "../src/sources/browser/cdp/driver.ts";
-import { planLaunch } from "../src/sources/browser/launch-plan.ts";
 import { chromePath } from "../src/testing/chrome-path.ts";
 import { conformancePages } from "../src/testing/conformance-pages.ts";
-import { fixedDevice, fixedRandom } from "../src/testing/fixed-seed.ts";
 import { startFixtureServer } from "../src/testing/fixture-server.ts";
-import { noPins } from "../src/testing/no-pins.ts";
-import { plannedScrapes } from "../src/testing/planned-scrapes.ts";
+import { describeEnvironment } from "./bench/environment.ts";
+import { createLaunchLedger, drawnValuesOf } from "./bench/launch-ledger.ts";
+import { measureScrape } from "./bench/measure-scrape.ts";
+import type { ScrapeSettings, ScrapeTarget } from "./bench/measure-scrape.ts";
+import { readBenchOptions } from "./bench/options.ts";
+import type { BenchOptions } from "./bench/options.ts";
+import { summarise } from "./bench/summary.ts";
+import type { Measured } from "./bench/summary.ts";
 
-const SCRAPE_TIMEOUT_MS = 30_000;
-
-const PERCENTILES = [50, 95] as const;
-
-const MEASURES = [
-  "identity",
-  "launch",
-  "verify",
-  "navigation",
-  "capture",
-  "teardown",
-  "answer",
-  "exit",
-] as const;
-
-type Measure = (typeof MEASURES)[number];
-
-type Sample = Record<Measure, number>;
-
-const { values } = parseArgs({
-  options: {
-    mode: { default: "headless", type: "string" },
-    out: { type: "string" },
-    route: { default: "/static", type: "string" },
-    runs: { default: "10", type: "string" },
-  },
-});
-
-const parseMode = (value: string): "headless" | "headed" => {
-  if (value !== "headless" && value !== "headed") {
-    throw new Error(`--mode must be headless or headed, not "${value}".`);
-  }
-
-  return value;
-};
-
-const parseRuns = (value: string): number => {
-  const runs = Number(value);
-
-  if (!Number.isInteger(runs) || runs < 1) {
-    throw new Error(`--runs must be a positive integer, not "${value}".`);
-  }
-
-  return runs;
-};
-
-const mode = parseMode(values.mode);
-
-const runs = parseRuns(values.runs);
-
-const isStageTiming = (message: unknown): message is { stage: string; durationMs: number } =>
-  typeof message === "object" &&
-  message !== null &&
-  "stage" in message &&
-  typeof message.stage === "string" &&
-  "durationMs" in message &&
-  typeof message.durationMs === "number";
-
-const isMeasure = (stage: string): stage is Measure => MEASURES.some((name) => name === stage);
-
-const sha256Of = async (file: string): Promise<string> =>
-  createHash("sha256")
-    .update(await readFile(file))
-    .digest("hex");
-
-const server = await startFixtureServer(conformancePages);
-
-const scrapeOnce = async (): Promise<Sample> => {
-  const sample: Sample = {
-    answer: 0,
-    capture: 0,
-    exit: 0,
-    identity: 0,
-    launch: 0,
-    navigation: 0,
-    teardown: 0,
-    verify: 0,
-  };
-
-  const record: ChannelListener = (message) => {
-    if (isStageTiming(message) && isMeasure(message.stage)) {
-      sample[message.stage] = message.durationMs;
-    }
-  };
-
-  subscribe("xrio:stage", record);
-  const browsers = plannedScrapes(cdpDriver, 1, { random: fixedRandom });
-  const started = performance.now();
-
-  try {
-    using deadline = startDeadline(SCRAPE_TIMEOUT_MS);
-
-    await browsers.visit({
-      browserArgs: [],
-      browserPath: chromePath(),
-      deadline,
-      mode,
-      pins: noPins,
-      proxy: undefined,
-      url: new URL(values.route, server.origin),
-    }).document;
-    sample.answer = performance.now() - started;
-  } finally {
-    await browsers.close();
-    sample.exit = performance.now() - started;
-    unsubscribe("xrio:stage", record);
-  }
-
-  return sample;
-};
-
-const percentile = (sorted: readonly number[], rank: number): number =>
-  sorted[Math.min(sorted.length - 1, Math.ceil((rank / 100) * sorted.length) - 1)] ?? Number.NaN;
-
-const summarise = (samples: readonly Sample[]) =>
-  Object.fromEntries(
-    MEASURES.map((measure) => {
-      const sorted = samples.map((sample) => sample[measure]).toSorted((a, b) => a - b);
-
-      return [
-        measure,
-        Object.fromEntries(
-          PERCENTILES.map((rank) => [`p${rank}`, Number(percentile(sorted, rank).toFixed(1))]),
-        ),
-      ];
-    }),
-  );
-
-const samples: Sample[] = [];
-
-for (let run = 0; run < runs; run += 1) {
-  // oxlint-disable-next-line eslint/no-await-in-loop
-  samples.push(await scrapeOnce());
+interface Sample extends Measured {
+  readonly status: number;
+  readonly drawnFlags: readonly string[];
+  readonly browserProcesses: number | null;
 }
 
-await server[Symbol.asyncDispose]();
-
-const { args } = planLaunch({
-  browserArgs: [],
-  browserPath: chromePath(),
-  display: process.env.DISPLAY,
-  headless: mode === "headless",
-  identity: planIdentity({
-    capabilities: await createCapabilityProbe()(chromePath()),
-    device: fixedDevice,
-    exit: { facts: { kind: "unknown" }, route: "direct" },
-    hostZone: readHostZone(),
-    mode,
-    pins: noPins,
-  }).inputs,
-  proxyServer: undefined,
-  scratchDir: "<scratch>",
-  xauthority: process.env.XAUTHORITY,
-});
-
-const report = {
-  config: {
-    argv: args,
-    browserPath: chromePath(),
-    browserSha256: await sha256Of(chromePath()),
-    mode,
-    node: process.version,
-    platform: `${process.platform}-${process.arch}`,
-    route: values.route,
-    runs,
-  },
-  results: { samples, summary: summarise(samples) },
+const warmUp = async (
+  target: ScrapeTarget,
+  settings: ScrapeSettings,
+  scrapes: number,
+): Promise<void> => {
+  for (let scrape = 0; scrape < scrapes; scrape += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop
+    await measureScrape(target, settings);
+  }
 };
 
-if (values.out !== undefined) {
-  await writeFile(values.out, `${JSON.stringify(report, undefined, 2)}\n`);
+const measureTargets = async (
+  targets: readonly ScrapeTarget[],
+  settings: ScrapeSettings,
+  options: BenchOptions,
+) => {
+  const launches = createLaunchLedger();
+  const samples: Sample[] = [];
+
+  const [first] = targets;
+
+  if (first !== undefined) {
+    await warmUp(first, settings, options.warmup);
+  }
+
+  for (const target of targets) {
+    for (let run = 0; run < options.runs; run += 1) {
+      // oxlint-disable-next-line eslint/no-await-in-loop
+      const { browserArgv, ...measured } = await measureScrape(target, settings);
+
+      launches.admit(browserArgv);
+      samples.push({ ...measured, drawnFlags: drawnValuesOf(browserArgv), target: target.label });
+    }
+  }
+
+  return { argv: launches.agreedArgv(), samples };
+};
+
+const benchmark = async (targets: readonly ScrapeTarget[], options: BenchOptions) => {
+  const browserPath = chromePath();
+
+  const settings: ScrapeSettings = {
+    browserArgs: options.browserArgs,
+    browserPath,
+    mode: options.mode,
+    proxy: options.proxy,
+  };
+
+  const { argv, samples } = await measureTargets(targets, settings, options);
+
+  return {
+    config: {
+      argv,
+      browserArgs: options.browserArgs,
+      environment: describeEnvironment(browserPath),
+      mode: options.mode,
+      proxied: options.proxy !== undefined,
+      runs: options.runs,
+      targets: targets.map(({ label }) => label),
+      warmup: options.warmup,
+    },
+    results: { samples, summary: summarise(samples) },
+  };
+};
+
+const options = await readBenchOptions();
+
+const report = await (async () => {
+  if (options.liveUrls !== undefined) {
+    return await benchmark(
+      options.liveUrls.map((url) => ({ label: url, url })),
+      options,
+    );
+  }
+
+  await using server = await startFixtureServer(conformancePages);
+
+  return await benchmark(
+    [{ label: options.route, url: new URL(options.route, server.origin).href }],
+    options,
+  );
+})();
+
+if (options.out !== undefined) {
+  await writeFile(options.out, `${JSON.stringify(report, undefined, 2)}\n`);
 }
 
 process.stdout.write(`${JSON.stringify(report.results.summary, undefined, 2)}\n`);
