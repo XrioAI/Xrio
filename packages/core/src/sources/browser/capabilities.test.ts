@@ -304,12 +304,14 @@ describe("hostCapabilities", () => {
         fork?.knobs["persona-dir"],
         fork?.knobs["speech-table"],
         fork?.knobs["synthetic-umbrella-knob"],
+        fork?.knobs["battery-status"],
       ]).toStrictEqual([
         { origin: "set", value: "synthetic-voices-154" },
         { origin: "set", value: "" },
         { origin: "def", value: null },
         { origin: "der", value: null },
         { origin: "umb", value: "true" },
+        { origin: "def", value: null },
       ]);
     });
 
