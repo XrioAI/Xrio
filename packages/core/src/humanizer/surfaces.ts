@@ -8,6 +8,7 @@ import {
   withoutPersona,
 } from "./contracts.ts";
 import type {
+  BatteryStatus,
   DeviceRecord,
   ExitFacts,
   GlPersona,
@@ -22,6 +23,7 @@ import type {
   Seed,
 } from "./contracts.ts";
 import {
+  drawBattery,
   drawDisplay,
   drawGlPersona,
   drawHardware,
@@ -30,7 +32,7 @@ import {
   windowBounds,
   workAreaOf,
 } from "./draws.ts";
-import type { Bounds, DrawnDisplay } from "./draws.ts";
+import type { BatteryState, Bounds, DrawnDisplay } from "./draws.ts";
 import { FONT_CONFIG_NAME, fontConfigDigestOf, fontConfigOf, fontConfigPathOf } from "./fonts.ts";
 import { glLineupOf, hardwareEligibleCount, personaClaims } from "./gl-persona.ts";
 import type { EligiblePersona, GlLineup } from "./gl-persona.ts";
@@ -91,6 +93,17 @@ type NoiseChoice =
       readonly reason: "native-gpu" | "pinned" | "unhonored" | "host-hardware";
     };
 
+type BatteryChoice =
+  | {
+      readonly source: "drawn";
+      readonly state: BatteryState;
+      readonly charging: boolean;
+      readonly level: number;
+      readonly chargingTime: number | null;
+      readonly dischargingTime: number | null;
+    }
+  | { readonly source: "host" };
+
 export interface SurfaceChoices {
   readonly seed: { readonly source: DeviceChoice["kind"] };
   readonly locale: { readonly tag: string; readonly languages: readonly string[] };
@@ -102,6 +115,7 @@ export interface SurfaceChoices {
     readonly memoryGb: number;
   };
   readonly noise: NoiseChoice;
+  readonly battery: BatteryChoice;
   readonly window:
     | ({ readonly source: DeviceSource; readonly kind: "maximized" | "floating" } & Bounds)
     | { readonly source: "fixed"; readonly size: Size };
@@ -143,6 +157,7 @@ export const EMISSION_ORDER = [
   "gpu",
   "hardware",
   "noise",
+  "battery",
   "window",
   "screen",
   "fonts",
@@ -661,6 +676,41 @@ const resolveNoise = (
   return { expected: [], inputs: noiseInputs(seed), value: wanted };
 };
 
+const presentsLaptopOverSoftware = ({ backend, presented }: GlChoice): boolean =>
+  backend.kind === "swiftshader" && presented?.persona.formFactor === "laptop";
+
+const honorsBattery = (capabilities: HostCapabilities): boolean =>
+  capabilities.fork?.knobs["battery-status"] !== undefined;
+
+const forkSeconds = (time: number | null): number | "Infinity" => time ?? "Infinity";
+
+const batteryStatusOf = ({ charging, chargingTime, dischargingTime, level }: BatteryStatus) =>
+  JSON.stringify({
+    charging,
+    charging_time: forkSeconds(chargingTime),
+    discharging_time: forkSeconds(dischargingTime),
+    level,
+  });
+
+const resolveBattery = (
+  { capabilities }: Pick<IdentityContext, "capabilities">,
+  { seed }: Device,
+  gl: GlChoice,
+): Resolutions["battery"] => {
+  if (!presentsLaptopOverSoftware(gl) || !honorsBattery(capabilities)) {
+    return { expected: [], inputs: [], value: { source: "host" } };
+  }
+
+  const { charging, chargingTime, dischargingTime, level, state } = drawBattery(seed);
+  const status = { charging, chargingTime, dischargingTime, level };
+
+  return {
+    expected: [],
+    inputs: [{ name: "--xrio-battery-status", sink: "switch", value: batteryStatusOf(status) }],
+    value: { ...status, source: "drawn", state },
+  };
+};
+
 const resolveHeadedWindow = (): Resolutions["window"] => ({
   expected: [
     compatible("outerWidth", atMost("availWidth"), "note"),
@@ -912,6 +962,7 @@ export const resolveSurfaces = (context: IdentityContext): Resolutions => {
 
   return {
     automation: resolveAutomation(replayed),
+    battery: resolveBattery(replayed, device, gl),
     fonts: resolveFonts(replayed),
     gpu: resolveGpu(gl),
     hardware,

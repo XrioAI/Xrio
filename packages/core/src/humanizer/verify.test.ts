@@ -530,7 +530,7 @@ const afterCaptureTells = (
   afterCapture: Observation["afterCapture"],
 ) =>
   evaluate(plan, { ...linuxHeadless, afterCapture }).report.tells.filter(
-    (tell) => tell === "gpu-contradiction" || tell === "form-factor-battery-skew",
+    (tell) => tell === "gpu-contradiction",
   );
 
 describe("the announced persona's after-capture tells", () => {
@@ -676,59 +676,13 @@ describe("the announced persona's after-capture tells", () => {
     ).toStrictEqual([]);
   });
 
-  it("tells form-factor-battery-skew for a laptop persona on a batteryless page", () => {
-    expect(
-      afterCaptureTells(announcedPlan(), readingWith({ batteryState: BATTERYLESS_STATE })),
-    ).toStrictEqual(["form-factor-battery-skew"]);
-  });
+  it("tells nothing of a laptop persona's page that shows a charging, full battery, as a plugged-in laptop does", () => {
+    const { tells } = evaluate(announcedPlan(), {
+      ...linuxHeadless,
+      afterCapture: readingWith({ batteryState: BATTERYLESS_STATE }),
+    }).report;
 
-  it.each([
-    {
-      batteryState: {
-        charging: false,
-        chargingTime: null,
-        dischargingTime: 20_000,
-        kind: "state",
-        level: 1,
-      } as const,
-      why: "discharging at full",
-    },
-    {
-      batteryState: {
-        charging: true,
-        chargingTime: 300,
-        dischargingTime: null,
-        kind: "state",
-        level: 0.99,
-      } as const,
-      why: "charging below full",
-    },
-    { batteryState: { kind: "none" } as const, why: "no battery API" },
-    { batteryState: { kind: "timed-out" } as const, why: "a battery read that timed out" },
-    { batteryState: { kind: "failed" } as const, why: "a battery read that failed" },
-  ])("tells no form-factor-battery-skew for a battery $why", ({ batteryState }) => {
-    expect(afterCaptureTells(announcedPlan(), readingWith({ batteryState }))).toStrictEqual([]);
-  });
-
-  it("tells no form-factor-battery-skew for a desktop persona", () => {
-    expect(
-      afterCaptureTells(
-        announcedPlan({ ...RENOIR, formFactor: "desktop" }),
-        readingWith({ batteryState: BATTERYLESS_STATE }),
-      ),
-    ).toStrictEqual([]);
-  });
-
-  it("tells both when the page contradicts the persona twice", () => {
-    expect(
-      afterCaptureTells(
-        announcedPlan(),
-        readingWith({
-          batteryState: BATTERYLESS_STATE,
-          webgpuAdapter: { architecture: "swiftshader", kind: "adapter", vendor: "google" },
-        }),
-      ),
-    ).toStrictEqual(["gpu-contradiction", "form-factor-battery-skew"]);
+    expect(tells.filter((tell) => tell.includes("battery"))).toStrictEqual([]);
   });
 
   it("judges nothing without an announced persona, a secure origin or a launch that sent one", () => {

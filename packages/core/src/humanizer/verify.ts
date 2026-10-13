@@ -67,7 +67,7 @@ export interface IdentityMismatch {
   readonly observed: Observed;
 }
 
-type AfterCaptureTell = "gpu-contradiction" | "form-factor-battery-skew";
+type AfterCaptureTell = "gpu-contradiction";
 
 export type FactTell =
   | "host-zone-utc"
@@ -478,8 +478,6 @@ const hardwareDriftOf = (notes: readonly IdentityMismatch[]): readonly "hardware
 
 const SWIFTSHADER_NAME = /swiftshader/iu;
 
-const BATTERYLESS = { charging: true, level: 1 } as const;
-
 const ATI_BRAND = /^ati\b/u;
 
 const canonicalVendor = (vendor: string): string => {
@@ -503,11 +501,6 @@ const contradictsClaims = (
   SWIFTSHADER_NAME.test(adapter.architecture) ||
   (vendor !== undefined && namesAnother(adapter.vendor, vendor));
 
-const showsNoBattery = (reading: BatteryReading): boolean =>
-  reading.kind === "state" &&
-  reading.charging === BATTERYLESS.charging &&
-  reading.level === BATTERYLESS.level;
-
 const afterCaptureTellsOf = (
   claims: PersonaClaims | null,
   afterCapture: AfterCapture,
@@ -516,14 +509,11 @@ const afterCaptureTellsOf = (
     return [];
   }
 
-  const { batteryState, webgpuAdapter } = afterCapture;
+  const { webgpuAdapter } = afterCapture;
 
-  return [
-    ...(webgpuAdapter.kind === "adapter" && contradictsClaims(claims, webgpuAdapter)
-      ? ["gpu-contradiction" as const]
-      : []),
-    ...(claims.laptop && showsNoBattery(batteryState) ? ["form-factor-battery-skew" as const] : []),
-  ];
+  return webgpuAdapter.kind === "adapter" && contradictsClaims(claims, webgpuAdapter)
+    ? ["gpu-contradiction"]
+    : [];
 };
 
 export const evaluate = (

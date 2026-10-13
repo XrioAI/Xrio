@@ -286,6 +286,7 @@ describe("the identity report", () => {
         seed: fixedSeed,
         surfaces: {
           automation: null,
+          battery: { source: "host" },
           fonts: { reason: "no fontstack/ beside the binary", source: "host" },
           gpu: { backend: "swiftshader", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },
@@ -527,6 +528,7 @@ describe("the identity report", () => {
         seed: fixedSeed,
         surfaces: {
           automation: null,
+          battery: { source: "host" },
           fonts: { reason: null, source: "host" },
           gpu: { backend: "native", persona: null },
           hardware: { cores: 0, memoryGb: 0, source: "host" },

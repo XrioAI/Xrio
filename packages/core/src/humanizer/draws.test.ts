@@ -17,6 +17,7 @@ import { noPins } from "../testing/no-pins.ts";
 import type { DeviceRecord, Observation } from "./contracts.ts";
 import {
   displayMisfit,
+  drawBattery,
   drawDisplay,
   drawHardware,
   drawNoiseSeed,
@@ -24,10 +25,11 @@ import {
   windowBounds,
   workAreaOf,
 } from "./draws.ts";
-import type { DrawnDisplay, HardwareDraw } from "./draws.ts";
+import type { DrawnBattery, DrawnDisplay, HardwareDraw } from "./draws.ts";
 import { planIdentity } from "./humanizer.ts";
 import type { IdentityPlan } from "./humanizer.ts";
 import {
+  BATTERY_STATES,
   DESKTOP_LAYOUTS,
   DESKTOP_SCREENS,
   MACHINE_CLASSES,
@@ -772,6 +774,120 @@ describe(drawNoiseSeed, () => {
 
   it("draws a different fork seed for each of 10,000 seeds", () => {
     expect(new Set(noiseSeeds(CONTAINMENT_SEEDS)).size).toBe(CONTAINMENT_SEEDS);
+  });
+});
+
+const HOUR_SECONDS = 3600;
+
+const HUNDREDTHS = 100;
+
+const BATTERY_BAND = 0.02;
+
+const batteries = (count: number): DrawnBattery[] =>
+  Array.from({ length: count }, (_, index) => drawBattery(seedAt(index + 1)));
+
+const percentOf = ({ level }: DrawnBattery): number => Math.round(level * HUNDREDTHS);
+
+const inHundredths = (battery: DrawnBattery, min: number, max: number): boolean =>
+  percentOf(battery) / HUNDREDTHS === battery.level &&
+  percentOf(battery) >= min &&
+  percentOf(battery) <= max;
+
+const secondsWithin = (
+  seconds: number | null,
+  share: number,
+  { max, min }: { readonly min: number; readonly max: number },
+): boolean =>
+  seconds !== null &&
+  Number.isInteger(seconds) &&
+  seconds >= Math.round((share * min * HOUR_SECONDS) / HUNDREDTHS) &&
+  seconds <= Math.round((share * max * HOUR_SECONDS) / HUNDREDTHS);
+
+const BATTERY_RULES: Readonly<Record<DrawnBattery["state"], (battery: DrawnBattery) => boolean>> = {
+  charging: (battery) =>
+    battery.charging &&
+    battery.dischargingTime === null &&
+    inHundredths(battery, 10, 95) &&
+    (battery.chargingTime ?? 0) > 0 &&
+    secondsWithin(battery.chargingTime, HUNDREDTHS - percentOf(battery), { max: 3, min: 1 }),
+  discharging: (battery) =>
+    !battery.charging &&
+    battery.chargingTime === null &&
+    inHundredths(battery, 20, 95) &&
+    secondsWithin(battery.dischargingTime, percentOf(battery), { max: 10, min: 4 }),
+  full: (battery) =>
+    battery.charging &&
+    battery.level === 1 &&
+    battery.chargingTime === 0 &&
+    battery.dischargingTime === null,
+};
+
+describe(drawBattery, () => {
+  it.each([
+    {
+      battery: {
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: null,
+        level: 1,
+        state: "full",
+      },
+      seed: fixedSeed,
+    },
+    {
+      battery: {
+        charging: false,
+        chargingTime: null,
+        dischargingTime: 16_695,
+        level: 0.6,
+        state: "discharging",
+      },
+      seed: "0000000000000002",
+    },
+    {
+      battery: {
+        charging: true,
+        chargingTime: 3526,
+        dischargingTime: null,
+        level: 0.49,
+        state: "charging",
+      },
+      seed: "0000000000000009",
+    },
+  ])(
+    "draws a $battery.state battery for the seed $seed, the same every time",
+    ({ battery, seed }) => {
+      expect([drawBattery(seed), drawBattery(seed)]).toStrictEqual([battery, battery]);
+    },
+  );
+
+  it.each(BATTERY_STATES)(
+    "draws a $state battery within two points of its weight across 10,000 seeds",
+    (row) => {
+      const drawn = batteries(CONTAINMENT_SEEDS).filter(({ state }) => state === row.state);
+
+      expect(
+        Math.abs(drawn.length / CONTAINMENT_SEEDS - shareOf(BATTERY_STATES, row)),
+      ).toBeLessThan(BATTERY_BAND);
+    },
+  );
+
+  it("keeps each state's level and times in range for each of 10,000 seeds", () => {
+    expect(
+      batteries(CONTAINMENT_SEEDS).filter((battery) => !BATTERY_RULES[battery.state](battery)),
+    ).toStrictEqual([]);
+  });
+
+  it("reaches every level step of the charging and discharging states across 10,000 seeds", () => {
+    const drawn = batteries(CONTAINMENT_SEEDS);
+
+    const levelsOf = (state: DrawnBattery["state"]) =>
+      new Set(drawn.filter((battery) => battery.state === state).map(percentOf)).size;
+
+    expect({ charging: levelsOf("charging"), discharging: levelsOf("discharging") }).toStrictEqual({
+      charging: 86,
+      discharging: 76,
+    });
   });
 });
 

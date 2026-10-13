@@ -25,6 +25,7 @@ const FORK_SWITCHES = [
   "--xrio-seed",
   "--xrio-perturb-canvas",
   "--xrio-perturb-audio",
+  "--xrio-battery-status",
 ] as const;
 
 export const OWNED_ENVIRONMENT = ["LANG", "LANGUAGE", "TZ", "FONTCONFIG_PATH"] as const;
@@ -210,6 +211,21 @@ const WINDOW_WEIGHT_SOURCE =
 export const WINDOW_STATES = [
   { kind: "maximized", source: WINDOW_WEIGHT_SOURCE, weight: 80 },
   { kind: "floating", source: WINDOW_WEIGHT_SOURCE, weight: 20 },
+] as const;
+
+const BATTERY_WEIGHT_SOURCE =
+  "guess: a laptop is most often plugged in and full; no population data on battery states";
+
+const FULL_BATTERY_WEIGHT = 50;
+
+const DISCHARGING_BATTERY_WEIGHT = 30;
+
+const CHARGING_BATTERY_WEIGHT = 20;
+
+export const BATTERY_STATES = [
+  { source: BATTERY_WEIGHT_SOURCE, state: "full", weight: FULL_BATTERY_WEIGHT },
+  { source: BATTERY_WEIGHT_SOURCE, state: "discharging", weight: DISCHARGING_BATTERY_WEIGHT },
+  { source: BATTERY_WEIGHT_SOURCE, state: "charging", weight: CHARGING_BATTERY_WEIGHT },
 ] as const;
 
 const CHROME_BAD_FLAGS = {

@@ -229,8 +229,7 @@ const brandOf = (vendor: string): string | undefined => {
   return brand === "" ? undefined : brand;
 };
 
-export const personaClaims = ({ formFactor, vendor }: GlPersona): PersonaClaims => ({
-  laptop: formFactor === "laptop",
+export const personaClaims = ({ vendor }: GlPersona): PersonaClaims => ({
   vendor: brandOf(vendor),
 });
 

@@ -105,7 +105,6 @@ export type GpuChoice =
 
 export interface PersonaClaims {
   readonly vendor: string | undefined;
-  readonly laptop: boolean;
 }
 
 export interface PresentedDevice {
