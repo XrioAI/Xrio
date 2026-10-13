@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { fakeChromePath } from "../../testing/fake-chrome-path.ts";
 import { fakeForkPath } from "../../testing/fake-fork.ts";
+import { permissionsOf, underUserPrivateGroupUmask } from "../../testing/file-modes.ts";
 import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { createCapabilityProbe } from "./capabilities.ts";
 import { cdpDriver } from "./cdp/driver.ts";
@@ -328,6 +329,42 @@ describe("hostCapabilities headless user agent", () => {
       headless: PRESENTED,
       launched: [stock],
       unstated: undefined,
+    });
+  });
+
+  it("stores a stock answer into an empty host cache that the kit's probe then accepts", async () => {
+    const host = path.join(root, "host");
+    const stock = path.join(root, "chrome");
+
+    await writeFile(stock, "");
+
+    const kitBinary = await fakeForkPath("kit", { root });
+
+    const probe = createCapabilityProbe({
+      driver: scriptedDriver(() => readingOf(HEADLESS_AGENT)),
+      onlineCpusFile: path.join(root, "no-online"),
+      processStatusFile: path.join(root, "no-status"),
+      renderNodeDirectory: path.join(root, "no-render-nodes"),
+      root: host,
+      scratchRoot: path.join(root, "scratch"),
+    });
+
+    const seen = await underUserPrivateGroupUmask(async () => {
+      const headless = await probe(stock, undefined, "headless");
+      const hostMode = await permissionsOf(host);
+      const kit = await probe(kitBinary, undefined, "headless");
+
+      return {
+        agent: headless.headlessUserAgent,
+        hostMode,
+        knob: kit.fork?.knobs["suppress-headless-token"],
+      };
+    });
+
+    expect(seen).toStrictEqual({
+      agent: PRESENTED,
+      hostMode: "700",
+      knob: { origin: "def", value: "true" },
     });
   });
 

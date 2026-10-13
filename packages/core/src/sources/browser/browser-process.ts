@@ -135,7 +135,7 @@ export const removeScratchDir = async (
 export const writeAtomically = async (file: string, contents: string): Promise<void> => {
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
 
-  await mkdir(path.dirname(file), { recursive: true });
+  await mkdir(path.dirname(file), { mode: 0o700, recursive: true });
 
   try {
     await writeFile(temporary, contents, { flag: "wx", mode: 0o600 });
