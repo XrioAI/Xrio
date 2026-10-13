@@ -319,6 +319,8 @@ if (MODES.length === 0) {
   );
 }
 
+const ALLOW_GESTURE_FREE_POPUPS = ["--disable-popup-blocking"] as const;
+
 const PROBE_EXPECTED = { visibility: "visible", webdriver: "false" } as const;
 
 let server: FixtureServer;
@@ -370,8 +372,18 @@ const isSentCommand = (message: unknown): message is { scope: string; method: st
   "method" in message &&
   typeof message.method === "string";
 
-const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<string[]> => {
+interface TappedLoads {
+  readonly commands: string[];
+  readonly documents: SourceDocument[];
+}
+
+const tappedLoads = async (
+  mode: Mode,
+  routes: readonly string[],
+  browserArgs: readonly string[] = [],
+): Promise<TappedLoads> => {
   const sent = new Set<string>();
+  const documents: SourceDocument[] = [];
 
   const record: ChannelListener = (message) => {
     if (isSentCommand(message)) {
@@ -384,13 +396,23 @@ const tappedCommands = async (mode: Mode, routes: readonly string[]): Promise<st
   try {
     for (const route of routes) {
       // oxlint-disable-next-line eslint/no-await-in-loop
-      await load(mode, route);
+      documents.push(await load(mode, route, 20_000, undefined, browserArgs));
     }
   } finally {
     unsubscribe("xrio:cdp-command", record);
   }
 
-  return [...sent].toSorted();
+  return { commands: [...sent].toSorted(), documents };
+};
+
+const tappedCommands = async (
+  mode: Mode,
+  routes: readonly string[],
+  browserArgs: readonly string[] = [],
+): Promise<string[]> => {
+  const { commands } = await tappedLoads(mode, routes, browserArgs);
+
+  return commands;
 };
 
 const isText = (value: unknown): value is string => typeof value === "string";
@@ -1255,6 +1277,20 @@ describe.each(MODES)("commands our CDP client sends, %s", (mode) => {
         "worker Runtime.runIfWaitingForDebugger",
       ]),
     );
+  });
+
+  it("resumes a popup, never closes it, and still captures the main document", async () => {
+    const {
+      commands: sent,
+      documents: [document],
+    } = await tappedLoads(mode, ["/popup"], ALLOW_GESTURE_FREE_POPUPS);
+
+    expect(wasRequested("/popup-opened")).toBeTruthy();
+    expect(sent).toStrictEqual(expect.arrayContaining(["popup Runtime.runIfWaitingForDebugger"]));
+    expect(sent.filter((pair) => pair.endsWith("Target.closeTarget"))).toStrictEqual([]);
+
+    expect(markerOf(document?.html ?? "")).toBe("popup");
+    expect(document).toMatchObject({ headers: { "x-page": "popup" }, status: 200 });
   });
 });
 

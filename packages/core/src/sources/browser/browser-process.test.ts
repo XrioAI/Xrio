@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { ChannelListener } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,7 +15,13 @@ import { leftovers, nothingLeft } from "../../testing/leftovers.ts";
 import { noPins } from "../../testing/no-pins.ts";
 import { plannedScrapes } from "../../testing/planned-scrapes.ts";
 import { holdUnreapedGroup, processStateOf } from "../../testing/unreaped-group.ts";
-import { spawnChrome, sweepAbandonedScratch } from "./browser-process.ts";
+import {
+  createScratchDir,
+  ensureScratchRoot,
+  removeScratchDir,
+  spawnChrome,
+  sweepAbandonedScratch,
+} from "./browser-process.ts";
 import { cdpDriver } from "./cdp/driver.ts";
 import { waitForGroupExit } from "./group-lifetime.ts";
 
@@ -387,5 +393,122 @@ describe("the browser-argv event", () => {
     );
     expect(events.seen).toStrictEqual(["browser-argv"]);
     expect(events.details).toStrictEqual(['["--headless"]']);
+  });
+});
+
+const inTemporaryDirectory = async (run: (directory: string) => Promise<void>): Promise<void> => {
+  const directory = await mkdtemp(path.join(tmpdir(), "xrio-root-"));
+
+  try {
+    await run(directory);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+};
+
+describe("the scratch root", () => {
+  it("accepts a directory this user owns with mode 0700", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const root = path.join(directory, "root");
+
+      await ensureScratchRoot(root);
+      await expect(ensureScratchRoot(root)).resolves.toBeUndefined();
+
+      const { mode } = await stat(root);
+
+      expect(mode % 0o1000).toBe(0o700);
+    });
+  });
+
+  it("refuses a symlink, even to a safe directory", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const target = path.join(directory, "target");
+      const root = path.join(directory, "root");
+
+      await mkdir(target, { mode: 0o700 });
+      await symlink(target, root);
+      await expect(ensureScratchRoot(root)).rejects.toThrow(
+        `${root} is not a directory Xrio can own.`,
+      );
+    });
+  });
+
+  it("refuses a path that is a file", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const root = path.join(directory, "root");
+
+      await writeFile(root, "", { mode: 0o600 });
+      await expect(ensureScratchRoot(root)).rejects.toMatchObject({ code: "EEXIST" });
+    });
+  });
+
+  it.each([0o750, 0o705, 0o770, 0o777])("refuses a directory with mode %o", async (mode) => {
+    await inTemporaryDirectory(async (directory) => {
+      const root = path.join(directory, "root");
+
+      await mkdir(root);
+      await chmod(root, mode);
+      await expect(ensureScratchRoot(root)).rejects.toThrow(
+        `${root} must belong to this user with mode 0700.`,
+      );
+      await expect(createScratchDir(Date.now(), root)).rejects.toThrow(
+        `${root} must belong to this user with mode 0700.`,
+      );
+    });
+  });
+
+  it("refuses a directory owned by another user", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const root = path.join(directory, "root");
+
+      await mkdir(root, { mode: 0o700 });
+
+      const { uid } = await stat(root);
+
+      await expect(ensureScratchRoot(root, uid)).resolves.toBeUndefined();
+      await expect(ensureScratchRoot(root, uid + 1)).rejects.toThrow(
+        `${root} must belong to this user with mode 0700.`,
+      );
+    });
+  });
+});
+
+describe("the scratch directory's owner file", () => {
+  it("records the pid, creation time and uid of the process that created it", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const scratch = await createScratchDir(1234, path.join(directory, "root"));
+      const uid = process.getuid?.() ?? 0;
+
+      await expect(readFile(path.join(scratch.path, "xrio-owner.json"), "utf-8")).resolves.toBe(
+        `{"createdAt":1234,"pid":${process.pid},"uid":${uid}}`,
+      );
+    });
+  });
+
+  it("is still honoured when written without a uid", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const scratch = await createScratchDir(1234, path.join(directory, "root"));
+
+      await writeFile(
+        path.join(scratch.path, "xrio-owner.json"),
+        JSON.stringify({ createdAt: 1234, pid: process.pid }),
+      );
+      await removeScratchDir(scratch);
+      await expect(stat(scratch.path)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("is refused when its uid is not a number", async () => {
+    await inTemporaryDirectory(async (directory) => {
+      const scratch = await createScratchDir(1234, path.join(directory, "root"));
+
+      await writeFile(
+        path.join(scratch.path, "xrio-owner.json"),
+        JSON.stringify({ createdAt: 1234, pid: process.pid, uid: "0" }),
+      );
+      await expect(removeScratchDir(scratch)).rejects.toThrow(
+        `Refusing to delete ${scratch.path}, which this process did not create.`,
+      );
+    });
   });
 });

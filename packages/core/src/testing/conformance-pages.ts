@@ -475,6 +475,24 @@ const routes = new Map<
     },
   ],
   [
+    "/popup",
+    (response) => {
+      requestedPaths.delete("/popup-opened");
+      sendPage(
+        response,
+        "popup",
+        '<script>window.open("/popup-opened");</script><script src="/after-popup.js"></script>',
+      );
+    },
+  ],
+  ["/after-popup.js", holdScriptUntilRequested("/popup-opened")],
+  [
+    "/popup-opened",
+    (response) => {
+      sendPage(response, "popup-opened");
+    },
+  ],
+  [
     "/worker",
     (response) => {
       requestedPaths.delete("/from-worker");
