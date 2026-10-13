@@ -691,6 +691,14 @@ describe(parseBrowserArgs, () => {
     },
   );
 
+  it("refuses the fork battery switch, which the identity sends itself", () => {
+    expect(() =>
+      parseBrowserArgs([
+        '--xrio-battery-status={"charging":true,"charging_time":0,"discharging_time":"Infinity","level":1}',
+      ]),
+    ).toThrow("browserArgs cannot include --xrio-battery-status, which Xrio manages.");
+  });
+
   it("drops a valueless baseline switch, which Chrome already gets, and refuses it with a value", () => {
     const sentOnce = baseline.filter((arg) => !arg.includes("="));
 
