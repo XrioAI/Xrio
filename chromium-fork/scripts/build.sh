@@ -99,6 +99,16 @@ package_linux() {
   echo "packaged $pkg.tar.zst"
 }
 
+package_mac() {
+  local pkg="$root/dist/$name"
+  rm -rf "$pkg" "$pkg.zip"
+  mkdir -p "$pkg"
+  ditto "$out/Chromium.app" "$pkg/Chromium.app"
+  cp "$root/VERSIONS" "$pkg/Chromium.app/Contents/MacOS/"
+  ditto -c -k --keepParent "$pkg/Chromium.app" "$pkg.zip"
+  echo "packaged $pkg.zip"
+}
+
 cd "$SRC"
 gn gen "$out" --args="$args"
 name="xrio-chrome-$CHROMIUM_VERSION-v$FORK_VERSION-$target"
@@ -118,7 +128,5 @@ case "$os" in
     autoninja ${JOBS:+-j "$JOBS"} -C "$out" chrome $tests
     run_tests
     check_knob_template "$out/Chromium.app/Contents/MacOS/Chromium"
-    rm -f "$root/dist/$name.zip"
-    ditto -c -k --keepParent "$out/Chromium.app" "$root/dist/$name.zip"
-    echo "packaged $root/dist/$name.zip" ;;
+    package_mac ;;
 esac
