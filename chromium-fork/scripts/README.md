@@ -15,6 +15,6 @@ scripts/build.sh linux   # or windows / mac
 | `apply.sh` | Applies `patches/series` to `src`; patches already applied are skipped. |
 | `unapply.sh` | Reverts every file the patches touch and deletes the files they add. |
 | `stage_widevine.sh` | Downloads the matching Chrome .deb, verifies it against `CHROME_DEB_SHA256` and copies its Widevine CDM into `src` (Linux builds). |
-| `build.sh` | `linux`, `windows` or `mac`: checks the host, runs `check.sh` and `apply.sh`, builds, runs the fork's unit tests and the knob-template check, and packages into `dist/`. `JOBS=` caps parallel compile and link jobs (default on macOS: one per 8 GB of RAM). |
+| `build.sh` | `linux`, `windows` or `mac`: checks the host, runs `check.sh` and `apply.sh`, builds, runs the fork's unit tests and the knob-template check, and packages into `dist/`. The Linux and macOS packages carry `VERSIONS` beside the browser binary, in `Chromium.app/Contents/MacOS` on macOS, because that file is how Xrio recognizes the fork. `JOBS=` caps parallel compile and link jobs (default on macOS: one per 8 GB of RAM). |
 
 A Windows build also needs a Windows toolchain packaged for cross-compiling (`build/win_toolchain.json`); `setup.sh` does not install it.
